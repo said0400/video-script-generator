@@ -1,0 +1,17 @@
+{
+  "name": "video-remotion",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "remotion render src/index.ts VideoComposition"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.122",
+    "remotion": "4.0.122",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.1",
+    "typescript": "5.4.5"
+  }
+}
