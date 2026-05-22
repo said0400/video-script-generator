@@ -69,52 +69,31 @@ jobs:
         with:
           node-version: "20"
 
-      - name: 📦 Install Remotion dependencies
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
-        working-directory: remotion
-        run: npm install
-
-      - name: 🖥️ Install Chrome + system dependencies
+      - name: 🎞️ Install FFmpeg + Arabic fonts
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         run: |
           sudo apt-get update -q
           sudo apt-get install -y \
-            google-chrome-stable \
-            xvfb \
-            libgbm-dev \
-            libasound2t64 \
-            libxss1 \
-            libgtk-3-0 \
-            libnss3 \
-            libatk1.0-0 \
-            libatk-bridge2.0-0 \
-            libcups2 \
-            libdrm2 \
-            libxkbcommon0 \
-            libxcomposite1 \
-            libxdamage1 \
-            libxfixes3 \
-            libxrandr2 \
-            libpango-1.0-0 \
-            libcairo2
+            ffmpeg \
+            fonts-noto \
+            fonts-noto-color-emoji \
+            fonts-noto-core \
+            fonts-arabeyes \
+            fonts-hosny-amiri \
+            fonts-sil-scheherazade
+          fc-cache -fv
+          ffmpeg -version | head -1
 
-      - name: ✅ Verify Chrome
+      - name: 🔍 Find Arabic fonts
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
-        run: google-chrome --version
+        run: fc-list :lang=ar | head -10
 
       - name: 🎬 Run generator
         env:
           GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          DISPLAY: ":99"
         run: |
-          if [ "${{ inputs.script_only }}" = "false" ] && [ "${{ inputs.no_video }}" = "false" ]; then
-            Xvfb :99 -screen 0 1920x1080x24 &
-            sleep 3
-            echo "✅ Xvfb started on :99"
-          fi
-
           FLAGS=""
           if [ "${{ inputs.script_only }}" = "true" ]; then
             FLAGS="$FLAGS --script-only"
