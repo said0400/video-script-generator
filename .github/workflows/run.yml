@@ -1,0 +1,82 @@
+name: 🎬 Video Script Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      idea:
+        description: "💡 الفكرة (مثال: فوائد الصيام المتقطع)"
+        required: true
+        type: string
+      tone:
+        description: "🎭 الأسلوب"
+        required: true
+        default: "energetic"
+        type: choice
+        options:
+          - energetic
+          - inspirational
+          - educational
+          - humorous
+          - calm
+      voice:
+        description: "🎙️ الصوت"
+        required: true
+        default: "male_smooth"
+        type: choice
+        options:
+          - male_smooth
+          - male_warm
+          - female_clear
+          - female_warm
+          - neutral
+      script_only:
+        description: "📝 نص فقط بدون صوت؟"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  generate:
+    name: Generate Script + Voiceover
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 🎬 Run generator
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ "${{ inputs.script_only }}" = "true" ]; then
+            python main.py "${{ inputs.idea }}" \
+              --tone "${{ inputs.tone }}" \
+              --voice "${{ inputs.voice }}" \
+              --output output \
+              --script-only
+          else
+            python main.py "${{ inputs.idea }}" \
+              --tone "${{ inputs.tone }}" \
+              --voice "${{ inputs.voice }}" \
+              --output output
+          fi
+
+      - name: 📤 Upload audio file
+        if: ${{ inputs.script_only == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: voiceover-${{ github.run_number }}
+          path: output_*.wav
+          retention-days: 7
