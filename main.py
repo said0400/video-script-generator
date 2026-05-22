@@ -71,27 +71,37 @@ def render_video(manifest_path: Path, output: str) -> Path:
     out_file     = Path(output + "_final.mp4").resolve()
     remotion_dir = Path("remotion").resolve()
 
-    # ✅ Pass manifest as a FILE PATH — avoids shell quoting issues with large JSON
-    subprocess.run(
-        [
-            "node",
-            str(remotion_dir / "node_modules" / ".bin" / "remotion"),
-            "render",
-            "src/index.ts",
-            "VideoComposition",
-            str(out_file),
-            f"--props={str(manifest_path)}",   # ← file path, NOT inline JSON
-            "--log=verbose",
-            "--gl=angle",
-            "--disable-web-security",
-            "--chromium-flags=--disable-gpu",
-            "--chromium-flags=--no-sandbox",
-            "--chromium-flags=--disable-dev-shm-usage",
-        ],
+    cmd = [
+        "node",
+        str(remotion_dir / "node_modules" / ".bin" / "remotion"),
+        "render",
+        "src/index.ts",
+        "VideoComposition",
+        str(out_file),
+        f"--props={str(manifest_path)}",
+        "--log=verbose",
+        "--gl=angle",
+        "--disable-web-security",
+        "--chromium-flags=--disable-gpu",
+        "--chromium-flags=--no-sandbox",
+        "--chromium-flags=--disable-dev-shm-usage",
+    ]
+
+    print("🔧  Running command:")
+    print("    " + " ".join(cmd))
+    print()
+
+    # ← capture both stdout and stderr to print them fully
+    result = subprocess.run(
+        cmd,
         cwd=str(remotion_dir),
-        check=True,
         text=True,
+        capture_output=False,   # print directly to console in real time
     )
+
+    if result.returncode != 0:
+        print(f"\n❌  Remotion exited with code {result.returncode}")
+        raise subprocess.CalledProcessError(result.returncode, cmd)
 
     print(f"🎉  Final video → {out_file}")
     return out_file
@@ -147,7 +157,7 @@ def main():
         manifest_path = save_manifest(script_data, video_paths, audio_path, args.output)
         render_video(manifest_path, args.output)
     except subprocess.CalledProcessError as e:
-        print(f"❌  Remotion render failed: {e}")
+        print(f"❌  Remotion render failed with exit code: {e.returncode}")
         sys.exit(1)
     except Exception as e:
         print(f"❌  Unexpected error: {e}")
