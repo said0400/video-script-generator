@@ -85,8 +85,6 @@ jobs:
             libasound2t64 \
             libxss1 \
             libgtk-3-0 \
-            libvulkan1 \
-            mesa-vulkan-drivers \
             libnss3 \
             libatk1.0-0 \
             libatk-bridge2.0-0 \
@@ -114,6 +112,7 @@ jobs:
           if [ "${{ inputs.script_only }}" = "false" ] && [ "${{ inputs.no_video }}" = "false" ]; then
             Xvfb :99 -screen 0 1920x1080x24 &
             sleep 3
+            echo "✅ Xvfb started on :99"
           fi
 
           FLAGS=""
