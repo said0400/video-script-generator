@@ -70,9 +70,7 @@ def render_video(manifest_path: Path, output: str) -> Path:
 
     out_file     = Path(output + "_final.mp4").resolve()
     remotion_dir = Path("remotion").resolve()
-
-    # Read manifest and pass as inline JSON (more reliable than file path)
-    props_json = manifest_path.resolve().read_text(encoding="utf-8")
+    props_json   = manifest_path.resolve().read_text(encoding="utf-8")
 
     subprocess.run(
         [
@@ -84,6 +82,11 @@ def render_video(manifest_path: Path, output: str) -> Path:
             str(out_file),
             f"--props={props_json}",
             "--log=verbose",
+            "--gl=angle",
+            "--disable-web-security",
+            "--chromium-flags=--disable-gpu",
+            "--chromium-flags=--no-sandbox",
+            "--chromium-flags=--disable-dev-shm-usage",
         ],
         cwd=str(remotion_dir),
         check=True,
