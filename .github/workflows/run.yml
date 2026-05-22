@@ -74,7 +74,7 @@ jobs:
         working-directory: remotion
         run: npm install
 
-      - name: 🖥️ Install Chrome + SwiftShader dependencies
+      - name: 🖥️ Install Chrome + system dependencies
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         run: |
           sudo apt-get update -q
@@ -86,7 +86,19 @@ jobs:
             libxss1 \
             libgtk-3-0 \
             libvulkan1 \
-            mesa-vulkan-drivers
+            mesa-vulkan-drivers \
+            libnss3 \
+            libatk1.0-0 \
+            libatk-bridge2.0-0 \
+            libcups2 \
+            libdrm2 \
+            libxkbcommon0 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxrandr2 \
+            libpango-1.0-0 \
+            libcairo2
 
       - name: ✅ Verify Chrome
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
@@ -100,8 +112,8 @@ jobs:
           DISPLAY: ":99"
         run: |
           if [ "${{ inputs.script_only }}" = "false" ] && [ "${{ inputs.no_video }}" = "false" ]; then
-            Xvfb :99 -screen 0 1280x720x24 &
-            sleep 2
+            Xvfb :99 -screen 0 1920x1080x24 &
+            sleep 3
           fi
 
           FLAGS=""
