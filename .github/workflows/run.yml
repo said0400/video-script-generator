@@ -82,7 +82,7 @@ jobs:
             google-chrome-stable \
             xvfb \
             libgbm-dev \
-            libasound2 \
+            libasound2t64 \
             libxss1 \
             libgtk-3-0
 
