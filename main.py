@@ -65,39 +65,32 @@ def save_manifest(script_data: dict, video_paths: list, audio_path, out: str) ->
 
 
 def render_video(manifest_path: Path, output: str) -> Path:
-    """Call Remotion CLI to render the final video."""
+    """Call Remotion via Node.js script to render the final video."""
     print("\n🎞️   Rendering video with Remotion...")
 
     out_file     = Path(output + "_final.mp4").resolve()
     remotion_dir = Path("remotion").resolve()
+    render_script = remotion_dir / "render.mjs"
 
     cmd = [
         "node",
-        str(remotion_dir / "node_modules" / ".bin" / "remotion"),
-        "render",
-        "src/index.ts",
-        "VideoComposition",
+        str(render_script),
+        str(manifest_path),
         str(out_file),
-        f"--props={str(manifest_path)}",
-        "--log=verbose",
-        "--gl=swiftshader",           # ← software renderer, no GPU needed
-        "--disable-web-security",
-        "--chromium-flags=--no-sandbox",
-        "--chromium-flags=--disable-dev-shm-usage",
-        "--chromium-flags=--disable-setuid-sandbox",
-        "--chromium-flags=--single-process",
     ]
 
-    print("🔧  Running command:")
-    print("    " + " ".join(cmd))
+    print("🔧  Command:", " ".join(cmd))
     print()
 
     result = subprocess.run(
         cmd,
         cwd=str(remotion_dir),
         text=True,
-        capture_output=False,
+        stderr=subprocess.STDOUT,  # merge stderr into stdout
+        stdout=subprocess.PIPE,
     )
+
+    print(result.stdout)
 
     if result.returncode != 0:
         print(f"\n❌  Remotion exited with code {result.returncode}")
@@ -156,8 +149,8 @@ def main():
     try:
         manifest_path = save_manifest(script_data, video_paths, audio_path, args.output)
         render_video(manifest_path, args.output)
-    except subprocess.CalledProcessError as e:
-        print(f"❌  Remotion render failed with exit code: {e.returncode}")
+    except subprocess.CalledProcessError:
+        print("❌  Remotion render failed. Check logs above.")
         sys.exit(1)
     except Exception as e:
         print(f"❌  Unexpected error: {e}")
