@@ -57,7 +57,7 @@ def save_manifest(script_data: dict, video_paths: list, audio_path: str, out: st
 
 
 def render_video(manifest_path: Path, output: str):
-    """Call Remotion CLI via npm script to render the final video."""
+    """Call Remotion CLI directly to render the final video with verbose logs."""
     print("\n🎞️   Rendering video with Remotion...")
     
     # 1. تحويل ملف المانيفست والملف الناتج إلى مسارات مطلقة (Absolute Paths)
@@ -71,12 +71,15 @@ def render_video(manifest_path: Path, output: str):
         print(f"❌ Error: 'remotion' directory not found at {remotion_dir}")
         sys.exit(1)
 
-    # 3. تشغيل أمر npm run build من داخل مجلد المشروع الفرعي وتمرير الإعدادات إليه مباشرة
+    # 3. الحل الجذري: استدعاء الملف التنفيذي لريموشن مباشرة وتفعيل الـ --verbose لكشف الأخطاء بدقة
     result = subprocess.run(
         [
-            "npm", "run", "build", "--", 
-            str(out_file), 
-            f"--props={absolute_manifest}"
+            "./node_modules/.bin/remotion", "render",
+            "src/index.ts",
+            "VideoComposition",  # تأكد أن هذا الـ ID مطابق تماماً للـ ID المسجل في src/index.ts
+            str(out_file),
+            f"--props={absolute_manifest}",
+            "--verbose"          # إظهار تفاصيل الأخطاء والتحذيرات كاملة في السيرفر
         ],
         cwd=str(remotion_dir),   # الدخول البرمجي التلقائي إلى مجلد remotion
         check=True,
