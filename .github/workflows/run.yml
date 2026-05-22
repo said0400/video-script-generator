@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       idea:
-        description: "💡 الفكرة (مثال: فوائد الصيام المتقطع)"
+        description: "💡 الفكرة"
         required: true
         type: string
       tone:
@@ -12,39 +12,27 @@ on:
         required: true
         default: "energetic"
         type: choice
-        options:
-          - energetic
-          - inspirational
-          - educational
-          - humorous
-          - calm
+        options: [energetic, inspirational, educational, humorous, calm]
       voice:
         description: "🎙️ الصوت"
         required: true
         default: "male_smooth"
         type: choice
-        options:
-          - male_smooth
-          - male_warm
-          - female_clear
-          - female_warm
-          - neutral
+        options: [male_smooth, male_warm, female_clear, female_warm, neutral]
       script_only:
-        description: "📝 نص فقط بدون صوت؟"
+        description: "📝 نص فقط؟"
         required: true
         default: "false"
         type: choice
-        options:
-          - "false"
-          - "true"
+        options: ["false", "true"]
 
 jobs:
   generate:
-    name: Generate Script + Voiceover
+    name: Generate Script + Audio + Video
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout repository
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
       - name: 🐍 Setup Python
@@ -52,13 +40,29 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 📦 Install dependencies
+      - name: 📦 Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: 🎬 Run generator
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 📦 Install Remotion dependencies
+        if: ${{ inputs.script_only == 'false' }}
+        working-directory: remotion
+        run: npm install
+
+      - name: 🖥️ Install Chrome for Remotion
+        if: ${{ inputs.script_only == 'false' }}
+        run: npx remotion browser ensure
+        working-directory: remotion
+
+      - name: 🎬 Generate script + audio + video
         env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY:     ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
+          PIXABAY_API_KEY:  ${{ secrets.PIXABAY_API_KEY }}
         run: |
           if [ "${{ inputs.script_only }}" = "true" ]; then
             python main.py "${{ inputs.idea }}" \
@@ -73,8 +77,16 @@ jobs:
               --output output
           fi
 
-      - name: 📤 Upload audio file
+      - name: 📤 Upload final video
         if: ${{ inputs.script_only == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-video-${{ github.run_number }}
+          path: output_final.mp4
+          retention-days: 7
+
+      - name: 📤 Upload audio only (script-only mode)
+        if: ${{ inputs.script_only == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: voiceover-${{ github.run_number }}
