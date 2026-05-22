@@ -80,23 +80,23 @@ def render_video(manifest_path: Path, output: str) -> Path:
         str(out_file),
         f"--props={str(manifest_path)}",
         "--log=verbose",
-        "--gl=angle",
+        "--gl=swiftshader",           # ← software renderer, no GPU needed
         "--disable-web-security",
-        "--chromium-flags=--disable-gpu",
         "--chromium-flags=--no-sandbox",
         "--chromium-flags=--disable-dev-shm-usage",
+        "--chromium-flags=--disable-setuid-sandbox",
+        "--chromium-flags=--single-process",
     ]
 
     print("🔧  Running command:")
     print("    " + " ".join(cmd))
     print()
 
-    # ← capture both stdout and stderr to print them fully
     result = subprocess.run(
         cmd,
         cwd=str(remotion_dir),
         text=True,
-        capture_output=False,   # print directly to console in real time
+        capture_output=False,
     )
 
     if result.returncode != 0:
