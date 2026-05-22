@@ -57,8 +57,8 @@ jobs:
         if: ${{ inputs.script_only == 'false' }}
         working-directory: remotion
         run: |
-          # نترك لريموشن إعداد وتنزيل المتصفح المتوافق مع نظام Ubuntu الحالي تلقائياً
-          npx @remotion/cli browser ensure
+          # استدعاء أمر التثبيت مباشرة من الحزمة المحلية لتفادي مشاكل npx
+          ./node_modules/.bin/remotion browser ensure
 
       - name: 🎬 Generate script + audio + video
         env:
