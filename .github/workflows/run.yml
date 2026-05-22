@@ -53,13 +53,6 @@ jobs:
         working-directory: remotion
         run: npm install
 
-      - name: 🖥️ Install Chrome for Remotion
-        if: ${{ inputs.script_only == 'false' }}
-        working-directory: remotion
-        run: |
-          # استدعاء أمر التثبيت مباشرة من الحزمة المحلية لتفادي مشاكل npx
-          ./node_modules/.bin/remotion browser ensure
-
       - name: 🎬 Generate script + audio + video
         env:
           GROQ_API_KEY:     ${{ secrets.GROQ_API_KEY }}
@@ -73,6 +66,7 @@ jobs:
               --output output \
               --script-only
           else
+            # إضافة مسار ريموشن للنظام ليتمكن سكربت البايثون من تشغيل أمر render بنجاح
             export PATH=$PATH:$GITHUB_WORKSPACE/remotion/node_modules/.bin
             python main.py "${{ inputs.idea }}" \
               --tone "${{ inputs.tone }}" \
