@@ -66,8 +66,7 @@ jobs:
               --output output \
               --script-only
           else
-            # إضافة مسار ريموشن للنظام ليتمكن سكربت البايثون من تشغيل أمر render بنجاح
-            export PATH=$PATH:$GITHUB_WORKSPACE/remotion/node_modules/.bin
+            # الكود أصبح بسيطاً ومباشراً لأن main.py الآن يتكفل بالتنقل والـ Rendering داخلياً
             python main.py "${{ inputs.idea }}" \
               --tone "${{ inputs.tone }}" \
               --voice "${{ inputs.voice }}" \
@@ -79,11 +78,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: final-video-${{ github.run_number }}
-          path: |
-            output_final.mp4
-            remotion/output_final.mp4
+          path: output_final.mp4
           retention-days: 7
-          if-no-files-found: ignore
 
       - name: 📤 Upload audio only (script-only mode)
         if: ${{ inputs.script_only == 'true' }}
