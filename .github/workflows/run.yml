@@ -55,6 +55,7 @@ jobs:
 
       - name: 🖥️ Install Chrome for Remotion
         if: ${{ inputs.script_only == 'false' }}
+        working-directory: remotion
         run: npx remotion browser ensure
         working-directory: remotion
 
