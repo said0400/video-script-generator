@@ -55,7 +55,7 @@ jobs:
 
       - name: 🖥️ Install Chrome & Dependencies for Remotion
         if: ${{ inputs.script_only == 'false' }}
-        uses: remotion-dev/chromium-action@v1
+        uses: remotion-dev/chromium-github-action@v1
 
       - name: 🎬 Generate script + audio + video
         env:
@@ -70,7 +70,6 @@ jobs:
               --output output \
               --script-only
           else
-            # هنا نقوم بإضافة مجلد remotion/node_modules/.bin إلى المسار ليتمكن سكربت البايثون من استدعاء remotion مباشرة
             export PATH=$PATH:$GITHUB_WORKSPACE/remotion/node_modules/.bin
             python main.py "${{ inputs.idea }}" \
               --tone "${{ inputs.tone }}" \
