@@ -53,9 +53,15 @@ jobs:
         working-directory: remotion
         run: npm install
 
-      - name: 🖥️ Install Chrome & Dependencies for Remotion
+      - name: 🖥️ Install Chrome & Linux Dependencies for Remotion
         if: ${{ inputs.script_only == 'false' }}
-        uses: remotion-dev/chromium-github-action@v1
+        working-directory: remotion
+        run: |
+          # تثبيت المكتبات الأساسية التي يحتاجها متصفح Chromium للعمل على سيرفرات Linux (Ubuntu)
+          sudo apt-get update
+          sudo apt-get install -y libnss3 libatk-1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libasound2
+          # الأمر الرسمي الجديد لريموشن لتثبيت متصفح Chromium المخصص
+          npx @remotion/cli browser ensure
 
       - name: 🎬 Generate script + audio + video
         env:
