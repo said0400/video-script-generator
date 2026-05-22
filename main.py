@@ -59,7 +59,10 @@ def save_manifest(script_data: dict, video_paths: list, audio_path, out: str) ->
         "duration_s": script_data["estimated_seconds"],
     }
     path = Path(f"{out}_manifest.json").resolve()
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
     print(f"📋  Manifest saved → {path}")
     return path
 
@@ -68,8 +71,8 @@ def render_video(manifest_path: Path, output: str) -> Path:
     """Call Remotion via Node.js script to render the final video."""
     print("\n🎞️   Rendering video with Remotion...")
 
-    out_file     = Path(output + "_final.mp4").resolve()
-    remotion_dir = Path("remotion").resolve()
+    out_file      = Path(output + "_final.mp4").resolve()
+    remotion_dir  = Path("remotion").resolve()
     render_script = remotion_dir / "render.mjs"
 
     cmd = [
@@ -86,7 +89,7 @@ def render_video(manifest_path: Path, output: str) -> Path:
         cmd,
         cwd=str(remotion_dir),
         text=True,
-        stderr=subprocess.STDOUT,  # merge stderr into stdout
+        stderr=subprocess.STDOUT,
         stdout=subprocess.PIPE,
     )
 
@@ -147,7 +150,9 @@ def main():
 
     # ── Step 4: Save manifest + render with Remotion ─────────────────────────
     try:
-        manifest_path = save_manifest(script_data, video_paths, audio_path, args.output)
+        manifest_path = save_manifest(
+            script_data, video_paths, audio_path, args.output
+        )
         render_video(manifest_path, args.output)
     except subprocess.CalledProcessError:
         print("❌  Remotion render failed. Check logs above.")
