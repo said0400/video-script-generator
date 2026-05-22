@@ -46,8 +46,8 @@ def save_manifest(script_data: dict, video_paths: list, audio_path: str, out: st
         "title":      script_data["title"],
         "sentences":  script_data["sentences"],
         "keywords":   script_data["keywords"],
-        "audio":      str(audio_path),
-        "videos":     [str(p) for p in video_paths],
+        "audio":      str(Path(audio_path).resolve()), # تحويل مسار الصوت إلى مسار مطلق
+        "videos":     [str(Path(p).resolve()) for p in video_paths], # تحويل مسارات الفيديوهات إلى مسارات مطلقة
         "duration_s": script_data["estimated_seconds"],
     }
     path = Path(f"{out}_manifest.json")
@@ -57,18 +57,28 @@ def save_manifest(script_data: dict, video_paths: list, audio_path: str, out: st
 
 
 def render_video(manifest_path: Path, output: str):
-    """Call Remotion CLI to render the final video."""
+    """Call Remotion CLI via npm script to render the final video."""
     print("\n🎞️   Rendering video with Remotion...")
-    out_file = Path(f"{output}_final.mp4")
+    
+    # 1. تحويل ملف المانيفست والملف الناتج إلى مسارات مطلقة (Absolute Paths)
+    absolute_manifest = manifest_path.resolve()
+    out_file = Path(f"{output}_final.mp4").resolve()
+    
+    # 2. تحديد مسار مجلد مشروع ريموشن الفرعي
+    remotion_dir = Path("remotion").resolve()
 
+    if not remotion_dir.exists():
+        print(f"❌ Error: 'remotion' directory not found at {remotion_dir}")
+        sys.exit(1)
+
+    # 3. تشغيل أمر npm run build من داخل مجلد المشروع الفرعي وتمرير الإعدادات إليه مباشرة
     result = subprocess.run(
         [
-            "npx", "remotion", "render",
-            "remotion/src/index.ts",
-            "VideoComposition",
-            str(out_file),
-            f"--props={manifest_path}",
+            "npm", "run", "build", "--", 
+            str(out_file), 
+            f"--props={absolute_manifest}"
         ],
+        cwd=str(remotion_dir),   # الدخول البرمجي التلقائي إلى مجلد remotion
         check=True,
         text=True,
     )
