@@ -42,12 +42,13 @@ def parse_args():
 
 def save_manifest(script_data: dict, video_paths: list, audio_path: str, out: str):
     """Save a JSON manifest for Remotion to consume."""
+    # تحويل كافة المسارات المحفوظة في المانيفست إلى مسارات مطلقة لتقرأها بيئة React بأمان
     manifest = {
         "title":      script_data["title"],
         "sentences":  script_data["sentences"],
         "keywords":   script_data["keywords"],
-        "audio":      str(Path(audio_path).resolve()), # تحويل مسار الصوت إلى مسار مطلق
-        "videos":     [str(Path(p).resolve()) for p in video_paths], # تحويل مسارات الفيديوهات إلى مسارات مطلقة
+        "audio":      str(Path(audio_path).resolve()),
+        "videos":     [str(Path(p).resolve()) for p in video_paths],
         "duration_s": script_data["estimated_seconds"],
     }
     path = Path(f"{out}_manifest.json")
@@ -57,31 +58,39 @@ def save_manifest(script_data: dict, video_paths: list, audio_path: str, out: st
 
 
 def render_video(manifest_path: Path, output: str):
-    """Call Remotion CLI directly to render the final video with verbose logs."""
+    """Call Remotion CLI directly using Node with execution safeguards."""
     print("\n🎞️   Rendering video with Remotion...")
     
-    # 1. تحويل ملف المانيفست والملف الناتج إلى مسارات مطلقة (Absolute Paths)
+    # 1. تهيئة مسارات مطلقة للمانيفست والفيديو النهائي
     absolute_manifest = manifest_path.resolve()
     out_file = Path(f"{output}_final.mp4").resolve()
-    
-    # 2. تحديد مسار مجلد مشروع ريموشن الفرعي
     remotion_dir = Path("remotion").resolve()
 
     if not remotion_dir.exists():
         print(f"❌ Error: 'remotion' directory not found at {remotion_dir}")
         sys.exit(1)
 
-    # 3. الحل الجذري: استدعاء الملف التنفيذي لريموشن مباشرة وتفعيل الـ --verbose لكشف الأخطاء بدقة
+    # 2. الوصول المباشر لملف ريموشن التنفيذي الثنائي
+    remotion_bin = remotion_dir / "node_modules" / ".bin" / "remotion"
+    
+    # 3. منح صلاحيات التشغيل (+x) للملف الثنائي لتفادي حظر نظام اللينكس في السيرفرات
+    if remotion_bin.exists():
+        try:
+            subprocess.run(["chmod", "+x", str(remotion_bin)], check=True)
+        except Exception:
+            pass
+
+    # 4. تشغيل الرندر الآمن من داخل مجلد ريموشن باستدعاء محرك Node مباشرة
     result = subprocess.run(
         [
-            "./node_modules/.bin/remotion", "render",
+            "node", str(remotion_bin), "render",
             "src/index.ts",
-            "VideoComposition",  # تأكد أن هذا الـ ID مطابق تماماً للـ ID المسجل في src/index.ts
+            "VideoComposition",  # تأكد أن هذا الـ ID يطابق تماماً الـ id المسجل في src/index.ts ببيئة ريموشن
             str(out_file),
             f"--props={absolute_manifest}",
-            "--verbose"          # إظهار تفاصيل الأخطاء والتحذيرات كاملة في السيرفر
+            "--verbose"          # لطباعة تفاصيل المتصفح والـ React كاملة في حال وقوع أي خلل داخلي
         ],
-        cwd=str(remotion_dir),   # الدخول البرمجي التلقائي إلى مجلد remotion
+        cwd=str(remotion_dir),   # الانتقال السليم لبيئة عمل حزم نود
         check=True,
         text=True,
     )
