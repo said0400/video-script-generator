@@ -74,13 +74,17 @@ jobs:
         working-directory: remotion
         run: npm install
 
-      - name: 🖥️ Install Chrome for Remotion
+      - name: 🖥️ Install Chrome + display dependencies
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         run: |
-          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
           sudo apt-get update -q
-          sudo apt-get install -y google-chrome-stable
+          sudo apt-get install -y \
+            google-chrome-stable \
+            xvfb \
+            libgbm-dev \
+            libasound2 \
+            libxss1 \
+            libgtk-3-0
 
       - name: ✅ Verify Chrome
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
@@ -91,13 +95,17 @@ jobs:
           GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
+          DISPLAY: ":99"
         run: |
-          FLAGS=""
+          if [ "${{ inputs.script_only }}" = "false" ] && [ "${{ inputs.no_video }}" = "false" ]; then
+            Xvfb :99 -screen 0 1280x720x24 &
+            sleep 2
+          fi
 
+          FLAGS=""
           if [ "${{ inputs.script_only }}" = "true" ]; then
             FLAGS="$FLAGS --script-only"
           fi
-
           if [ "${{ inputs.no_video }}" = "true" ]; then
             FLAGS="$FLAGS --no-video"
           fi
