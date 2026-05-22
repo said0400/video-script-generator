@@ -74,7 +74,7 @@ jobs:
         working-directory: remotion
         run: npm install
 
-      - name: 🖥️ Install Chrome + display dependencies
+      - name: 🖥️ Install Chrome + SwiftShader dependencies
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         run: |
           sudo apt-get update -q
@@ -84,7 +84,9 @@ jobs:
             libgbm-dev \
             libasound2t64 \
             libxss1 \
-            libgtk-3-0
+            libgtk-3-0 \
+            libvulkan1 \
+            mesa-vulkan-drivers
 
       - name: ✅ Verify Chrome
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
