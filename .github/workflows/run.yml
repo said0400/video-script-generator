@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       idea:
-        description: "💡 الفكرة"
+        description: "💡 الفكرة (مثال: فوائد الصيام المتقطع)"
         required: true
         type: string
       tone:
@@ -12,19 +12,39 @@ on:
         required: true
         default: "energetic"
         type: choice
-        options: [energetic, inspirational, educational, humorous, calm]
+        options:
+          - energetic
+          - inspirational
+          - educational
+          - humorous
+          - calm
       voice:
         description: "🎙️ الصوت"
         required: true
         default: "male_smooth"
         type: choice
-        options: [male_smooth, male_warm, female_clear, female_warm, neutral]
+        options:
+          - male_smooth
+          - male_warm
+          - female_clear
+          - female_warm
+          - neutral
       script_only:
-        description: "📝 نص فقط؟"
+        description: "📝 نص فقط بدون صوت أو فيديو؟"
         required: true
         default: "false"
         type: choice
-        options: ["false", "true"]
+        options:
+          - "false"
+          - "true"
+      no_video:
+        description: "🎵 صوت فقط بدون فيديو؟"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 jobs:
   generate:
@@ -32,10 +52,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 📥 Checkout
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🐍 Setup Python
+      - name: 🐍 Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -43,46 +63,54 @@ jobs:
       - name: 📦 Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: 🟢 Setup Node.js
+      - name: 🟢 Setup Node.js 20
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: 📦 Install Remotion dependencies
-        if: ${{ inputs.script_only == 'false' }}
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         working-directory: remotion
         run: npm install
 
-      - name: 🎬 Generate script + audio + video
+      - name: 🖥️ Install Chrome for Remotion
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        working-directory: remotion
+        run: npx remotion browser ensure
+
+      - name: 🎬 Run generator
         env:
-          GROQ_API_KEY:     ${{ secrets.GROQ_API_KEY }}
-          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
-          PIXABAY_API_KEY:  ${{ secrets.PIXABAY_API_KEY }}
+          GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: |
+          FLAGS=""
+
           if [ "${{ inputs.script_only }}" = "true" ]; then
-            python main.py "${{ inputs.idea }}" \
-              --tone "${{ inputs.tone }}" \
-              --voice "${{ inputs.voice }}" \
-              --output output \
-              --script-only
-          else
-            # الكود أصبح بسيطاً ومباشراً لأن main.py الآن يتكفل بالتنقل والـ Rendering داخلياً
-            python main.py "${{ inputs.idea }}" \
-              --tone "${{ inputs.tone }}" \
-              --voice "${{ inputs.voice }}" \
-              --output output
+            FLAGS="$FLAGS --script-only"
           fi
 
+          if [ "${{ inputs.no_video }}" = "true" ]; then
+            FLAGS="$FLAGS --no-video"
+          fi
+
+          python main.py "${{ inputs.idea }}" \
+            --tone "${{ inputs.tone }}" \
+            --voice "${{ inputs.voice }}" \
+            --output output \
+            $FLAGS
+
       - name: 📤 Upload final video
-        if: ${{ inputs.script_only == 'false' }}
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: final-video-${{ github.run_number }}
           path: output_final.mp4
           retention-days: 7
 
-      - name: 📤 Upload audio only (script-only mode)
-        if: ${{ inputs.script_only == 'true' }}
+      - name: 📤 Upload audio (no-video mode)
+        if: ${{ inputs.no_video == 'true' && inputs.script_only == 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: voiceover-${{ github.run_number }}
