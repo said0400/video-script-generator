@@ -53,10 +53,9 @@ jobs:
         working-directory: remotion
         run: npm install
 
-      - name: 🖥️ Install Chrome for Remotion
+      - name: 🖥️ Install Chrome & Dependencies for Remotion
         if: ${{ inputs.script_only == 'false' }}
-        working-directory: remotion
-        run: npx remotion browser ensure
+        uses: remotion-dev/chromium-action@v1
       
 
       - name: 🎬 Generate script + audio + video
