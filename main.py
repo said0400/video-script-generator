@@ -5,6 +5,7 @@ Usage:
   python main.py "your idea here"
   python main.py "your idea" --tone inspirational --voice female_warm --output my_video
   python main.py "your idea" --script-only
+  python main.py "your idea" --no-video
 """
 
 import argparse
@@ -12,6 +13,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+
 from generate import generate_script, enforce_duration, print_script
 from tts import synthesize_speech, VOICES
 from pixabay import fetch_videos_for_script
@@ -31,24 +33,29 @@ def parse_args():
         "--voice", type=str, default="male_smooth",
         choices=list(VOICES.keys()),
     )
-    parser.add_argument("--output", type=str, default="output",
-                        help="Base name for output files")
-    parser.add_argument("--script-only", action="store_true",
-                        help="Print script only — skip TTS and video")
-    parser.add_argument("--no-video", action="store_true",
-                        help="Generate script + audio only — skip Remotion render")
+    parser.add_argument(
+        "--output", type=str, default="output",
+        help="Base name for output files",
+    )
+    parser.add_argument(
+        "--script-only", action="store_true",
+        help="Print script only — skip TTS and video",
+    )
+    parser.add_argument(
+        "--no-video", action="store_true",
+        help="Generate script + audio only — skip Remotion render",
+    )
     return parser.parse_args()
 
 
-def save_manifest(script_data: dict, video_paths: list, audio_path: str, out: str):
-    """Save a JSON manifest for Remotion to consume."""
-    # تحويل كافة المسارات المحفوظة في المانيفست إلى مسارات مطلقة لتقرأها بيئة React بأمان
+def save_manifest(script_data: dict, video_paths: list, audio_path, out: str) -> Path:
+    """Save a JSON manifest with ABSOLUTE paths for Remotion."""
     manifest = {
         "title":      script_data["title"],
         "sentences":  script_data["sentences"],
         "keywords":   script_data["keywords"],
-        "audio":      str(Path(audio_path).resolve()),
-        "videos":     [str(Path(p).resolve()) for p in video_paths],
+        "audio":      str(Path(str(audio_path)).resolve()),
+        "videos":     [str(Path(str(p)).resolve()) for p in video_paths],
         "duration_s": script_data["estimated_seconds"],
     }
     path = Path(f"{out}_manifest.json")
@@ -57,40 +64,28 @@ def save_manifest(script_data: dict, video_paths: list, audio_path: str, out: st
     return path
 
 
-def render_video(manifest_path: Path, output: str):
-    """Call Remotion CLI directly using Node with execution safeguards."""
+def render_video(manifest_path: Path, output: str) -> Path:
+    """Call Remotion CLI to render the final video."""
     print("\n🎞️   Rendering video with Remotion...")
-    
-    # 1. تهيئة مسارات مطلقة للمانيفست والفيديو النهائي
-    absolute_manifest = manifest_path.resolve()
-    out_file = Path(f"{output}_final.mp4").resolve()
+
+    out_file     = Path(output + "_final.mp4").resolve()
     remotion_dir = Path("remotion").resolve()
 
-    if not remotion_dir.exists():
-        print(f"❌ Error: 'remotion' directory not found at {remotion_dir}")
-        sys.exit(1)
+    # Read manifest and pass as inline JSON (more reliable than file path)
+    props_json = manifest_path.resolve().read_text(encoding="utf-8")
 
-    # 2. الوصول المباشر لملف ريموشن التنفيذي الثنائي
-    remotion_bin = remotion_dir / "node_modules" / ".bin" / "remotion"
-    
-    # 3. منح صلاحيات التشغيل (+x) للملف الثنائي لتفادي حظر نظام اللينكس في السيرفرات
-    if remotion_bin.exists():
-        try:
-            subprocess.run(["chmod", "+x", str(remotion_bin)], check=True)
-        except Exception:
-            pass
-
-    # 4. تشغيل الرندر الآمن من داخل مجلد ريموشن باستدعاء محرك Node مباشرة
-    result = subprocess.run(
+    subprocess.run(
         [
-            "node", str(remotion_bin), "render",
+            "node",
+            str(remotion_dir / "node_modules" / ".bin" / "remotion"),
+            "render",
             "src/index.ts",
-            "VideoComposition",  # تأكد أن هذا الـ ID يطابق تماماً الـ id المسجل في src/index.ts ببيئة ريموشن
+            "VideoComposition",
             str(out_file),
-            f"--props={absolute_manifest}",
-            "--verbose"          # لطباعة تفاصيل المتصفح والـ React كاملة في حال وقوع أي خلل داخلي
+            f"--props={props_json}",
+            "--log=verbose",
         ],
-        cwd=str(remotion_dir),   # الانتقال السليم لبيئة عمل حزم نود
+        cwd=str(remotion_dir),
         check=True,
         text=True,
     )
@@ -104,7 +99,7 @@ def main():
 
     print(f"\n🚀  Idea: \"{args.idea}\"  |  Tone: {args.tone}\n")
 
-    # ── Step 1: Script ───────────────────────────────────────────────────────
+    # ── Step 1: Generate script via Groq ─────────────────────────────────────
     try:
         script_data = generate_script(idea=args.idea, tone=args.tone)
         script_data = enforce_duration(script_data, idea=args.idea, tone=args.tone)
@@ -115,10 +110,10 @@ def main():
     print_script(script_data)
 
     if args.script_only:
-        print("ℹ️   --script-only flag. Done.")
+        print("ℹ️   --script-only flag set. Done.")
         return
 
-    # ── Step 2: TTS ──────────────────────────────────────────────────────────
+    # ── Step 2: TTS via Gemini ────────────────────────────────────────────────
     try:
         audio_path = synthesize_speech(
             script=script_data["full_script"],
@@ -131,10 +126,10 @@ def main():
         sys.exit(1)
 
     if args.no_video:
-        print("ℹ️   --no-video flag. Done.")
+        print("ℹ️   --no-video flag set. Done.")
         return
 
-    # ── Step 3: Pixabay videos ───────────────────────────────────────────────
+    # ── Step 3: Fetch videos from Pixabay ────────────────────────────────────
     try:
         video_paths = fetch_videos_for_script(
             keywords=script_data["keywords"],
@@ -144,13 +139,15 @@ def main():
         print(f"❌  Pixabay fetch failed: {e}")
         sys.exit(1)
 
-    # ── Step 4: Manifest + Remotion render ───────────────────────────────────
-    manifest_path = save_manifest(script_data, video_paths, audio_path, args.output)
-
+    # ── Step 4: Save manifest + render with Remotion ─────────────────────────
     try:
+        manifest_path = save_manifest(script_data, video_paths, audio_path, args.output)
         render_video(manifest_path, args.output)
     except subprocess.CalledProcessError as e:
         print(f"❌  Remotion render failed: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"❌  Unexpected error: {e}")
         sys.exit(1)
 
 
