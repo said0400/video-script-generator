@@ -76,8 +76,15 @@ jobs:
 
       - name: 🖥️ Install Chrome for Remotion
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
-        working-directory: remotion
-        run: npx remotion browser ensure
+        run: |
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -q
+          sudo apt-get install -y google-chrome-stable
+
+      - name: ✅ Verify Chrome
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        run: google-chrome --version
 
       - name: 🎬 Run generator
         env:
