@@ -58,8 +58,8 @@ def save_manifest(script_data: dict, video_paths: list, audio_path, out: str) ->
         "videos":     [str(Path(str(p)).resolve()) for p in video_paths],
         "duration_s": script_data["estimated_seconds"],
     }
-    path = Path(f"{out}_manifest.json")
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
+    path = Path(f"{out}_manifest.json").resolve()
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"📋  Manifest saved → {path}")
     return path
 
@@ -70,8 +70,8 @@ def render_video(manifest_path: Path, output: str) -> Path:
 
     out_file     = Path(output + "_final.mp4").resolve()
     remotion_dir = Path("remotion").resolve()
-    props_json   = manifest_path.resolve().read_text(encoding="utf-8")
 
+    # ✅ Pass manifest as a FILE PATH — avoids shell quoting issues with large JSON
     subprocess.run(
         [
             "node",
@@ -80,7 +80,7 @@ def render_video(manifest_path: Path, output: str) -> Path:
             "src/index.ts",
             "VideoComposition",
             str(out_file),
-            f"--props={props_json}",
+            f"--props={str(manifest_path)}",   # ← file path, NOT inline JSON
             "--log=verbose",
             "--gl=angle",
             "--disable-web-security",
