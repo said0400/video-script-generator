@@ -18,8 +18,8 @@ on:
           - educational
           - humorous
           - calm
-      voice:
-        description: "🎙️ الصوت"
+      voice_en:
+        description: "🎙️ صوت النسخة الإنجليزية"
         required: true
         default: "male_smooth"
         type: choice
@@ -29,8 +29,19 @@ on:
           - female_clear
           - female_warm
           - neutral
+      voice_ar:
+        description: "🎙️ صوت النسخة العربية"
+        required: true
+        default: "female_warm"
+        type: choice
+        options:
+          - male_smooth
+          - male_warm
+          - female_clear
+          - female_warm
+          - neutral
       script_only:
-        description: "📝 نص فقط بدون صوت أو فيديو؟"
+        description: "📝 نص فقط؟"
         required: true
         default: "false"
         type: choice
@@ -38,7 +49,7 @@ on:
           - "false"
           - "true"
       no_video:
-        description: "🎵 صوت فقط بدون فيديو؟"
+        description: "🎵 صوت فقط؟"
         required: true
         default: "false"
         type: choice
@@ -48,7 +59,7 @@ on:
 
 jobs:
   generate:
-    name: Generate Script + Audio + Video
+    name: Generate EN + AR Videos
     runs-on: ubuntu-latest
 
     steps:
@@ -64,18 +75,18 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: 🟢 Setup Node.js 20
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        if: ${{ inputs.script_only == 'false' }}
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: 📦 Install Node dependencies
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        if: ${{ inputs.script_only == 'false' }}
         working-directory: remotion
         run: npm install
 
-      - name: 🔧 Install system dependencies for Playwright
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+      - name: 🔧 Install system dependencies
+        if: ${{ inputs.script_only == 'false' }}
         run: |
           sudo apt-get update -q
           sudo apt-get install -y \
@@ -111,16 +122,11 @@ jobs:
           ffmpeg -version | head -1
 
       - name: 🌐 Install Playwright Chromium
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        if: ${{ inputs.script_only == 'false' }}
         working-directory: remotion
         run: npx playwright install chromium
 
-      - name: ✅ Verify Playwright
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
-        working-directory: remotion
-        run: npx playwright --version
-
-      - name: 📥 Download used videos DB (if exists)
+      - name: 📥 Download used videos DB
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         uses: dawidd6/action-download-artifact@v6
         with:
@@ -144,24 +150,33 @@ jobs:
 
           python main.py "${{ inputs.idea }}" \
             --tone "${{ inputs.tone }}" \
-            --voice "${{ inputs.voice }}" \
+            --voice-en "${{ inputs.voice_en }}" \
+            --voice-ar "${{ inputs.voice_ar }}" \
             --output output \
             $FLAGS
 
-      - name: 📤 Upload final video
+      - name: 📤 Upload English video
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         uses: actions/upload-artifact@v4
         with:
-          name: final-video-${{ github.run_number }}
-          path: output_final.mp4
+          name: video-EN-${{ github.run_number }}
+          path: output_en_final.mp4
           retention-days: 7
 
-      - name: 📤 Upload audio (no-video mode)
+      - name: 📤 Upload Arabic video
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: video-AR-${{ github.run_number }}
+          path: output_ar_final.mp4
+          retention-days: 7
+
+      - name: 📤 Upload audio files (no-video mode)
         if: ${{ inputs.no_video == 'true' && inputs.script_only == 'false' }}
         uses: actions/upload-artifact@v4
         with:
-          name: voiceover-${{ github.run_number }}
-          path: output_*.wav
+          name: audio-${{ github.run_number }}
+          path: output_*_audio_*.wav
           retention-days: 7
 
       - name: 📤 Upload used videos DB
