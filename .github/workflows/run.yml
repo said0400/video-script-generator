@@ -69,24 +69,22 @@ jobs:
         with:
           node-version: "20"
 
-      - name: 🎞️ Install FFmpeg + Arabic fonts
+      - name: 📦 Install Node dependencies
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        working-directory: remotion
+        run: npm install
+
+      - name: 🌐 Install Playwright browsers
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        working-directory: remotion
+        run: npx playwright install chromium --with-deps
+
+      - name: 🎞️ Install FFmpeg
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y \
-            ffmpeg \
-            fonts-noto \
-            fonts-noto-color-emoji \
-            fonts-noto-core \
-            fonts-arabeyes \
-            fonts-hosny-amiri \
-            fonts-sil-scheherazade
-          fc-cache -fv
+          sudo apt-get install -y ffmpeg
           ffmpeg -version | head -1
-
-      - name: 🔍 Find Arabic fonts
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
-        run: fc-list :lang=ar | head -10
 
       - name: 🎬 Run generator
         env:
