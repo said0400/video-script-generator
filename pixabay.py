@@ -6,36 +6,31 @@ from pathlib import Path
 
 PIXABAY_API = "https://pixabay.com/api/videos/"
 
-# Seconds per sub-clip within each sentence slot
-SUB_CLIP_DURATION = 1.5
 
-
-def convert_to_webm(mp4_path: Path) -> Path:
-    """Convert MP4 to WebM (VP9) for Chromium compatibility."""
-    webm_path = mp4_path.with_suffix(".webm")
+def convert_to_mp4_scaled(mp4_src: Path, out_path: Path, duration: float) -> Path:
+    """Trim + scale MP4 to 1080x1920. Keep as MP4 for FFmpeg (no WebM needed)."""
     result = subprocess.run(
         [
             "ffmpeg", "-y",
-            "-i", str(mp4_path),
-            "-c:v", "libvpx-vp9",
-            "-crf", "33",
-            "-b:v", "0",
-            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-i", str(mp4_src),
+            "-t", f"{duration:.3f}",
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
+            "-r", "30",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "28",
             "-an",
-            str(webm_path),
+            str(out_path),
         ],
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
     )
     if result.returncode != 0:
-        print(f"  ⚠️  WebM conversion failed for {mp4_path.name}")
-        return mp4_path
-    mp4_path.unlink()
-    return webm_path
+        print(f"  ⚠️  Scale error: {result.stderr[-300:]}")
+    return out_path
 
 
 def search_one_video(keyword: str, index: int, sub: int, output_dir: str) -> Path | None:
-    """Search Pixabay for ONE video matching keyword. Returns path or None."""
+    """Search Pixabay for ONE video. Returns downloaded MP4 path or None."""
     params = {
         "key":        os.environ["PIXABAY_API_KEY"],
         "q":          keyword,
@@ -43,7 +38,6 @@ def search_one_video(keyword: str, index: int, sub: int, output_dir: str) -> Pat
         "per_page":   10,
         "safesearch": "true",
     }
-
     try:
         response = requests.get(PIXABAY_API, params=params, timeout=15)
         response.raise_for_status()
@@ -55,7 +49,6 @@ def search_one_video(keyword: str, index: int, sub: int, output_dir: str) -> Pat
     if not hits:
         return None
 
-    # Pick a different hit for each sub-clip to add variety
     hit = hits[sub % len(hits)]
     videos = hit.get("videos", {})
     url = (
@@ -66,149 +59,111 @@ def search_one_video(keyword: str, index: int, sub: int, output_dir: str) -> Pat
     if not url:
         return None
 
-    safe = re.sub(r"[^a-z0-9_]", "_", keyword.lower())[:30]
-    dest_mp4 = Path(output_dir) / f"{index:02d}_{sub}_{safe}.mp4"
+    safe = re.sub(r"[^a-z0-9_]", "_", keyword.lower())[:25]
+    dest = Path(output_dir) / f"{index:02d}_{sub}_{safe}.mp4"
 
     try:
         with requests.get(url, stream=True, timeout=60) as r:
             r.raise_for_status()
-            with open(dest_mp4, "wb") as f:
+            with open(dest, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
+        return dest
     except Exception as e:
-        print(f"  ⚠️  Download error for '{keyword}': {e}")
+        print(f"  ⚠️  Download error: {e}")
         return None
 
-    webm = convert_to_webm(dest_mp4)
-    return webm
 
-
-def fetch_clips_for_sentence(
+def fetch_and_prepare_clips(
     keywords: list[str],
     sentence_index: int,
     clip_duration: float,
     output_dir: str,
+    tmp_dir: str,
 ) -> list[Path]:
     """
-    For one sentence, fetch one video per keyword (3 videos).
-    Trim each to SUB_CLIP_DURATION seconds.
-    Returns list of trimmed WebM paths.
+    Download one MP4 per keyword, scale+trim each to sub-duration.
+    Returns list of prepared MP4 paths.
     """
-    clips = []
-    n_keywords = len(keywords)
+    Path(tmp_dir).mkdir(parents=True, exist_ok=True)
+    n = len(keywords)
+    sub_dur = clip_duration / n
+    prepared = []
 
     for sub_i, keyword in enumerate(keywords):
-        print(f"    [{sub_i + 1}/{n_keywords}] Searching: '{keyword}'")
-        path = search_one_video(keyword, sentence_index, sub_i, output_dir)
+        print(f"    [{sub_i + 1}/{n}] '{keyword}'")
+        raw = search_one_video(keyword, sentence_index, sub_i, output_dir)
 
-        if path is None:
-            # Fallback
-            print(f"    ⚠️  No result for '{keyword}', trying fallback...")
-            fallback_keywords = ["nature landscape", "city street people", "sky clouds"]
-            path = search_one_video(
-                fallback_keywords[sub_i % len(fallback_keywords)],
+        if raw is None:
+            fallbacks = ["nature landscape", "city people walking", "sky clouds sun"]
+            raw = search_one_video(
+                fallbacks[sub_i % len(fallbacks)],
                 sentence_index, sub_i + 100, output_dir
             )
 
-        if path:
-            print(f"    ✅  Got: {path.name}")
-            clips.append(path)
+        if raw is None:
+            print(f"    ⚠️  Skipping '{keyword}' — no video found")
+            continue
 
-    return clips
+        out = Path(tmp_dir) / f"s{sentence_index:02d}_sub{sub_i}.mp4"
+        convert_to_mp4_scaled(raw, out, sub_dur)
+        raw.unlink(missing_ok=True)
+        prepared.append(out)
+        print(f"    ✅  Ready: {out.name} ({sub_dur:.1f}s)")
+
+    return prepared
 
 
-def trim_and_concat_clips(
-    clip_paths: list[Path],
-    sentence_index: int,
-    total_duration: float,
-    tmp_dir: str = "/tmp/vsg_clips",
-) -> Path:
-    """
-    Trim each clip to equal sub-duration, then concat them
-    to fill the total sentence duration.
-    Returns final WebM path.
-    """
-    Path(tmp_dir).mkdir(parents=True, exist_ok=True)
+def concat_sub_clips(clips: list[Path], sentence_index: int, tmp_dir: str) -> Path:
+    """Concatenate sub-clips into one clip for the sentence."""
+    if len(clips) == 1:
+        return clips[0]
 
-    if not clip_paths:
-        raise RuntimeError(f"No clips available for sentence {sentence_index}")
-
-    n      = len(clip_paths)
-    sub_dur = total_duration / n
-    trimmed = []
-
-    for i, clip in enumerate(clip_paths):
-        out = Path(tmp_dir) / f"s{sentence_index:02d}_t{i}.webm"
-        result = subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-i", str(clip),
-                "-t", f"{sub_dur:.3f}",
-                "-c", "copy",
-                "-an",
-                str(out),
-            ],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            # Re-encode if copy fails
-            subprocess.run(
-                [
-                    "ffmpeg", "-y",
-                    "-i", str(clip),
-                    "-t", f"{sub_dur:.3f}",
-                    "-c:v", "libvpx-vp9",
-                    "-crf", "33", "-b:v", "0",
-                    "-an",
-                    str(out),
-                ],
-                capture_output=True, text=True, check=True,
-            )
-        trimmed.append(out)
-
-    # Concat trimmed sub-clips
     list_file = Path(tmp_dir) / f"s{sentence_index:02d}_list.txt"
-    list_file.write_text("\n".join(f"file '{p}'" for p in trimmed))
+    list_file.write_text("\n".join(f"file '{p}'" for p in clips))
 
-    final = Path(tmp_dir) / f"s{sentence_index:02d}_final.webm"
+    out = Path(tmp_dir) / f"s{sentence_index:02d}_concat.mp4"
     subprocess.run(
         [
             "ffmpeg", "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(list_file),
             "-c", "copy",
-            str(final),
+            str(out),
         ],
         capture_output=True, text=True, check=True,
     )
-
-    return final
+    return out
 
 
 def fetch_videos_for_script(
     keywords_per_sentence: list[list[str]],
     clip_durations: list[float],
     output_dir: str = "videos",
+    tmp_dir: str = "/tmp/vsg_clips",
 ) -> list[Path]:
     """
-    Main entry point.
-    keywords_per_sentence: [[kw1, kw2, kw3], [kw1, kw2, kw3], ...]
-    clip_durations: duration in seconds for each sentence slot
-    Returns: list of final WebM paths, one per sentence.
+    Main entry: download + prepare one final MP4 per sentence.
+    Returns list of MP4 paths ready for FFmpeg overlay.
     """
     Path(output_dir).mkdir(exist_ok=True)
     final_paths = []
 
-    print(f"\n📹  Fetching videos for {len(keywords_per_sentence)} sentences...\n")
+    print(f"\n📹  Preparing videos for {len(keywords_per_sentence)} sentences...\n")
 
-    for i, (keywords, duration) in enumerate(zip(keywords_per_sentence, clip_durations)):
-        print(f"  🎬 Sentence {i + 1}/{len(keywords_per_sentence)} (duration: {duration:.1f}s)")
-        print(f"     Keywords: {keywords}")
+    for i, (keywords, duration) in enumerate(
+        zip(keywords_per_sentence, clip_durations)
+    ):
+        print(f"  🎬 Sentence {i + 1}/{len(keywords_per_sentence)} "
+              f"({duration:.1f}s) — {keywords}")
 
-        clips = fetch_clips_for_sentence(keywords, i, duration, output_dir)
+        clips = fetch_and_prepare_clips(keywords, i, duration, output_dir, tmp_dir)
 
-        final = trim_and_concat_clips(clips, i, duration)
+        if not clips:
+            raise RuntimeError(f"No clips available for sentence {i + 1}")
+
+        final = concat_sub_clips(clips, i, tmp_dir)
         final_paths.append(final)
-        print(f"  ✅  Sentence {i + 1} video ready: {final.name}\n")
+        print(f"  ✅  Sentence {i + 1} done → {final.name}\n")
 
     return final_paths
