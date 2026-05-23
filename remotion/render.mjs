@@ -13,7 +13,7 @@ if (!manifestPath || !outputPath) {
 }
 
 const props = JSON.parse(readFileSync(manifestPath, "utf-8"));
-const { sentences, videos, audio, duration_s } = props;
+const { sentences, videos, audio, duration_s, title } = props;
 
 const FPS           = 30;
 const WIDTH         = 1080;
@@ -26,6 +26,7 @@ const TMP           = "/tmp/vsg_render";
 mkdirSync(TMP, { recursive: true });
 
 console.log(`📋 Sentences  : ${sentences.length}`);
+console.log(`🎬 Title      : ${title}`);
 console.log(`⏱️  Per clip   : ${CLIP_DURATION.toFixed(2)}s`);
 
 // ── Transitions ───────────────────────────────────────────────────────────────
@@ -39,40 +40,30 @@ const getTransition = i => TRANSITIONS[i % TRANSITIONS.length];
 // ── Arabic detection ──────────────────────────────────────────────────────────
 const isArabic = t => /[\u0600-\u06FF]/.test(t);
 
-// ── Build HTML showing N words visible (word-by-word state) ───────────────────
-function buildWordHTML(sentence, visibleCount) {
-  const dir      = isArabic(sentence) ? "rtl" : "ltr";
-  const lang     = isArabic(sentence) ? "ar" : "en";
-  const fontFace = isArabic(sentence)
+// ── TikTok-style: one word at a time, highlighted, centered ──────────────────
+function buildTikTokFrame(sentence, visibleWordIndex, titleText) {
+  const words   = sentence.split(" ");
+  const dir     = isArabic(sentence) ? "rtl" : "ltr";
+  const lang    = isArabic(sentence) ? "ar" : "en";
+  const isAr    = isArabic(sentence);
+
+  const fontFace = isAr
     ? `"Noto Naskh Arabic", "Amiri", serif`
     : `"Inter", "Helvetica Neue", Arial, sans-serif`;
-  const fontSize = isArabic(sentence) ? "74px" : "66px";
 
-  const words = sentence.split(" ");
+  const titleFont = isArabic(titleText)
+    ? `"Noto Naskh Arabic", "Amiri", serif`
+    : `"Inter", "Helvetica Neue", Arial, sans-serif`;
 
-  const wordSpans = words.map((word, i) => {
-    const visible = i < visibleCount;
-
-    // Different entry animations cycling through words
-    const animations = [
-      `popIn`,       // bounce up
-      `slideInLeft`, // slide from left
-      `zoomIn`,      // zoom
-      `dropIn`,      // drop from top
-      `fadeIn`,      // simple fade
-    ];
-    const anim = animations[i % animations.length];
-
-    return visible
-      ? `<span class="word visible ${anim}">${word}</span>`
-      : `<span class="word hidden">${word}</span>`;
-  }).join(`<span class="sp"> </span>`);
+  // Current word to highlight (TikTok style: show one word big + highlighted)
+  const currentWord = words[visibleWordIndex] || "";
+  const isTitle     = isArabic(titleText);
 
   return `<!DOCTYPE html>
 <html lang="${lang}">
 <head>
   <meta charset="UTF-8"/>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700&family=Amiri:wght@700&family=Inter:wght@700;800&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700&family=Amiri:wght@700&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
     html, body {
@@ -80,169 +71,237 @@ function buildWordHTML(sentence, visibleCount) {
       overflow: hidden; background: transparent;
     }
 
-    /* Bottom gradient */
+    /* ── TOP TITLE ── */
+    .title-area {
+      position: absolute;
+      top: 80px;
+      left: 0; right: 0;
+      padding: 0 50px;
+      text-align: center;
+      direction: ${isArabic(titleText) ? "rtl" : "ltr"};
+    }
+
+    .title-badge {
+      display: inline-block;
+      background: rgba(255,255,255,0.12);
+      border: 2px solid rgba(255,255,255,0.35);
+      border-radius: 50px;
+      padding: 16px 44px;
+      backdrop-filter: blur(12px);
+    }
+
+    .title-text {
+      font-family: ${titleFont};
+      font-size: 38px;
+      font-weight: 800;
+      color: #ffffff;
+      letter-spacing: ${isArabic(titleText) ? "0.02em" : "-0.02em"};
+      text-shadow: 0 2px 12px rgba(0,0,0,0.8);
+    }
+
+    /* ── BOTTOM GRADIENT ── */
     .gradient {
       position: absolute;
-      bottom:0; left:0; right:0; height:62%;
+      bottom: 0; left: 0; right: 0;
+      height: 55%;
       background: linear-gradient(
         to top,
-        rgba(0,0,0,0.92) 0%,
-        rgba(0,0,0,0.55) 38%,
-        rgba(0,0,0,0.10) 65%,
+        rgba(0,0,0,0.88) 0%,
+        rgba(0,0,0,0.45) 40%,
         transparent 100%
       );
     }
 
-    /* Caption area */
-    .caption-wrapper {
+    /* ── TIKTOK WORD DISPLAY ── */
+    .word-area {
       position: absolute;
-      bottom: 155px; left:0; right:0;
-      padding: 0 58px;
-      text-align: center;
+      bottom: 140px;
+      left: 0; right: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0px;
+      padding: 0 60px;
       direction: ${dir};
-      line-height: 1.55;
     }
 
-    .word {
-      display: inline-block;
+    /* Current highlighted word — BIG */
+    .current-word {
       font-family: ${fontFace};
-      font-size: ${fontSize};
-      font-weight: 800;
-      color: #fff;
-      letter-spacing: ${isArabic(sentence) ? "0.02em" : "-0.01em"};
+      font-size: ${isAr ? "110px" : "108px"};
+      font-weight: 900;
+      color: #FFE600;
+      text-align: center;
+      line-height: 1.1;
+      letter-spacing: ${isAr ? "0.02em" : "-0.03em"};
       text-shadow:
-        0 4px 18px rgba(0,0,0,1),
-        0 0  45px rgba(0,0,0,0.95),
-        2px 2px 8px rgba(0,0,0,1);
+        0 0  25px rgba(255,230,0,0.6),
+        0 4px 20px rgba(0,0,0,1),
+        3px 3px 0px rgba(0,0,0,0.8);
+      animation: wordPop 0.18s cubic-bezier(0.34,1.56,0.64,1) both;
     }
 
-    .hidden { opacity:0; }
-
-    .sp { display:inline-block; width:0.27em; }
-
-    /* ── Animations ── */
-    .popIn {
-      animation: popIn 0.28s cubic-bezier(0.34,1.56,0.64,1) both;
-    }
-    @keyframes popIn {
-      from { opacity:0; transform: translateY(22px) scale(0.8); }
-      70%  { transform: translateY(-5px) scale(1.08); }
-      to   { opacity:1; transform: translateY(0) scale(1); }
+    @keyframes wordPop {
+      0%   { transform: scale(0.6) translateY(15px); opacity:0; }
+      70%  { transform: scale(1.12) translateY(-4px); }
+      100% { transform: scale(1) translateY(0); opacity:1; }
     }
 
-    .slideInLeft {
-      animation: slideInLeft 0.30s cubic-bezier(0.22,1,0.36,1) both;
-    }
-    @keyframes slideInLeft {
-      from { opacity:0; transform: translateX(${isArabic(sentence) ? "40px" : "-40px"}); }
-      to   { opacity:1; transform: translateX(0); }
-    }
-
-    .zoomIn {
-      animation: zoomIn 0.25s cubic-bezier(0.34,1.56,0.64,1) both;
-    }
-    @keyframes zoomIn {
-      from { opacity:0; transform: scale(1.6); }
-      to   { opacity:1; transform: scale(1); }
+    /* Previous words — small, faded above */
+    .prev-words {
+      font-family: ${fontFace};
+      font-size: ${isAr ? "46px" : "44px"};
+      font-weight: 700;
+      color: rgba(255,255,255,0.55);
+      text-align: center;
+      line-height: 1.4;
+      letter-spacing: ${isAr ? "0.02em" : "-0.01em"};
+      text-shadow: 0 2px 8px rgba(0,0,0,0.9);
+      max-width: 960px;
+      margin-bottom: 8px;
     }
 
-    .dropIn {
-      animation: dropIn 0.28s cubic-bezier(0.34,1.56,0.64,1) both;
-    }
-    @keyframes dropIn {
-      from { opacity:0; transform: translateY(-30px) scale(0.9); }
-      to   { opacity:1; transform: translateY(0) scale(1); }
+    /* Next words — small, faded below */
+    .next-words {
+      font-family: ${fontFace};
+      font-size: ${isAr ? "42px" : "40px"};
+      font-weight: 600;
+      color: rgba(255,255,255,0.28);
+      text-align: center;
+      line-height: 1.4;
+      letter-spacing: ${isAr ? "0.02em" : "-0.01em"};
+      max-width: 960px;
+      margin-top: 8px;
     }
 
-    .fadeIn {
-      animation: fadeIn 0.30s ease both;
+    /* Word counter dots */
+    .dots {
+      position: absolute;
+      bottom: 92px;
+      left: 0; right: 0;
+      display: flex;
+      justify-content: center;
+      gap: 10px;
     }
-    @keyframes fadeIn {
-      from { opacity:0; }
-      to   { opacity:1; }
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.25);
+      transition: all 0.2s;
+    }
+    .dot.active {
+      background: #FFE600;
+      width: 28px;
+      border-radius: 5px;
     }
   </style>
 </head>
 <body>
+  <!-- Top title -->
+  <div class="title-area">
+    <div class="title-badge">
+      <span class="title-text">${titleText}</span>
+    </div>
+  </div>
+
+  <!-- Bottom gradient -->
   <div class="gradient"></div>
-  <div class="caption-wrapper">${wordSpans}</div>
+
+  <!-- TikTok word display -->
+  <div class="word-area">
+    ${visibleWordIndex > 0
+      ? `<div class="prev-words">${words.slice(0, visibleWordIndex).join(" ")}</div>`
+      : ""
+    }
+    <div class="current-word">${currentWord}</div>
+    ${visibleWordIndex < words.length - 1
+      ? `<div class="next-words">${words.slice(visibleWordIndex + 1).join(" ")}</div>`
+      : ""
+    }
+  </div>
+
+  <!-- Progress dots -->
+  <div class="dots">
+    ${words.map((_, i) =>
+      `<div class="dot ${i === visibleWordIndex ? "active" : ""}"></div>`
+    ).join("")}
+  </div>
 </body>
 </html>`;
 }
 
-// ── Render word-by-word frames for one sentence ───────────────────────────────
-async function renderWordFrames(page, sentence, clipIndex) {
-  const words        = sentence.split(" ");
-  const totalFrames  = Math.ceil(CLIP_DURATION * FPS);
-
-  // How many frames to hold each word state
-  // First word appears at frame 3, then one word per ~8 frames
-  const holdFrames   = Math.max(6, Math.floor((totalFrames * 0.75) / words.length));
-  const frameDir     = `${TMP}/wframes_${clipIndex}`;
+// ── Render word-by-word frames ────────────────────────────────────────────────
+async function renderWordFrames(page, sentence, clipIndex, titleText) {
+  const words       = sentence.split(" ");
+  const totalFrames = Math.ceil(CLIP_DURATION * FPS);
+  const frameDir    = `${TMP}/wframes_${clipIndex}`;
   mkdirSync(frameDir, { recursive: true });
+
+  // Frames per word — distribute evenly
+  const framesPerWord = Math.floor((totalFrames * 0.85) / words.length);
+  const holdFrames    = Math.max(8, framesPerWord);
+
+  // Load fonts first
+  const initHTML  = buildTikTokFrame(sentence, 0, titleText);
+  const initPath  = `${TMP}/init_${clipIndex}.html`;
+  writeFileSync(initPath, initHTML, "utf-8");
+  await page.goto(`file://${initPath}`, { waitUntil: "load" });
+  await page.waitForTimeout(1000);
 
   let frameIdx = 0;
 
-  // Load Google Fonts once
-  const initHTML = buildWordHTML(sentence, 0);
-  const initPath = `${TMP}/init_${clipIndex}.html`;
-  writeFileSync(initPath, initHTML, "utf-8");
-  await page.goto(`file://${initPath}`, { waitUntil: "load" });
-  await page.waitForTimeout(900); // wait for fonts
-
-  // Phase 1: word-by-word appearance
-  for (let w = 1; w <= words.length; w++) {
-    const html     = buildWordHTML(sentence, w);
+  for (let w = 0; w < words.length; w++) {
+    const html     = buildTikTokFrame(sentence, w, titleText);
     const htmlPath = `${TMP}/w_${clipIndex}_${w}.html`;
     writeFileSync(htmlPath, html, "utf-8");
 
     await page.goto(`file://${htmlPath}`, { waitUntil: "load" });
-    await page.waitForTimeout(120); // let animation play
+    await page.waitForTimeout(80); // animation settle
 
-    const framesForThisWord = w === words.length
-      ? Math.max(holdFrames, totalFrames - frameIdx) // last word fills remaining
+    const framesThisWord = w === words.length - 1
+      ? Math.max(holdFrames, totalFrames - frameIdx)
       : holdFrames;
 
-    for (let f = 0; f < framesForThisWord && frameIdx < totalFrames; f++, frameIdx++) {
+    for (let f = 0; f < framesThisWord && frameIdx < totalFrames; f++, frameIdx++) {
       const framePath = `${frameDir}/frame_${String(frameIdx).padStart(6, "0")}.png`;
       await page.screenshot({ path: framePath, type: "png", omitBackground: true });
     }
   }
 
-  // Phase 2: fill remaining frames with full sentence (hold)
+  // Fill remaining
   while (frameIdx < totalFrames) {
-    const framePath = `${frameDir}/frame_${String(frameIdx).padStart(6, "0")}.png`;
-    await page.screenshot({ path: framePath, type: "png", omitBackground: true });
+    const last = `${frameDir}/frame_${String(frameIdx - 1).padStart(6, "0")}.png`;
+    const cur  = `${frameDir}/frame_${String(frameIdx).padStart(6, "0")}.png`;
+    const data = readFileSync(last);
+    writeFileSync(cur, data);
     frameIdx++;
   }
 
   return frameDir;
 }
 
-// ── Convert caption frames → transparent video ────────────────────────────────
-function framesToVideo(frameDir, outPath) {
+// ── Frames → WebM with alpha ──────────────────────────────────────────────────
+function framesToWebm(frameDir, outPath) {
   const result = spawnSync("ffmpeg", [
     "-y",
     "-framerate", String(FPS),
     "-i", `${frameDir}/frame_%06d.png`,
     "-vf", `scale=${WIDTH}:${HEIGHT}`,
     "-c:v", "libvpx-vp9",
-    "-pix_fmt", "yuva420p",   // with alpha channel
-    "-b:v", "0",
-    "-crf", "20",
+    "-pix_fmt", "yuva420p",
+    "-b:v", "0", "-crf", "18",
     "-an",
     outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("❌ frames→video error:\n"
-      + result.stderr.toString().slice(-1000));
+    console.error("❌ frames→webm:\n" + result.stderr.toString().slice(-800));
     process.exit(1);
   }
   return outPath;
 }
 
-// ── Apply Ken Burns + blue grade + fade ──────────────────────────────────────
+// ── Ken Burns + blue grade + fade ─────────────────────────────────────────────
 function applyEffectsAndColor(videoPath, duration, outPath, clipIndex) {
   const totalFrames = Math.ceil(duration * FPS);
 
@@ -269,7 +328,8 @@ function applyEffectsAndColor(videoPath, duration, outPath, clipIndex) {
     `fade=t=out:st=${(duration - FADE_DUR).toFixed(3)}:d=${FADE_DUR}`;
 
   const fullFilter =
-    `scale=${WIDTH * 1.1}:${HEIGHT * 1.1}:force_original_aspect_ratio=increase,` +
+    `scale=${WIDTH * 1.1}:${HEIGHT * 1.1}:` +
+    `force_original_aspect_ratio=increase,` +
     `crop=${WIDTH * 1.1}:${HEIGHT * 1.1},` +
     `${kenBurns},${colorGrade},${fade}`;
 
@@ -284,15 +344,14 @@ function applyEffectsAndColor(videoPath, duration, outPath, clipIndex) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    // Fallback without Ken Burns
-    const fallbackFilter =
+    const fallback =
       `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1,${colorGrade},${fade}`;
 
     result = spawnSync("ffmpeg", [
       "-y", "-i", videoPath,
       "-t", duration.toFixed(3),
-      "-vf", fallbackFilter,
+      "-vf", fallback,
       "-r", String(FPS),
       "-c:v", "libx264", "-preset", "fast", "-crf", "22",
       "-pix_fmt", "yuv420p", "-an",
@@ -300,34 +359,29 @@ function applyEffectsAndColor(videoPath, duration, outPath, clipIndex) {
     ], { stdio: ["ignore", "pipe", "pipe"] });
 
     if (result.status !== 0) {
-      console.error("❌ Both effects failed\n"
-        + result.stderr.toString().slice(-600));
+      console.error("❌ Effects failed\n"
+        + result.stderr.toString().slice(-500));
       process.exit(1);
     }
   }
   return outPath;
 }
 
-// ── Overlay animated caption WebM (with alpha) on video ──────────────────────
-function overlayAnimatedCaption(videoPath, captionWebm, outPath) {
+// ── Overlay animated WebM (alpha) on video ────────────────────────────────────
+function overlayAnimated(videoPath, captionWebm, outPath) {
   const result = spawnSync("ffmpeg", [
     "-y",
     "-i", videoPath,
     "-i", captionWebm,
-    "-filter_complex",
-    "[0:v][1:v]overlay=0:0:format=auto[out]",
+    "-filter_complex", "[0:v][1:v]overlay=0:0:format=auto[out]",
     "-map", "[out]",
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", "22",
-    "-pix_fmt", "yuv420p",
-    "-an",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+    "-pix_fmt", "yuv420p", "-an",
     outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("❌ Overlay error:\n"
-      + result.stderr.toString().slice(-1000));
+    console.error("❌ Overlay:\n" + result.stderr.toString().slice(-800));
     process.exit(1);
   }
   return outPath;
@@ -343,10 +397,9 @@ function xfadeConcat(clipPaths) {
 
   for (let i = 1; i < clipPaths.length; i++) {
     offset += CLIP_DURATION - XFADE_DUR;
-    const transition = getTransition(i - 1);
-    const outLabel   = i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
+    const outLabel = i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
     filterParts.push(
-      `${lastLabel}[${i}:v]xfade=transition=${transition}` +
+      `${lastLabel}[${i}:v]xfade=transition=${getTransition(i - 1)}` +
       `:duration=${XFADE_DUR}:offset=${offset.toFixed(3)}${outLabel}`
     );
     lastLabel = outLabel;
@@ -365,21 +418,15 @@ function xfadeConcat(clipPaths) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("⚠️  xfade failed — simple concat\n"
-      + result.stderr.toString().slice(-400));
-    return simpleConcatClips(clipPaths);
+    const listFile = `${TMP}/list.txt`;
+    writeFileSync(listFile, clipPaths.map(p => `file '${p}'`).join("\n"));
+    const fallback = `${TMP}/raw_final.mp4`;
+    spawnSync("ffmpeg", [
+      "-y", "-f", "concat", "-safe", "0",
+      "-i", listFile, "-c", "copy", fallback,
+    ], { stdio: "inherit" });
+    return fallback;
   }
-  return outPath;
-}
-
-function simpleConcatClips(clipPaths) {
-  const listFile = `${TMP}/list.txt`;
-  writeFileSync(listFile, clipPaths.map(p => `file '${p}'`).join("\n"));
-  const outPath = `${TMP}/raw_final.mp4`;
-  spawnSync("ffmpeg", [
-    "-y", "-f", "concat", "-safe", "0",
-    "-i", listFile, "-c", "copy", outPath,
-  ], { stdio: "inherit" });
   return outPath;
 }
 
@@ -394,14 +441,13 @@ function mergeAudio(videoPath, audioPath, outPath) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("❌ Merge error:\n"
-      + result.stderr.toString().slice(-800));
+    console.error("❌ Audio merge:\n" + result.stderr.toString().slice(-600));
     process.exit(1);
   }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-console.log("\n🚀 Starting cinematic render...\n");
+console.log("\n🚀 Starting TikTok-style cinematic render...\n");
 
 const browser = await chromium.launch({
   headless: true,
@@ -419,48 +465,45 @@ const context = await browser.newContext({
   locale:            "ar-SA",
 });
 
-const page           = await context.newPage();
-const captionWebms   = [];
-const finalClips     = [];
+const page         = await context.newPage();
+const captionWebms = [];
+const finalClips   = [];
 
-// Step 1: Render word-by-word frames + convert to WebM with alpha
-console.log("🖼️  Rendering animated word-by-word captions...");
+// Step 1: Word-by-word frames
+console.log("🖼️  Rendering TikTok word-by-word captions...");
 for (let i = 0; i < sentences.length; i++) {
-  const s = sentences[i];
+  const s     = sentences[i];
   const words = s.split(" ").length;
   process.stdout.write(
-    `  [${i + 1}/${sentences.length}] "${s.slice(0, 50)}" (${words} words)... `
+    `  [${i + 1}/${sentences.length}] "${s.slice(0, 50)}" (${words}w)... `
   );
-
-  const frameDir   = await renderWordFrames(page, s, i);
-  const webmPath   = `${TMP}/caption_${i}.webm`;
-  framesToVideo(frameDir, webmPath);
-  captionWebms.push(webmPath);
+  const frameDir = await renderWordFrames(page, s, i, title);
+  const webm     = `${TMP}/caption_${i}.webm`;
+  framesToWebm(frameDir, webm);
+  captionWebms.push(webm);
   process.stdout.write("✓\n");
 }
 await browser.close();
-console.log("✅ Animated captions done\n");
+console.log("✅ Captions done\n");
 
 // Step 2: Effects + overlay
-console.log("🎬 Applying Ken Burns + blue grade + animated captions...");
+console.log("🎬 Applying cinematic effects...");
 for (let i = 0; i < sentences.length; i++) {
-  const videoSrc   = videos[i] || videos[videos.length - 1];
-  const captionWbm = captionWebms[i];
-  const effected   = `${TMP}/effected_${String(i).padStart(3, "0")}.mp4`;
-  const final      = `${TMP}/final_clip_${String(i).padStart(3, "0")}.mp4`;
+  const videoSrc = videos[i] || videos[videos.length - 1];
+  const effected = `${TMP}/effected_${String(i).padStart(3, "0")}.mp4`;
+  const final    = `${TMP}/final_clip_${String(i).padStart(3, "0")}.mp4`;
 
   process.stdout.write(
     `  [${i + 1}/${sentences.length}] ${basename(videoSrc)}... `
   );
   applyEffectsAndColor(videoSrc, CLIP_DURATION, effected, i);
-  overlayAnimatedCaption(effected, captionWbm, final);
+  overlayAnimated(effected, captionWebms[i], final);
   finalClips.push(final);
   process.stdout.write("✓\n");
 }
 
 // Step 3: Transitions
-const transNames = finalClips.slice(0, -1).map((_, i) => getTransition(i));
-console.log(`\n✨ Transitions: ${transNames.join(" → ")}`);
+console.log(`\n✨ Transitions: ${finalClips.slice(0,-1).map((_,i)=>getTransition(i)).join(" → ")}`);
 const dissolved = xfadeConcat(finalClips);
 
 // Step 4: Audio
