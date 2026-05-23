@@ -67,6 +67,28 @@ def save_manifest(script_data: dict, video_paths: list, audio_path, out: str) ->
     return path
 
 
+def install_remotion_deps(remotion_dir: Path) -> None:
+    """Ensure node_modules are installed inside remotion/."""
+    node_modules = remotion_dir / "node_modules"
+    if node_modules.exists():
+        print("✅  Remotion node_modules already installed.")
+        return
+
+    print("📦  Installing Remotion node_modules...")
+    result = subprocess.run(
+        ["npm", "install"],
+        cwd=str(remotion_dir),
+        text=True,
+        stderr=subprocess.STDOUT,
+        stdout=subprocess.PIPE,
+    )
+    print(result.stdout)
+    if result.returncode != 0:
+        print(f"❌  npm install failed with code {result.returncode}")
+        raise RuntimeError("npm install failed inside remotion/")
+    print("✅  Remotion node_modules installed successfully.")
+
+
 def render_video(manifest_path: Path, output: str) -> Path:
     """Call Remotion via Node.js script to render the final video."""
     print("\n🎞️   Rendering video with Remotion...")
@@ -74,6 +96,9 @@ def render_video(manifest_path: Path, output: str) -> Path:
     out_file      = Path(output + "_final.mp4").resolve()
     remotion_dir  = Path("remotion").resolve()
     render_script = remotion_dir / "render.mjs"
+
+    # ── تأكد من وجود node_modules قبل التشغيل ──────────────────────────────
+    install_remotion_deps(remotion_dir)
 
     cmd = [
         "node",
