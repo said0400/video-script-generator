@@ -1,9 +1,34 @@
 import os
 import re
+import subprocess
 import requests
 from pathlib import Path
 
 PIXABAY_API = "https://pixabay.com/api/videos/"
+
+
+def convert_to_webm(mp4_path: Path) -> Path:
+    """Convert MP4 to WebM (VP9) for Chromium compatibility."""
+    webm_path = mp4_path.with_suffix(".webm")
+    result = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", str(mp4_path),
+            "-c:v", "libvpx-vp9",
+            "-crf", "33",
+            "-b:v", "0",
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-an",
+            str(webm_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"  ⚠️  WebM conversion failed: {result.stderr[-500:]}")
+        return mp4_path
+    mp4_path.unlink()
+    return webm_path
 
 
 def search_video(keyword: str, index: int, output_dir: str = "videos") -> Path:
@@ -27,7 +52,6 @@ def search_video(keyword: str, index: int, output_dir: str = "videos") -> Path:
         print(f"  ⚠️  No video found for '{keyword}', using fallback 'nature'")
         return search_video("nature", index, output_dir)
 
-    # Pick the first result with a medium quality URL
     video_url = None
     for hit in hits:
         videos = hit.get("videos", {})
@@ -44,17 +68,19 @@ def search_video(keyword: str, index: int, output_dir: str = "videos") -> Path:
         raise RuntimeError(f"Could not extract video URL for keyword: {keyword}")
 
     safe_keyword = re.sub(r"[^a-z0-9_]", "_", keyword.lower())
-    dest = Path(output_dir) / f"{index:02d}_{safe_keyword}.mp4"
+    dest_mp4 = Path(output_dir) / f"{index:02d}_{safe_keyword}.mp4"
 
-    print(f"  ⬇️   Downloading [{keyword}] → {dest.name}")
+    print(f"  ⬇️   Downloading [{keyword}] → {dest_mp4.name}")
     with requests.get(video_url, stream=True, timeout=60) as r:
         r.raise_for_status()
-        with open(dest, "wb") as f:
+        with open(dest_mp4, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
 
-    print(f"  ✅  Saved: {dest}")
-    return dest
+    print(f"  🔄  Converting to WebM...")
+    dest_webm = convert_to_webm(dest_mp4)
+    print(f"  ✅  Saved: {dest_webm}")
+    return dest_webm
 
 
 def fetch_videos_for_script(keywords: list[str], output_dir: str = "videos") -> list[Path]:
