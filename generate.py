@@ -20,19 +20,27 @@ OUTPUT FORMAT (strict JSON, no markdown fences):
   "cta": "<call to action / closing line>",
   "full_script": "<hook + body + cta as one continuous narration>",
   "sentences": ["<sentence 1>", "<sentence 2>", "..."],
-  "keywords": ["<keyword per sentence matching its visual>", "..."],
+  "keywords": [
+    ["<keyword_A>", "<keyword_B>", "<keyword_C>"],
+    ["<keyword_A>", "<keyword_B>", "<keyword_C>"],
+    "..."
+  ],
   "estimated_seconds": <integer>,
   "word_count": <integer>,
   "tone": "<energetic / inspirational / educational / humorous / calm>"
 }
 
 RULES:
-- full_script: exact text to read aloud, no stage directions.
-- sentences: split full_script into natural spoken sentences (5–12 words each).
-- keywords: one SHORT search keyword per sentence (1–2 words, English, visual noun — e.g. "morning water", "brain focus", "alarm clock").
-- sentences and keywords arrays MUST have the same length.
-- Target 75–200 words total.
-- Return ONLY the JSON object. No extra text."""
+- full_script: exact text to read aloud, no stage directions, no brackets.
+- sentences: split full_script into natural spoken sentences (5–15 words each).
+- keywords: for EACH sentence, provide exactly 3 SPECIFIC visual search keywords.
+  • Keywords must be CONCRETE VISUAL NOUNS directly related to the sentence meaning.
+  • BAD keywords: "energy boost", "lifestyle", "journey", "transformation" (too generic).
+  • GOOD keywords: "person running sunrise", "clock food plate", "brain neurons glowing", "salad vegetables fresh".
+  • Each keyword must be 2–4 words, in English, highly searchable on stock video sites.
+  • keywords array length MUST equal sentences array length.
+- Target 75–200 words for full_script.
+- Return ONLY the JSON object. No extra text before or after."""
 
 
 def generate_script(idea: str, tone: str = "energetic", feedback: str = None) -> dict:
@@ -50,14 +58,50 @@ def generate_script(idea: str, tone: str = "energetic", feedback: str = None) ->
             {"role": "user",   "content": user_prompt},
         ],
         temperature=0.85,
-        max_tokens=1024,
+        max_tokens=2048,
     )
 
     raw = response.choices[0].message.content.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
 
-    return json.loads(raw)
+    data = json.loads(raw)
+
+    # Validate keywords structure — must be list of lists
+    keywords = data.get("keywords", [])
+    sentences = data.get("sentences", [])
+
+    # Fix: if model returned flat list of strings instead of list of lists
+    if keywords and isinstance(keywords[0], str):
+        print("  ⚠️  Keywords flat — auto-converting to list of lists")
+        chunked = []
+        for i in range(0, len(keywords), 3):
+            chunk = keywords[i:i+3]
+            while len(chunk) < 3:
+                chunk.append(chunk[-1] if chunk else "nature landscape")
+            chunked.append(chunk)
+        # Pad or trim to match sentences length
+        while len(chunked) < len(sentences):
+            chunked.append(["nature landscape", "city street", "sky clouds"])
+        data["keywords"] = chunked[:len(sentences)]
+
+    # Ensure every sentence has exactly 3 keywords
+    fixed_keywords = []
+    for i, kws in enumerate(data.get("keywords", [])):
+        if isinstance(kws, list):
+            while len(kws) < 3:
+                kws.append(kws[-1] if kws else "nature landscape")
+            fixed_keywords.append(kws[:3])
+        else:
+            fixed_keywords.append(["nature landscape", "city street", "sky clouds"])
+
+    # Pad if keywords shorter than sentences
+    while len(fixed_keywords) < len(sentences):
+        fixed_keywords.append(["nature landscape", "city street", "sky clouds"])
+
+    data["keywords"] = fixed_keywords[:len(sentences)]
+
+    return data
 
 
 def count_words(text: str) -> int:
@@ -65,10 +109,12 @@ def count_words(text: str) -> int:
 
 
 def estimate_seconds(text: str) -> float:
+    """Average speaking pace: ~150 words per minute = 2.5 words/sec"""
     return count_words(text) / 2.5
 
 
 def enforce_duration(data: dict, idea: str, tone: str, max_retries: int = 3) -> dict:
+    """Re-generate until full_script is genuinely between 30–80 seconds."""
     for attempt in range(max_retries):
         script = data["full_script"]
         real_seconds = estimate_seconds(script)
@@ -82,13 +128,14 @@ def enforce_duration(data: dict, idea: str, tone: str, max_retries: int = 3) -> 
             return data
 
         if real_seconds < 30:
-            feedback = f"Too short ({real_seconds:.0f}s / {words} words). Expand. Target 75–200 words."
+            feedback = f"Too short ({real_seconds:.0f}s / {words} words). Expand the body. Target 75–200 words."
         else:
-            feedback = f"Too long ({real_seconds:.0f}s / {words} words). Cut down. Target 75–200 words."
+            feedback = f"Too long ({real_seconds:.0f}s / {words} words). Cut it down. Target 75–200 words."
 
         print(f"  ⚠️  {feedback} Retrying...")
         data = generate_script(idea=idea, tone=tone, feedback=feedback)
 
+    # Last resort: hard trim to 200 words
     words_list = data["full_script"].split()
     if len(words_list) > 200:
         data["full_script"] = " ".join(words_list[:200])
@@ -106,8 +153,9 @@ def print_script(data: dict) -> None:
     print(f"⏱️   DURATION : ~{data['estimated_seconds']}s  ({data['word_count']} words)")
     print("─" * 60)
     print("📝  SENTENCES:")
-    for i, (s, k) in enumerate(zip(data["sentences"], data["keywords"]), 1):
-        print(f"  {i}. [{k}] {s}")
+    for i, (s, kws) in enumerate(zip(data["sentences"], data["keywords"]), 1):
+        print(f"  {i}. {s}")
+        print(f"     🔑 {' | '.join(kws)}")
     print("─" * 60)
     print("📜  FULL SCRIPT:")
     print(data["full_script"])
