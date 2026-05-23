@@ -3,18 +3,21 @@ import re
 import subprocess
 import requests
 from pathlib import Path
+from video_db import is_used, mark_used, get_used_count
 
 PIXABAY_API = "https://pixabay.com/api/videos/"
 
 
 def convert_to_mp4_scaled(mp4_src: Path, out_path: Path, duration: float) -> Path:
-    """Trim + scale MP4 to 1080x1920. Keep as MP4 for FFmpeg (no WebM needed)."""
     result = subprocess.run(
         [
             "ffmpeg", "-y",
             "-i", str(mp4_src),
             "-t", f"{duration:.3f}",
-            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1",
+            "-vf", (
+                "scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,setsar=1"
+            ),
             "-r", "30",
             "-c:v", "libx264",
             "-preset", "ultrafast",
@@ -29,13 +32,19 @@ def convert_to_mp4_scaled(mp4_src: Path, out_path: Path, duration: float) -> Pat
     return out_path
 
 
-def search_one_video(keyword: str, index: int, sub: int, output_dir: str) -> Path | None:
-    """Search Pixabay for ONE video. Returns downloaded MP4 path or None."""
+def search_one_video(
+    keyword: str,
+    index: int,
+    sub: int,
+    output_dir: str,
+    session_used: set,
+) -> Path | None:
+    """Search Pixabay, skip already-used video IDs."""
     params = {
         "key":        os.environ["PIXABAY_API_KEY"],
         "q":          keyword,
         "video_type": "film",
-        "per_page":   10,
+        "per_page":   20,          # fetch more to find unused ones
         "safesearch": "true",
     }
     try:
@@ -49,8 +58,20 @@ def search_one_video(keyword: str, index: int, sub: int, output_dir: str) -> Pat
     if not hits:
         return None
 
-    hit = hits[sub % len(hits)]
-    videos = hit.get("videos", {})
+    # Find first hit not used globally or in this session
+    chosen = None
+    for hit in hits:
+        vid_id = hit["id"]
+        if vid_id not in session_used and not is_used(vid_id):
+            chosen = hit
+            break
+
+    # If all are used, pick least-recently used (last in global DB)
+    if chosen is None:
+        print(f"  ⚠️  All results for '{keyword}' already used — picking freshest")
+        chosen = hits[0]
+
+    videos  = chosen.get("videos", {})
     url = (
         videos.get("medium", {}).get("url")
         or videos.get("small",  {}).get("url")
@@ -58,6 +79,10 @@ def search_one_video(keyword: str, index: int, sub: int, output_dir: str) -> Pat
     )
     if not url:
         return None
+
+    vid_id = chosen["id"]
+    session_used.add(vid_id)
+    mark_used(vid_id)
 
     safe = re.sub(r"[^a-z0-9_]", "_", keyword.lower())[:25]
     dest = Path(output_dir) / f"{index:02d}_{sub}_{safe}.mp4"
@@ -80,42 +105,38 @@ def fetch_and_prepare_clips(
     clip_duration: float,
     output_dir: str,
     tmp_dir: str,
+    session_used: set,
 ) -> list[Path]:
-    """
-    Download one MP4 per keyword, scale+trim each to sub-duration.
-    Returns list of prepared MP4 paths.
-    """
     Path(tmp_dir).mkdir(parents=True, exist_ok=True)
-    n = len(keywords)
+    n       = len(keywords)
     sub_dur = clip_duration / n
     prepared = []
 
     for sub_i, keyword in enumerate(keywords):
         print(f"    [{sub_i + 1}/{n}] '{keyword}'")
-        raw = search_one_video(keyword, sentence_index, sub_i, output_dir)
+        raw = search_one_video(keyword, sentence_index, sub_i, output_dir, session_used)
 
         if raw is None:
             fallbacks = ["nature landscape", "city people walking", "sky clouds sun"]
             raw = search_one_video(
                 fallbacks[sub_i % len(fallbacks)],
-                sentence_index, sub_i + 100, output_dir
+                sentence_index, sub_i + 100, output_dir, session_used,
             )
 
         if raw is None:
-            print(f"    ⚠️  Skipping '{keyword}' — no video found")
+            print(f"    ⚠️  Skipping '{keyword}'")
             continue
 
         out = Path(tmp_dir) / f"s{sentence_index:02d}_sub{sub_i}.mp4"
         convert_to_mp4_scaled(raw, out, sub_dur)
         raw.unlink(missing_ok=True)
         prepared.append(out)
-        print(f"    ✅  Ready: {out.name} ({sub_dur:.1f}s)")
+        print(f"    ✅  {out.name} ({sub_dur:.1f}s)")
 
     return prepared
 
 
 def concat_sub_clips(clips: list[Path], sentence_index: int, tmp_dir: str) -> Path:
-    """Concatenate sub-clips into one clip for the sentence."""
     if len(clips) == 1:
         return clips[0]
 
@@ -142,14 +163,12 @@ def fetch_videos_for_script(
     output_dir: str = "videos",
     tmp_dir: str = "/tmp/vsg_clips",
 ) -> list[Path]:
-    """
-    Main entry: download + prepare one final MP4 per sentence.
-    Returns list of MP4 paths ready for FFmpeg overlay.
-    """
     Path(output_dir).mkdir(exist_ok=True)
+
+    session_used: set = set()   # track IDs used in THIS run
     final_paths = []
 
-    print(f"\n📹  Preparing videos for {len(keywords_per_sentence)} sentences...\n")
+    print(f"\n📹  Preparing videos ({get_used_count()} videos used globally so far)\n")
 
     for i, (keywords, duration) in enumerate(
         zip(keywords_per_sentence, clip_durations)
@@ -157,13 +176,16 @@ def fetch_videos_for_script(
         print(f"  🎬 Sentence {i + 1}/{len(keywords_per_sentence)} "
               f"({duration:.1f}s) — {keywords}")
 
-        clips = fetch_and_prepare_clips(keywords, i, duration, output_dir, tmp_dir)
+        clips = fetch_and_prepare_clips(
+            keywords, i, duration, output_dir, tmp_dir, session_used
+        )
 
         if not clips:
-            raise RuntimeError(f"No clips available for sentence {i + 1}")
+            raise RuntimeError(f"No clips for sentence {i + 1}")
 
         final = concat_sub_clips(clips, i, tmp_dir)
         final_paths.append(final)
-        print(f"  ✅  Sentence {i + 1} done → {final.name}\n")
+        print(f"  ✅  Sentence {i + 1} → {final.name}\n")
 
+    print(f"📊  Total unique videos used globally: {get_used_count()}")
     return final_paths
