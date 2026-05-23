@@ -48,7 +48,12 @@ def parse_args():
     return parser.parse_args()
 
 
-def save_manifest(script_data: dict, video_paths: list, audio_path, out: str) -> Path:
+def save_manifest(
+    script_data: dict,
+    video_paths: list,
+    audio_path,
+    out: str,
+) -> Path:
     """Save a JSON manifest with ABSOLUTE paths for the renderer."""
     manifest = {
         "title":      script_data["title"],
@@ -138,8 +143,14 @@ def main():
 
     # ── Step 3: Fetch videos from Pixabay ────────────────────────────────────
     try:
+        sentences      = script_data["sentences"]
+        keywords       = script_data["keywords"]       # list[list[str]]
+        duration_s     = script_data["estimated_seconds"]
+        clip_durations = [duration_s / len(sentences)] * len(sentences)
+
         video_paths = fetch_videos_for_script(
-            keywords=script_data["keywords"],
+            keywords_per_sentence=keywords,
+            clip_durations=clip_durations,
             output_dir="videos",
         )
     except Exception as e:
