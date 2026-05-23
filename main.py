@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Video Script Generator + TTS + Pixabay + Remotion
+Video Script Generator + TTS + Pixabay + Playwright + FFmpeg
 Usage:
   python main.py "your idea here"
   python main.py "your idea" --tone inspirational --voice female_warm --output my_video
@@ -43,13 +43,13 @@ def parse_args():
     )
     parser.add_argument(
         "--no-video", action="store_true",
-        help="Generate script + audio only — skip Remotion render",
+        help="Generate script + audio only — skip render",
     )
     return parser.parse_args()
 
 
 def save_manifest(script_data: dict, video_paths: list, audio_path, out: str) -> Path:
-    """Save a JSON manifest with ABSOLUTE paths for Remotion."""
+    """Save a JSON manifest with ABSOLUTE paths for the renderer."""
     manifest = {
         "title":      script_data["title"],
         "sentences":  script_data["sentences"],
@@ -61,44 +61,18 @@ def save_manifest(script_data: dict, video_paths: list, audio_path, out: str) ->
     path = Path(f"{out}_manifest.json").resolve()
     path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+        encoding="utf-8",
     )
     print(f"📋  Manifest saved → {path}")
     return path
 
 
-def install_remotion_deps(remotion_dir: Path) -> None:
-    """Ensure node_modules are installed inside remotion/."""
-    node_modules = remotion_dir / "node_modules"
-    if node_modules.exists():
-        print("✅  Remotion node_modules already installed.")
-        return
-
-    print("📦  Installing Remotion node_modules...")
-    result = subprocess.run(
-        ["npm", "install"],
-        cwd=str(remotion_dir),
-        text=True,
-        stderr=subprocess.STDOUT,
-        stdout=subprocess.PIPE,
-    )
-    print(result.stdout)
-    if result.returncode != 0:
-        print(f"❌  npm install failed with code {result.returncode}")
-        raise RuntimeError("npm install failed inside remotion/")
-    print("✅  Remotion node_modules installed successfully.")
-
-
 def render_video(manifest_path: Path, output: str) -> Path:
-    """Call Remotion via Node.js script to render the final video."""
-    print("\n🎞️   Rendering video with Remotion...")
+    """Render final video using Playwright + FFmpeg."""
+    print("\n🎞️   Rendering video with Playwright...")
 
     out_file      = Path(output + "_final.mp4").resolve()
-    remotion_dir  = Path("remotion").resolve()
-    render_script = remotion_dir / "render.mjs"
-
-    # ── تأكد من وجود node_modules قبل التشغيل ──────────────────────────────
-    install_remotion_deps(remotion_dir)
+    render_script = Path("remotion/render.mjs").resolve()
 
     cmd = [
         "node",
@@ -112,7 +86,6 @@ def render_video(manifest_path: Path, output: str) -> Path:
 
     result = subprocess.run(
         cmd,
-        cwd=str(remotion_dir),
         text=True,
         stderr=subprocess.STDOUT,
         stdout=subprocess.PIPE,
@@ -121,7 +94,7 @@ def render_video(manifest_path: Path, output: str) -> Path:
     print(result.stdout)
 
     if result.returncode != 0:
-        print(f"\n❌  Remotion exited with code {result.returncode}")
+        print(f"\n❌  Render exited with code {result.returncode}")
         raise subprocess.CalledProcessError(result.returncode, cmd)
 
     print(f"🎉  Final video → {out_file}")
@@ -173,14 +146,14 @@ def main():
         print(f"❌  Pixabay fetch failed: {e}")
         sys.exit(1)
 
-    # ── Step 4: Save manifest + render with Remotion ─────────────────────────
+    # ── Step 4: Save manifest + render ───────────────────────────────────────
     try:
         manifest_path = save_manifest(
             script_data, video_paths, audio_path, args.output
         )
         render_video(manifest_path, args.output)
     except subprocess.CalledProcessError:
-        print("❌  Remotion render failed. Check logs above.")
+        print("❌  Render failed. Check logs above.")
         sys.exit(1)
     except Exception as e:
         print(f"❌  Unexpected error: {e}")
