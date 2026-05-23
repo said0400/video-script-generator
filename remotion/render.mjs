@@ -34,7 +34,7 @@ function isArabic(text) {
   return /[\u0600-\u06FF]/.test(text);
 }
 
-// ── Build caption HTML (transparent background, text only) ───────────────────
+// ── Build caption HTML (transparent background) ───────────────────────────────
 function buildCaptionHTML(sentence) {
   const dir      = isArabic(sentence) ? "rtl" : "ltr";
   const fontFace = isArabic(sentence)
@@ -117,29 +117,26 @@ async function renderCaptionPNG(page, sentence, index) {
   writeFileSync(htmlPath, html, "utf-8");
 
   await page.goto(`file://${htmlPath}`, { waitUntil: "load" });
-
-  // Wait for Google Fonts to load
   await page.waitForTimeout(1500);
 
   const pngPath = `${TMP}/caption_${index}.png`;
   await page.screenshot({
     path: pngPath,
     type: "png",
-    omitBackground: true,   // transparent background
+    omitBackground: true,
   });
 
   return pngPath;
 }
 
-// ── FFmpeg: overlay caption PNG on video clip ─────────────────────────────────
+// ── FFmpeg: overlay caption PNG on video ──────────────────────────────────────
 function overlayCaption(videoPath, captionPng, duration, outPath) {
   const result = spawnSync("ffmpeg", [
     "-y",
     "-i", videoPath,
     "-i", captionPng,
-    "-t", `${duration:.3f}`,
-    "-filter_complex",
-    "[0:v][1:v]overlay=0:0[out]",
+    "-t", duration.toFixed(3),
+    "-filter_complex", "[0:v][1:v]overlay=0:0[out]",
     "-map", "[out]",
     "-r", String(FPS),
     "-c:v", "libx264",
@@ -201,7 +198,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 console.log("\n🚀 Starting render...\n");
 
-// Step 1: Render all caption PNGs with Playwright
+// Step 1: Render caption PNGs with Playwright
 const browser = await chromium.launch({
   headless: true,
   args: [
@@ -221,7 +218,7 @@ const context = await browser.newContext({
   locale:            "ar-SA",
 });
 
-const page = await context.newPage();
+const page    = await context.newPage();
 const captionPNGs = [];
 
 console.log("🖼️  Rendering caption PNGs...");
@@ -251,10 +248,11 @@ for (let i = 0; i < sentences.length; i++) {
   process.stdout.write("✓\n");
 }
 
-// Step 3: Concat + merge audio
+// Step 3: Concat all clips
 console.log("\n🔗 Concatenating clips...");
 const rawVideo = concatClips(finalClips);
 
+// Step 4: Merge voiceover
 console.log("🎵 Merging voiceover...");
 mergeAudio(rawVideo, audio, outputPath);
 
