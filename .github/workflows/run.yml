@@ -110,7 +110,7 @@ jobs:
           sudo fc-cache -fv
           ffmpeg -version | head -1
 
-      - name: 🌐 Install Playwright Chromium (no deps — already installed)
+      - name: 🌐 Install Playwright Chromium
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         working-directory: remotion
         run: npx playwright install chromium
@@ -119,6 +119,14 @@ jobs:
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
         working-directory: remotion
         run: npx playwright --version
+
+      - name: 📥 Download used videos DB (if exists)
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: used-videos-db
+          if_no_artifact_found: ignore
+          search_artifacts: true
 
       - name: 🎬 Run generator
         env:
@@ -155,3 +163,12 @@ jobs:
           name: voiceover-${{ github.run_number }}
           path: output_*.wav
           retention-days: 7
+
+      - name: 📤 Upload used videos DB
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: used-videos-db
+          path: used_videos.json
+          retention-days: 90
+          overwrite: true
