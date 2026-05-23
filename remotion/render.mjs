@@ -1,8 +1,11 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { spawnSync } from "child_process";
-import { resolve, dirname } from "path";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { spawnSync, spawn } from "child_process";
+import { dirname, resolve, basename } from "path";
 import { fileURLToPath } from "url";
 import { chromium } from "playwright";
+import { createServer } from "http";
+import { readFile } from "fs/promises";
+import { extname } from "path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -22,45 +25,89 @@ const WIDTH         = 1080;
 const HEIGHT        = 1920;
 const CLIP_DURATION = duration_s / sentences.length;
 const CLIP_FRAMES   = Math.ceil(CLIP_DURATION * FPS);
+const TMP           = "/tmp/vsg_render";
 
-const TMP = "/tmp/vsg_render";
 mkdirSync(TMP, { recursive: true });
 
 console.log(`📋 Sentences  : ${sentences.length}`);
 console.log(`⏱️  Per clip   : ${CLIP_DURATION.toFixed(2)}s (${CLIP_FRAMES} frames)`);
 console.log(`🎵 Audio      : ${audio}`);
 
-// ── Detect text direction ────────────────────────────────────────────────────
+// ── Simple HTTP server to serve local files ───────────────────────────────────
+function startFileServer(port = 7788) {
+  const MIME = {
+    ".mp4":  "video/mp4",
+    ".webm": "video/webm",
+    ".png":  "image/png",
+    ".jpg":  "image/jpeg",
+    ".html": "text/html; charset=utf-8",
+    ".wav":  "audio/wav",
+  };
+
+  const server = createServer(async (req, res) => {
+    // URL format: /file?path=/absolute/path/to/file
+    const url    = new URL(req.url, `http://localhost:${port}`);
+    const filePath = url.searchParams.get("path") || url.pathname;
+
+    try {
+      const data = await readFile(filePath);
+      const mime = MIME[extname(filePath).toLowerCase()] || "application/octet-stream";
+      res.writeHead(200, {
+        "Content-Type":  mime,
+        "Content-Length": data.length,
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end(data);
+    } catch {
+      res.writeHead(404);
+      res.end("Not found");
+    }
+  });
+
+  server.listen(port);
+  console.log(`🌐 File server started on http://localhost:${port}`);
+  return server;
+}
+
+function fileUrl(filePath, port = 7788) {
+  return `http://localhost:${port}/file?path=${encodeURIComponent(filePath)}`;
+}
+
+// ── Detect text direction ─────────────────────────────────────────────────────
 function isArabic(text) {
   return /[\u0600-\u06FF]/.test(text);
 }
 
-function getDirection(text) {
-  return isArabic(text) ? "rtl" : "ltr";
-}
-
-// ── Build HTML for one sentence ──────────────────────────────────────────────
-function buildHTML(sentence, videoPath) {
-  const dir      = getDirection(sentence);
+// ── Build HTML for one sentence ───────────────────────────────────────────────
+function buildHTML(sentence, videoUrl, port) {
+  const dir      = isArabic(sentence) ? "rtl" : "ltr";
   const fontFace = isArabic(sentence)
-    ? `"Noto Naskh Arabic", "Amiri", "Scheherazade New", sans-serif`
+    ? `"Noto Naskh Arabic", "Amiri", serif`
     : `"Inter", "Helvetica Neue", Arial, sans-serif`;
 
   return `<!DOCTYPE html>
 <html lang="${isArabic(sentence) ? "ar" : "en"}">
 <head>
   <meta charset="UTF-8"/>
+  <link
+    rel="preconnect"
+    href="https://fonts.googleapis.com"
+    crossorigin
+  />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700&family=Amiri:wght@700&family=Inter:wght@700&display=swap"
+    rel="stylesheet"
+  />
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700&family=Amiri:wght@700&family=Inter:wght@700&display=swap');
-
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
-    body {
+    html, body {
       width: ${WIDTH}px;
       height: ${HEIGHT}px;
       overflow: hidden;
       background: #000;
-      font-family: ${fontFace};
     }
 
     .video-bg {
@@ -69,16 +116,19 @@ function buildHTML(sentence, videoPath) {
       width: 100%;
       height: 100%;
       object-fit: cover;
+      object-position: center;
+      z-index: 0;
     }
 
     .overlay {
       position: absolute;
       inset: 0;
+      z-index: 1;
       background: linear-gradient(
         to top,
-        rgba(0,0,0,0.85) 0%,
-        rgba(0,0,0,0.3)  50%,
-        rgba(0,0,0,0.1)  100%
+        rgba(0,0,0,0.80) 0%,
+        rgba(0,0,0,0.25) 50%,
+        rgba(0,0,0,0.05) 100%
       );
     }
 
@@ -87,7 +137,8 @@ function buildHTML(sentence, videoPath) {
       bottom: 160px;
       left: 0;
       right: 0;
-      padding: 0 60px;
+      z-index: 2;
+      padding: 0 64px;
       text-align: center;
       direction: ${dir};
     }
@@ -95,55 +146,82 @@ function buildHTML(sentence, videoPath) {
     .caption {
       display: inline-block;
       color: #ffffff;
-      font-size: 68px;
+      font-family: ${fontFace};
+      font-size: 66px;
       font-weight: 700;
-      line-height: 1.4;
-      text-shadow:
-        3px  3px 8px rgba(0,0,0,0.95),
-        -2px -2px 6px rgba(0,0,0,0.9),
-        0px  0px 20px rgba(0,0,0,0.8);
-      letter-spacing: ${isArabic(sentence) ? "0.02em" : "-0.01em"};
+      line-height: 1.45;
+      letter-spacing: ${isArabic(sentence) ? "0.03em" : "-0.01em"};
       word-spacing: 4px;
-    }
-
-    .caption .highlight {
-      color: #FFD700;
+      text-shadow:
+        0px 2px 12px rgba(0,0,0,1),
+        0px 0px 30px rgba(0,0,0,0.9),
+        2px 2px 4px rgba(0,0,0,1);
     }
   </style>
 </head>
 <body>
-  <video class="video-bg" autoplay muted loop>
-    <source src="file://${videoPath}" type="video/mp4"/>
-  </video>
+  <video
+    class="video-bg"
+    src="${videoUrl}"
+    autoplay
+    muted
+    loop
+    playsinline
+    preload="auto"
+  ></video>
   <div class="overlay"></div>
   <div class="caption-wrapper">
     <span class="caption">${sentence}</span>
   </div>
+  <script>
+    // Force video to play and verify it loaded
+    const vid = document.querySelector('video');
+    vid.addEventListener('error', (e) => {
+      console.error('Video error:', e);
+      document.body.style.background = '#1a1a2e';
+    });
+    vid.play().catch(e => console.error('Play error:', e));
+  </script>
 </body>
 </html>`;
 }
 
 // ── Screenshot frames for one clip ───────────────────────────────────────────
-async function screenshotClip(page, sentence, videoSrc, clipIndex) {
-  const html     = buildHTML(sentence, videoSrc);
+async function screenshotClip(page, sentence, videoSrc, clipIndex, port) {
+  const videoUrl = fileUrl(videoSrc, port);
+  const html     = buildHTML(sentence, videoUrl, port);
   const htmlPath = `${TMP}/slide_${clipIndex}.html`;
   writeFileSync(htmlPath, html, "utf-8");
 
-  await page.goto(`file://${htmlPath}`, { waitUntil: "networkidle" });
+  await page.goto(`http://localhost:${port}/file?path=${encodeURIComponent(htmlPath)}`, {
+    waitUntil: "networkidle",
+    timeout: 15000,
+  });
 
-  // Wait for video to load
-  await page.waitForTimeout(800);
+  // Wait for video to actually load and start playing
+  await page.waitForFunction(() => {
+    const v = document.querySelector("video");
+    return v && v.readyState >= 3;
+  }, { timeout: 10000 }).catch(() => {
+    console.log("  ⚠️  Video load timeout — continuing anyway");
+  });
+
+  // Extra buffer for first frame to render
+  await page.waitForTimeout(500);
 
   const frameDir = `${TMP}/frames_${clipIndex}`;
   mkdirSync(frameDir, { recursive: true });
 
-  console.log(`  📸 Capturing ${CLIP_FRAMES} frames for clip ${clipIndex + 1}...`);
+  process.stdout.write(`  📸 Capturing ${CLIP_FRAMES} frames...`);
 
   for (let f = 0; f < CLIP_FRAMES; f++) {
     const framePath = `${frameDir}/frame_${String(f).padStart(6, "0")}.png`;
-    await page.screenshot({ path: framePath });
+    await page.screenshot({ path: framePath, type: "png" });
+
+    if (f % 30 === 0) process.stdout.write(` ${f}`);
   }
 
+  process.stdout.write(" ✓\n");
   return frameDir;
 }
 
@@ -165,7 +243,7 @@ function framesToClip(frameDir, clipIndex) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("❌ frames→clip error:\n" + result.stderr.toString().slice(-1500));
+    console.error("❌ frames→clip error:\n" + result.stderr.toString().slice(-2000));
     process.exit(1);
   }
   return outClip;
@@ -185,7 +263,7 @@ function concatClips(clipPaths) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("❌ Concat error:\n" + result.stderr.toString().slice(-1500));
+    console.error("❌ Concat error:\n" + result.stderr.toString().slice(-2000));
     process.exit(1);
   }
   return rawVideo;
@@ -207,13 +285,16 @@ function mergeAudio(videoPath, audioPath, outPath) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("❌ Merge error:\n" + result.stderr.toString().slice(-1500));
+    console.error("❌ Merge error:\n" + result.stderr.toString().slice(-2000));
     process.exit(1);
   }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 console.log("\n🚀 Starting render with Playwright...\n");
+
+const PORT  = 7788;
+const server = startFileServer(PORT);
 
 const browser = await chromium.launch({
   headless: true,
@@ -223,22 +304,29 @@ const browser = await chromium.launch({
     "--disable-dev-shm-usage",
     "--disable-gpu",
     "--no-zygote",
+    "--autoplay-policy=no-user-gesture-required",
+    "--allow-file-access-from-files",
+    "--disable-web-security",
     "--font-render-hinting=none",
-    "--disable-font-subpixel-positioning",
     "--lang=ar,en",
   ],
 });
 
 const context = await browser.newContext({
-  viewport: { width: WIDTH, height: HEIGHT },
+  viewport:          { width: WIDTH, height: HEIGHT },
   deviceScaleFactor: 1,
-  locale: "ar-SA",
+  locale:            "ar-SA",
+  permissions:       [],
+  extraHTTPHeaders: {
+    "Accept-Language": "ar,en;q=0.9",
+  },
 });
 
 const page = await context.newPage();
 
-// Allow local file access
-await context.grantPermissions([]);
+page.on("console", msg => {
+  if (msg.type() === "error") console.log(`  🔴 Console: ${msg.text()}`);
+});
 
 const clipPaths = [];
 
@@ -246,16 +334,17 @@ for (let i = 0; i < sentences.length; i++) {
   const sentence = sentences[i];
   const videoSrc = videos[i] || videos[videos.length - 1];
 
-  console.log(`\n[${i + 1}/${sentences.length}] "${sentence.slice(0, 60)}"`);
-  console.log(`  🎬 Video: ${videoSrc.split("/").pop()}`);
+  console.log(`\n[${i + 1}/${sentences.length}] "${sentence.slice(0, 65)}"`);
+  console.log(`  🎬 ${basename(videoSrc)}`);
 
-  const frameDir = await screenshotClip(page, sentence, videoSrc, i);
+  const frameDir = await screenshotClip(page, sentence, videoSrc, i, PORT);
   const clipPath = framesToClip(frameDir, i);
   clipPaths.push(clipPath);
-  console.log(`  ✅ Clip ${i + 1} done`);
+  console.log(`  ✅ Clip ${i + 1} done → ${clipPath}`);
 }
 
 await browser.close();
+server.close();
 
 console.log("\n🔗 Concatenating clips...");
 const rawVideo = concatClips(clipPaths);
