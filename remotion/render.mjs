@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { spawnSync } from "child_process";
 import { dirname, basename } from "path";
 import { fileURLToPath } from "url";
@@ -60,7 +60,6 @@ function buildCaptionHTML(sentence) {
     : `"Inter", "Helvetica Neue", Arial, sans-serif`;
   const fontSize = isArabic(sentence) ? "74px" : "66px";
 
-  // Split into words, each animated with staggered delay
   const words = sentence.split(" ");
   const wordSpans = words.map((word, i) => {
     const delay = (i * 0.08).toFixed(2);
@@ -74,15 +73,12 @@ function buildCaptionHTML(sentence) {
   <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&family=Amiri:wght@700&family=Inter:wght@700;800&display=swap" rel="stylesheet"/>
   <style>
     * { margin:0; padding:0; box-sizing:border-box; }
-
     html, body {
       width: ${WIDTH}px;
       height: ${HEIGHT}px;
       overflow: hidden;
       background: transparent;
     }
-
-    /* Bottom gradient */
     .gradient {
       position: absolute;
       bottom: 0; left: 0; right: 0;
@@ -95,8 +91,6 @@ function buildCaptionHTML(sentence) {
         transparent 100%
       );
     }
-
-    /* Caption area */
     .caption-wrapper {
       position: absolute;
       bottom: 150px;
@@ -106,8 +100,6 @@ function buildCaptionHTML(sentence) {
       direction: ${dir};
       line-height: 1.5;
     }
-
-    /* Each word animates in */
     .word {
       display: inline-block;
       color: #ffffff;
@@ -122,12 +114,7 @@ function buildCaptionHTML(sentence) {
       opacity: 0;
       animation: popIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
     }
-
-    .space {
-      display: inline-block;
-      width: 0.28em;
-    }
-
+    .space { display: inline-block; width: 0.28em; }
     @keyframes popIn {
       0%   { opacity: 0; transform: translateY(20px) scale(0.85); }
       60%  { opacity: 1; transform: translateY(-4px) scale(1.05); }
@@ -137,14 +124,12 @@ function buildCaptionHTML(sentence) {
 </head>
 <body>
   <div class="gradient"></div>
-  <div class="caption-wrapper">
-    ${wordSpans}
-  </div>
+  <div class="caption-wrapper">${wordSpans}</div>
 </body>
 </html>`;
 }
 
-// ── Render caption PNG — wait for all words to appear ────────────────────────
+// ── Render caption PNG ────────────────────────────────────────────────────────
 async function renderCaptionPNG(page, sentence, index) {
   const html     = buildCaptionHTML(sentence);
   const htmlPath = `${TMP}/caption_${index}.html`;
@@ -152,45 +137,46 @@ async function renderCaptionPNG(page, sentence, index) {
 
   await page.goto(`file://${htmlPath}`, { waitUntil: "load" });
 
-  // Wait: fonts (800ms) + last word animation delay
-  const wordCount  = sentence.split(" ").length;
-  const waitMs     = 900 + wordCount * 85;
-  await page.waitForTimeout(Math.min(waitMs, 2200));
+  const wordCount = sentence.split(" ").length;
+  const waitMs    = Math.min(900 + wordCount * 85, 2200);
+  await page.waitForTimeout(waitMs);
 
   const pngPath = `${TMP}/caption_${index}.png`;
   await page.screenshot({ path: pngPath, type: "png", omitBackground: true });
   return pngPath;
 }
 
-// ── Apply Ken Burns + cinematic blue filter + fade ────────────────────────────
+// ── Apply Ken Burns + cinematic blue + fade ───────────────────────────────────
 function applyEffectsAndColor(videoPath, duration, outPath, clipIndex) {
   const totalFrames = Math.ceil(duration * FPS);
 
   // Ken Burns: alternate zoom in / zoom out
-  const zoomIn  =
-    `zoompan=z='min(zoom+0.0004,1.09)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
+  const zoomIn =
+    `zoompan=z='min(zoom+0.0004,1.09)':` +
+    `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
+    `d=${totalFrames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
+
   const zoomOut =
-    `zoompan=z='if(eq(on\\,1)\\,1.09\\,max(zoom-0.0004\\,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${totalFrames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
+    `zoompan=z='if(eq(on\\,1)\\,1.09\\,max(zoom-0.0004\\,1.0))':` +
+    `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
+    `d=${totalFrames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
 
   const kenBurns = clipIndex % 2 === 0 ? zoomIn : zoomOut;
 
-  // Cinematic blue/teal color grade
+  // ✅ Cinematic blue grade using curves only (compatible with FFmpeg 6.x)
+  // R channel slightly pulled down, B channel boosted → cool/blue teal look
   const colorGrade = [
-    // Boost shadows toward blue-teal
-    `colorbalance=ss=-0.05:ms=0.05:hs=0.12`,
-    // Slight cool tone in mids
-    `curves=r='0/0 0.5/0.45 1/0.9':g='0/0 0.5/0.5 1/1':b='0/0.05 0.5/0.55 1/1'`,
-    // Slightly desaturate for cinematic look
-    `hue=s=0.85`,
-    // Gentle vignette
+    `curves=r='0/0 0.5/0.46 1/0.88':g='0/0 0.5/0.50 1/0.97':b='0/0.04 0.5/0.56 1/1.0'`,
+    `hue=s=0.82`,
     `vignette=PI/5`,
   ].join(",");
 
   // Fade in + fade out
   const fade =
-    `fade=t=in:st=0:d=${FADE_DUR},fade=t=out:st=${(duration - FADE_DUR).toFixed(3)}:d=${FADE_DUR}`;
+    `fade=t=in:st=0:d=${FADE_DUR},` +
+    `fade=t=out:st=${(duration - FADE_DUR).toFixed(3)}:d=${FADE_DUR}`;
 
-  // Scale first, then Ken Burns, then color, then fade
+  // Full filter chain
   const fullFilter =
     `scale=${WIDTH * 1.1}:${HEIGHT * 1.1}:force_original_aspect_ratio=increase,` +
     `crop=${WIDTH * 1.1}:${HEIGHT * 1.1},` +
@@ -211,22 +197,33 @@ function applyEffectsAndColor(videoPath, duration, outPath, clipIndex) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("⚠️  Effects error — using simple fallback");
-    const simpleFallback = [
-      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT},setsar=1`,
-      colorGrade,
-      fade,
-    ].join(",");
+    console.error("⚠️  Ken Burns failed — using color-only fallback");
 
-    spawnSync("ffmpeg", [
-      "-y", "-i", videoPath,
+    // Fallback: scale + color grade + fade (no zoompan)
+    const fallbackFilter =
+      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
+      `crop=${WIDTH}:${HEIGHT},setsar=1,` +
+      `${colorGrade},${fade}`;
+
+    const fallback = spawnSync("ffmpeg", [
+      "-y",
+      "-i", videoPath,
       "-t", duration.toFixed(3),
-      "-vf", simpleFallback,
+      "-vf", fallbackFilter,
       "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-      "-pix_fmt", "yuv420p", "-an",
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "22",
+      "-pix_fmt", "yuv420p",
+      "-an",
       outPath,
-    ], { stdio: "inherit" });
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+
+    if (fallback.status !== 0) {
+      console.error("❌ Fallback also failed:\n"
+        + fallback.stderr.toString().slice(-800));
+      process.exit(1);
+    }
   }
 
   return outPath;
@@ -249,13 +246,14 @@ function overlayCaption(videoPath, captionPng, outPath) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("❌ Overlay error:\n" + result.stderr.toString().slice(-1000));
+    console.error("❌ Overlay error:\n"
+      + result.stderr.toString().slice(-1000));
     process.exit(1);
   }
   return outPath;
 }
 
-// ── Cross dissolve with varied transitions ────────────────────────────────────
+// ── xfade concat with varied transitions ─────────────────────────────────────
 function xfadeConcat(clipPaths) {
   if (clipPaths.length === 1) return clipPaths[0];
 
@@ -267,9 +265,9 @@ function xfadeConcat(clipPaths) {
     offset += CLIP_DURATION - XFADE_DUR;
     const transition = getTransition(i - 1);
     const outLabel   = i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
-
     filterParts.push(
-      `${lastLabel}[${i}:v]xfade=transition=${transition}:duration=${XFADE_DUR}:offset=${offset.toFixed(3)}${outLabel}`
+      `${lastLabel}[${i}:v]xfade=transition=${transition}` +
+      `:duration=${XFADE_DUR}:offset=${offset.toFixed(3)}${outLabel}`
     );
     lastLabel = outLabel;
   }
@@ -291,7 +289,7 @@ function xfadeConcat(clipPaths) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("⚠️  xfade failed — using simple concat\n"
+    console.error("⚠️  xfade failed — simple concat fallback\n"
       + result.stderr.toString().slice(-600));
     return simpleConcatClips(clipPaths);
   }
@@ -326,7 +324,8 @@ function mergeAudio(videoPath, audioPath, outPath) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (result.status !== 0) {
-    console.error("❌ Merge error:\n" + result.stderr.toString().slice(-1000));
+    console.error("❌ Merge error:\n"
+      + result.stderr.toString().slice(-1000));
     process.exit(1);
   }
 }
@@ -338,17 +337,20 @@ console.log("\n🚀 Starting cinematic render...\n");
 const browser = await chromium.launch({
   headless: true,
   args: [
-    "--no-sandbox", "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage", "--disable-gpu",
-    "--no-zygote", "--font-render-hinting=none",
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--no-zygote",
+    "--font-render-hinting=none",
     "--lang=ar,en",
   ],
 });
 
 const context = await browser.newContext({
-  viewport: { width: WIDTH, height: HEIGHT },
+  viewport:          { width: WIDTH, height: HEIGHT },
   deviceScaleFactor: 1,
-  locale: "ar-SA",
+  locale:            "ar-SA",
 });
 
 const page        = await context.newPage();
@@ -357,7 +359,9 @@ const captionPNGs = [];
 console.log("🖼️  Rendering word-by-word captions...");
 for (let i = 0; i < sentences.length; i++) {
   const s = sentences[i];
-  process.stdout.write(`  [${i + 1}/${sentences.length}] "${s.slice(0, 55)}"... `);
+  process.stdout.write(
+    `  [${i + 1}/${sentences.length}] "${s.slice(0, 55)}"... `
+  );
   captionPNGs.push(await renderCaptionPNG(page, s, i));
   process.stdout.write("✓\n");
 }
@@ -374,7 +378,9 @@ for (let i = 0; i < sentences.length; i++) {
   const effected   = `${TMP}/effected_${String(i).padStart(3, "0")}.mp4`;
   const final      = `${TMP}/final_clip_${String(i).padStart(3, "0")}.mp4`;
 
-  process.stdout.write(`  [${i + 1}/${sentences.length}] ${basename(videoSrc)}... `);
+  process.stdout.write(
+    `  [${i + 1}/${sentences.length}] ${basename(videoSrc)}... `
+  );
   applyEffectsAndColor(videoSrc, CLIP_DURATION, effected, i);
   overlayCaption(effected, captionPng, final);
   finalClips.push(final);
@@ -382,7 +388,8 @@ for (let i = 0; i < sentences.length; i++) {
 }
 
 // Step 3: Transitions
-console.log(`\n✨ Applying ${TRANSITIONS.slice(0, sentences.length - 1).join(", ")} transitions...`);
+const transitionNames = finalClips.slice(0, -1).map((_, i) => getTransition(i));
+console.log(`\n✨ Transitions: ${transitionNames.join(" → ")}`);
 const dissolved = xfadeConcat(finalClips);
 
 // Step 4: Audio
