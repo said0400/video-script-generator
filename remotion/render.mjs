@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
-import { spawnSync, spawn } from "child_process";
-import { dirname, resolve, basename } from "path";
+import { spawnSync } from "child_process";
+import { dirname, basename } from "path";
 import { fileURLToPath } from "url";
 import { chromium } from "playwright";
 import { createServer } from "http";
@@ -33,11 +33,11 @@ console.log(`📋 Sentences  : ${sentences.length}`);
 console.log(`⏱️  Per clip   : ${CLIP_DURATION.toFixed(2)}s (${CLIP_FRAMES} frames)`);
 console.log(`🎵 Audio      : ${audio}`);
 
-// ── Simple HTTP server to serve local files ───────────────────────────────────
+// ── HTTP server to serve local files to Chromium ─────────────────────────────
 function startFileServer(port = 7788) {
   const MIME = {
     ".mp4":  "video/mp4",
-    ".webm": "video/webm",
+    ".webm": "video/webm; codecs=vp9",
     ".png":  "image/png",
     ".jpg":  "image/jpeg",
     ".html": "text/html; charset=utf-8",
@@ -45,18 +45,17 @@ function startFileServer(port = 7788) {
   };
 
   const server = createServer(async (req, res) => {
-    // URL format: /file?path=/absolute/path/to/file
-    const url    = new URL(req.url, `http://localhost:${port}`);
+    const url      = new URL(req.url, `http://localhost:${port}`);
     const filePath = url.searchParams.get("path") || url.pathname;
 
     try {
       const data = await readFile(filePath);
       const mime = MIME[extname(filePath).toLowerCase()] || "application/octet-stream";
       res.writeHead(200, {
-        "Content-Type":  mime,
+        "Content-Type":   mime,
         "Content-Length": data.length,
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "no-cache",
+        "Accept-Ranges":  "bytes",
+        "Cache-Control":  "no-cache",
         "Access-Control-Allow-Origin": "*",
       });
       res.end(data);
@@ -81,7 +80,7 @@ function isArabic(text) {
 }
 
 // ── Build HTML for one sentence ───────────────────────────────────────────────
-function buildHTML(sentence, videoUrl, port) {
+function buildHTML(sentence, videoUrl) {
   const dir      = isArabic(sentence) ? "rtl" : "ltr";
   const fontFace = isArabic(sentence)
     ? `"Noto Naskh Arabic", "Amiri", serif`
@@ -91,11 +90,6 @@ function buildHTML(sentence, videoUrl, port) {
 <html lang="${isArabic(sentence) ? "ar" : "en"}">
 <head>
   <meta charset="UTF-8"/>
-  <link
-    rel="preconnect"
-    href="https://fonts.googleapis.com"
-    crossorigin
-  />
   <link
     href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700&family=Amiri:wght@700&family=Inter:wght@700&display=swap"
     rel="stylesheet"
@@ -162,23 +156,26 @@ function buildHTML(sentence, videoUrl, port) {
 <body>
   <video
     class="video-bg"
-    src="${videoUrl}"
     autoplay
     muted
     loop
     playsinline
     preload="auto"
-  ></video>
+  >
+    <source src="${videoUrl}" type="video/webm; codecs=vp9"/>
+    <source src="${videoUrl}" type="video/mp4"/>
+  </video>
   <div class="overlay"></div>
   <div class="caption-wrapper">
     <span class="caption">${sentence}</span>
   </div>
   <script>
-    // Force video to play and verify it loaded
     const vid = document.querySelector('video');
-    vid.addEventListener('error', (e) => {
-      console.error('Video error:', e);
-      document.body.style.background = '#1a1a2e';
+    vid.addEventListener('loadeddata', () => {
+      console.log('Video loaded OK, readyState:', vid.readyState);
+    });
+    vid.addEventListener('error', () => {
+      console.error('Video error:', vid.error?.message);
     });
     vid.play().catch(e => console.error('Play error:', e));
   </script>
@@ -188,26 +185,23 @@ function buildHTML(sentence, videoUrl, port) {
 
 // ── Screenshot frames for one clip ───────────────────────────────────────────
 async function screenshotClip(page, sentence, videoSrc, clipIndex, port) {
-  const videoUrl = fileUrl(videoSrc, port);
-  const html     = buildHTML(sentence, videoUrl, port);
+  const vUrl     = fileUrl(videoSrc, port);
+  const html     = buildHTML(sentence, vUrl);
   const htmlPath = `${TMP}/slide_${clipIndex}.html`;
   writeFileSync(htmlPath, html, "utf-8");
 
-  await page.goto(`http://localhost:${port}/file?path=${encodeURIComponent(htmlPath)}`, {
-    waitUntil: "networkidle",
-    timeout: 15000,
-  });
+  const pageUrl = `http://localhost:${port}/file?path=${encodeURIComponent(htmlPath)}`;
+  await page.goto(pageUrl, { waitUntil: "networkidle", timeout: 20000 });
 
-  // Wait for video to actually load and start playing
+  // Wait until video is playing
   await page.waitForFunction(() => {
     const v = document.querySelector("video");
-    return v && v.readyState >= 3;
-  }, { timeout: 10000 }).catch(() => {
-    console.log("  ⚠️  Video load timeout — continuing anyway");
+    return v && v.readyState >= 3 && !v.paused;
+  }, { timeout: 12000 }).catch(() => {
+    console.log("  ⚠️  Video not ready in time — screenshot anyway");
   });
 
-  // Extra buffer for first frame to render
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(300);
 
   const frameDir = `${TMP}/frames_${clipIndex}`;
   mkdirSync(frameDir, { recursive: true });
@@ -217,7 +211,6 @@ async function screenshotClip(page, sentence, videoSrc, clipIndex, port) {
   for (let f = 0; f < CLIP_FRAMES; f++) {
     const framePath = `${frameDir}/frame_${String(f).padStart(6, "0")}.png`;
     await page.screenshot({ path: framePath, type: "png" });
-
     if (f % 30 === 0) process.stdout.write(` ${f}`);
   }
 
@@ -293,7 +286,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 console.log("\n🚀 Starting render with Playwright...\n");
 
-const PORT  = 7788;
+const PORT   = 7788;
 const server = startFileServer(PORT);
 
 const browser = await chromium.launch({
@@ -305,8 +298,8 @@ const browser = await chromium.launch({
     "--disable-gpu",
     "--no-zygote",
     "--autoplay-policy=no-user-gesture-required",
-    "--allow-file-access-from-files",
     "--disable-web-security",
+    "--allow-running-insecure-content",
     "--font-render-hinting=none",
     "--lang=ar,en",
   ],
@@ -316,16 +309,18 @@ const context = await browser.newContext({
   viewport:          { width: WIDTH, height: HEIGHT },
   deviceScaleFactor: 1,
   locale:            "ar-SA",
-  permissions:       [],
-  extraHTTPHeaders: {
-    "Accept-Language": "ar,en;q=0.9",
-  },
+  extraHTTPHeaders:  { "Accept-Language": "ar,en;q=0.9" },
 });
 
 const page = await context.newPage();
 
 page.on("console", msg => {
-  if (msg.type() === "error") console.log(`  🔴 Console: ${msg.text()}`);
+  const type = msg.type();
+  if (type === "error") {
+    console.log(`  🔴 ${msg.text()}`);
+  } else if (type === "log" && msg.text().startsWith("Video loaded")) {
+    console.log(`  ✅ ${msg.text()}`);
+  }
 });
 
 const clipPaths = [];
@@ -340,7 +335,7 @@ for (let i = 0; i < sentences.length; i++) {
   const frameDir = await screenshotClip(page, sentence, videoSrc, i, PORT);
   const clipPath = framesToClip(frameDir, i);
   clipPaths.push(clipPath);
-  console.log(`  ✅ Clip ${i + 1} done → ${clipPath}`);
+  console.log(`  ✅ Clip ${i + 1} done`);
 }
 
 await browser.close();
