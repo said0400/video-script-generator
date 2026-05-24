@@ -49,7 +49,15 @@ on:
           - "false"
           - "true"
       no_video:
-        description: "🎵 صوت فقط؟"
+        description: "🎵 صوت + محتوى فقط؟"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      content_only:
+        description: "📦 محتوى فقط بدون فيديو أو صوت؟"
         required: true
         default: "false"
         type: choice
@@ -59,8 +67,9 @@ on:
 
 jobs:
   generate:
-    name: Generate EN + AR Videos
+    name: Generate EN + AR Videos + Content
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: 📥 Checkout repository
@@ -127,7 +136,7 @@ jobs:
         run: npx playwright install chromium
 
       - name: 📥 Download used videos DB
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        if: ${{ inputs.script_only == 'false' && inputs.content_only == 'false' }}
         uses: dawidd6/action-download-artifact@v6
         with:
           name: used-videos-db
@@ -147,6 +156,9 @@ jobs:
           if [ "${{ inputs.no_video }}" = "true" ]; then
             FLAGS="$FLAGS --no-video"
           fi
+          if [ "${{ inputs.content_only }}" = "true" ]; then
+            FLAGS="$FLAGS --content-only"
+          fi
 
           python main.py "${{ inputs.idea }}" \
             --tone "${{ inputs.tone }}" \
@@ -156,7 +168,10 @@ jobs:
             $FLAGS
 
       - name: 📤 Upload English video
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        if: >
+          inputs.script_only == 'false' &&
+          inputs.no_video == 'false' &&
+          inputs.content_only == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: video-EN-${{ github.run_number }}
@@ -164,23 +179,43 @@ jobs:
           retention-days: 7
 
       - name: 📤 Upload Arabic video
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        if: >
+          inputs.script_only == 'false' &&
+          inputs.no_video == 'false' &&
+          inputs.content_only == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: video-AR-${{ github.run_number }}
           path: output_ar_final.mp4
           retention-days: 7
 
-      - name: 📤 Upload audio files (no-video mode)
-        if: ${{ inputs.no_video == 'true' && inputs.script_only == 'false' }}
+      - name: 📤 Upload audio files
+        if: >
+          inputs.no_video == 'true' &&
+          inputs.script_only == 'false' &&
+          inputs.content_only == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: audio-${{ github.run_number }}
           path: output_*_audio_*.wav
           retention-days: 7
 
+      - name: 📤 Upload content package
+        if: ${{ inputs.script_only == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: content-${{ github.run_number }}
+          path: |
+            output_content.json
+            output_thumbnail.png
+            output_thumbnail.html
+          retention-days: 30
+
       - name: 📤 Upload used videos DB
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' && always() }}
+        if: >
+          always() &&
+          inputs.script_only == 'false' &&
+          inputs.content_only == 'false'
         uses: actions/upload-artifact@v4
         with:
           name: used-videos-db
