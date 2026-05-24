@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Video Script Generator + TTS + Pixabay + Playwright + FFmpeg
-Produces TWO videos: English + Arabic + Content Package
+Produces TWO synced videos: English + Arabic + Content Package
 """
 
 import argparse
@@ -16,11 +16,12 @@ from tts import synthesize_speech, VOICES
 from pixabay import fetch_videos_for_script
 from content import generate_all_content, print_content_summary
 from thumbnail import render_thumbnail
+from sync import get_word_timestamps, build_word_timeline
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="🎬 Idea → EN + AR Video + Content Package",
+        description="🎬 Idea → EN + AR Synced Video + Content Package",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("idea", type=str)
@@ -44,7 +45,7 @@ def parse_args():
     )
     parser.add_argument(
         "--script-only", action="store_true",
-        help="Print scripts only — skip TTS, video, and content",
+        help="Print scripts only — skip everything else",
     )
     parser.add_argument(
         "--no-video", action="store_true",
@@ -52,26 +53,30 @@ def parse_args():
     )
     parser.add_argument(
         "--content-only", action="store_true",
-        help="Generate content package only — skip video render",
+        help="Generate content package only — skip video and audio",
     )
     return parser.parse_args()
 
 
-# ── Manifest ──────────────────────────────────────────────────────────────────
+# ── Save manifest with sync data ─────────────────────────────────────────────
 def save_manifest(
     script_data: dict,
     video_paths: list,
     audio_path,
     out: str,
+    word_timeline: list = None,
+    aligned: list = None,
 ) -> Path:
     manifest = {
-        "title":      script_data["title"],
-        "sentences":  script_data["sentences"],
-        "keywords":   script_data["keywords"],
-        "audio":      str(Path(str(audio_path)).resolve()),
-        "videos":     [str(Path(str(p)).resolve()) for p in video_paths],
-        "duration_s": script_data["estimated_seconds"],
-        "lang":       script_data.get("lang", "en"),
+        "title":         script_data["title"],
+        "sentences":     script_data["sentences"],
+        "keywords":      script_data["keywords"],
+        "audio":         str(Path(str(audio_path)).resolve()),
+        "videos":        [str(Path(str(p)).resolve()) for p in video_paths],
+        "duration_s":    script_data["estimated_seconds"],
+        "lang":          script_data.get("lang", "en"),
+        "word_timeline": word_timeline or [],
+        "aligned":       aligned or [],
     }
     path = Path(f"{out}_manifest.json").resolve()
     path.write_text(
@@ -82,7 +87,7 @@ def save_manifest(
     return path
 
 
-# ── Render ────────────────────────────────────────────────────────────────────
+# ── Render video ──────────────────────────────────────────────────────────────
 def render_video(manifest_path: Path, output: str) -> Path:
     out_file      = Path(output + "_final.mp4").resolve()
     render_script = Path("remotion/render.mjs").resolve()
@@ -104,7 +109,7 @@ def render_video(manifest_path: Path, output: str) -> Path:
     return out_file
 
 
-# ── Produce one version (TTS + render) ───────────────────────────────────────
+# ── Produce one version (TTS + sync + render) ─────────────────────────────────
 def produce_version(
     script_data: dict,
     voice_key: str,
@@ -119,8 +124,9 @@ def produce_version(
     print(f"  Language : {script_data.get('lang', 'en').upper()}")
     print(f"  Voice    : {voice_key}")
     print(f"  Duration : ~{script_data['estimated_seconds']}s")
+    print(f"  Sentences: {len(script_data['sentences'])}")
 
-    # TTS
+    # ── Step A: TTS ───────────────────────────────────────────────────────────
     print(f"\n🎙️   Synthesizing speech...")
     audio_path = synthesize_speech(
         script=script_data["full_script"],
@@ -129,12 +135,52 @@ def produce_version(
         tone=script_data.get("tone", "energetic"),
     )
 
-    # Manifest
+    # ── Step B: Word-level timestamps via Groq Whisper ────────────────────────
+    word_timeline = []
+    aligned       = []
+
+    try:
+        print("\n🎤  Analyzing audio timestamps (Groq Whisper)...")
+
+        # Find saved WAV file
+        wav_candidates = (
+            list(Path(".").glob(f"{output_base}_audio_*.wav")) +
+            list(Path(".").glob(f"{output_base}_audio*.wav"))
+        )
+
+        if wav_candidates:
+            wav_path = str(wav_candidates[0])
+            print(f"  📁 WAV: {Path(wav_path).name}")
+
+            word_ts = get_word_timestamps(wav_path)
+
+            if word_ts:
+                word_timeline, aligned = build_word_timeline(
+                    sentences=script_data["sentences"],
+                    word_timestamps=word_ts,
+                    total_duration=script_data["estimated_seconds"],
+                )
+                print(f"  ✅ {len(word_timeline)} sync events | "
+                      f"{len(aligned)} sentences aligned")
+            else:
+                print("  ⚠️  No timestamps returned — even distribution")
+        else:
+            print("  ⚠️  No WAV file found — even distribution")
+
+    except Exception as e:
+        print(f"  ⚠️  Sync error: {e} — using even distribution")
+
+    # ── Step C: Save manifest ─────────────────────────────────────────────────
     manifest_path = save_manifest(
-        script_data, video_paths, audio_path, output_base
+        script_data=script_data,
+        video_paths=video_paths,
+        audio_path=audio_path,
+        out=output_base,
+        word_timeline=word_timeline,
+        aligned=aligned,
     )
 
-    # Render
+    # ── Step D: Render ────────────────────────────────────────────────────────
     return render_video(manifest_path, output_base)
 
 
@@ -145,10 +191,11 @@ def main():
     print(f"\n{'═' * 55}")
     print(f"  🚀  Video Script Generator")
     print(f"{'═' * 55}")
-    print(f"  Idea  : {args.idea}")
-    print(f"  Tone  : {args.tone}")
-    print(f"  EN 🎙️  : {args.voice_en}")
-    print(f"  AR 🎙️  : {args.voice_ar}")
+    print(f"  Idea     : {args.idea}")
+    print(f"  Tone     : {args.tone}")
+    print(f"  Voice EN : {args.voice_en}")
+    print(f"  Voice AR : {args.voice_ar}")
+    print(f"  Output   : {args.output}")
     print()
 
     # ── Step 1: Generate English script ──────────────────────────────────────
@@ -172,59 +219,77 @@ def main():
         ar_data["word_count"]        = len(ar_data["full_script"].split())
         ar_data["lang"]              = "ar"
         ar_data["keywords"]          = en_data["keywords"]
-        print(f"✅  Arabic title : {ar_data['title']}")
-        print(f"    Sentences   : {len(ar_data['sentences'])}")
+        print(f"✅  Arabic title    : {ar_data['title']}")
+        print(f"    Sentences      : {len(ar_data['sentences'])}")
     except Exception as e:
         print(f"❌  Translation failed: {e}")
         sys.exit(1)
 
-    # ── Script only mode ──────────────────────────────────────────────────────
+    # ── Script-only mode ──────────────────────────────────────────────────────
     if args.script_only:
         print("\n🇬🇧  English Script:")
         for i, s in enumerate(en_data["sentences"], 1):
-            print(f"  {i}. {s}")
+            print(f"  {i:>2}. {s}")
         print(f"\n🇸🇦  Arabic Script:")
         for i, s in enumerate(ar_data["sentences"], 1):
-            print(f"  {i}. {s}")
+            print(f"  {i:>2}. {s}")
+        return
+
+    # ── Content-only mode ─────────────────────────────────────────────────────
+    if args.content_only:
+        print("\n📦  Generating content package (no video/audio)...")
+        try:
+            content = generate_all_content(en_data, output_base=args.output)
+            print_content_summary(content)
+            render_thumbnail(
+                html_path=f"{args.output}_thumbnail.html",
+                output_png=f"{args.output}_thumbnail.png",
+            )
+        except Exception as e:
+            print(f"⚠️  Content warning: {e}")
         return
 
     # ── Step 3: Fetch videos (shared for both versions) ───────────────────────
-    if not args.content_only:
+    print(f"\n📹  Fetching videos (shared for EN + AR)...")
+    try:
+        sentences      = en_data["sentences"]
+        keywords       = en_data["keywords"]
+        duration_s     = en_data["estimated_seconds"]
+        clip_durations = [duration_s / len(sentences)] * len(sentences)
+
+        video_paths = fetch_videos_for_script(
+            keywords_per_sentence=keywords,
+            clip_durations=clip_durations,
+            output_dir="videos",
+        )
+    except Exception as e:
+        print(f"❌  Pixabay fetch failed: {e}")
+        sys.exit(1)
+
+    # ── No-video mode ─────────────────────────────────────────────────────────
+    if args.no_video:
+        print("\n🎙️   English TTS...")
         try:
-            sentences      = en_data["sentences"]
-            keywords       = en_data["keywords"]
-            duration_s     = en_data["estimated_seconds"]
-            clip_durations = [duration_s / len(sentences)] * len(sentences)
-
-            print(f"\n📹  Fetching videos (shared for EN + AR)...")
-            video_paths = fetch_videos_for_script(
-                keywords_per_sentence=keywords,
-                clip_durations=clip_durations,
-                output_dir="videos",
-            )
-        except Exception as e:
-            print(f"❌  Pixabay fetch failed: {e}")
-            sys.exit(1)
-
-    # ── No-video mode: only audio ─────────────────────────────────────────────
-    if args.no_video or args.content_only:
-        if not args.content_only:
-            print("\n🎙️   English TTS...")
             synthesize_speech(
                 script=en_data["full_script"],
                 output_path=f"{args.output}_en_audio",
                 voice_key=args.voice_en,
                 tone=en_data["tone"],
             )
-            print("\n🎙️   Arabic TTS...")
+        except Exception as e:
+            print(f"❌  English TTS failed: {e}")
+
+        print("\n🎙️   Arabic TTS...")
+        try:
             synthesize_speech(
                 script=ar_data["full_script"],
                 output_path=f"{args.output}_ar_audio",
                 voice_key=args.voice_ar,
                 tone=ar_data["tone"],
             )
+        except Exception as e:
+            print(f"❌  Arabic TTS failed: {e}")
 
-        # Content package
         print("\n📦  Generating content package...")
         try:
             content = generate_all_content(en_data, output_base=args.output)
@@ -275,14 +340,14 @@ def main():
     except Exception as e:
         print(f"⚠️  Content warning: {e}")
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # ── Final summary ─────────────────────────────────────────────────────────
     print(f"\n{'═' * 55}")
     print(f"  ✅  ALL DONE!")
     print(f"{'═' * 55}")
-    print(f"  🇬🇧  English  → {en_video.name}")
-    print(f"  🇸🇦  Arabic   → {ar_video.name}")
-    print(f"  🖼️   Thumbnail → {args.output}_thumbnail.png")
-    print(f"  📦  Content   → {args.output}_content.json")
+    print(f"  🇬🇧  English   → {en_video.name}")
+    print(f"  🇸🇦  Arabic    → {ar_video.name}")
+    print(f"  🖼️   Thumbnail  → {args.output}_thumbnail.png")
+    print(f"  📦  Content    → {args.output}_content.json")
     print(f"{'═' * 55}\n")
 
 
