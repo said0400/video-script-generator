@@ -1,23 +1,47 @@
 """
-Audio → Word timestamps via Groq Whisper API
-Simple and reliable approach.
+Precise word-level sync via Groq Whisper.
+Each word appears exactly when it's spoken.
 """
 
 import os
-import json
+import re
+import subprocess
 from pathlib import Path
 from groq import Groq
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _clean(word: str) -> str:
+    """Normalize word for matching: lowercase, remove punctuation."""
+    return re.sub(r"[^\w]", "", word.lower()).strip()
+
+
+def get_audio_duration(audio_path: str) -> float:
+    """Get exact audio duration via ffprobe."""
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(audio_path),
+        ],
+        capture_output=True, text=True,
+    )
+    try:
+        return float(result.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
 def get_word_timestamps(audio_path: str) -> list[dict]:
     """
-    Transcribe audio and return word-level timestamps.
-    Returns: [{"word": "Ready", "start": 0.0, "end": 0.4}, ...]
+    Transcribe audio → word timestamps via Groq Whisper.
+    Returns [{"word": "Ready", "start": 0.0, "end": 0.38}, ...]
     """
     client     = Groq(api_key=os.environ["GROQ_API_KEY"])
     audio_path = Path(audio_path)
 
-    print(f"  🎤 Transcribing: {audio_path.name}")
+    print(f"  🎤 Whisper transcribing: {audio_path.name}")
 
     with open(audio_path, "rb") as f:
         response = client.audio.transcriptions.create(
@@ -29,24 +53,25 @@ def get_word_timestamps(audio_path: str) -> list[dict]:
 
     words = []
 
-    # Try word-level timestamps first
-    if hasattr(response, "words") and response.words:
-        for w in response.words:
-            word_text = w.word.strip() if hasattr(w, "word") else str(w)
-            start     = float(w.start) if hasattr(w, "start") else 0.0
-            end       = float(w.end)   if hasattr(w, "end")   else 0.0
-            if word_text:
+    # ── Try word-level first ──────────────────────────────────────────────────
+    raw_words = getattr(response, "words", None)
+    if raw_words:
+        for w in raw_words:
+            text = (getattr(w, "word", "") or "").strip()
+            if text:
                 words.append({
-                    "word":  word_text,
-                    "start": round(start, 3),
-                    "end":   round(end, 3),
+                    "word":  text,
+                    "start": round(float(getattr(w, "start", 0)), 4),
+                    "end":   round(float(getattr(w, "end",   0)), 4),
                 })
-        print(f"  ✅ {len(words)} words from word timestamps")
-        return words
+        if words:
+            print(f"  ✅ {len(words)} word timestamps")
+            return words
 
-    # Fallback: use segment timestamps
-    if hasattr(response, "segments") and response.segments:
-        for seg in response.segments:
+    # ── Fallback: segment-level ───────────────────────────────────────────────
+    raw_segs = getattr(response, "segments", None)
+    if raw_segs:
+        for seg in raw_segs:
             if isinstance(seg, dict):
                 text  = seg.get("text", "").strip()
                 start = float(seg.get("start", 0))
@@ -64,32 +89,15 @@ def get_word_timestamps(audio_path: str) -> list[dict]:
                 if word.strip():
                     words.append({
                         "word":  word.strip(),
-                        "start": round(start + i * dur,       3),
-                        "end":   round(start + (i + 1) * dur, 3),
+                        "start": round(start + i * dur,       4),
+                        "end":   round(start + (i + 1) * dur, 4),
                     })
-        print(f"  ✅ {len(words)} words from segment timestamps")
-        return words
+        if words:
+            print(f"  ✅ {len(words)} words from segments")
+            return words
 
-    print("  ⚠️  No timestamps found in response")
+    print("  ⚠️  Whisper returned no timestamps")
     return []
-
-
-def get_audio_duration(audio_path: str) -> float:
-    """Get audio duration using ffprobe."""
-    import subprocess
-    result = subprocess.run(
-        [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            audio_path,
-        ],
-        capture_output=True, text=True,
-    )
-    try:
-        return float(result.stdout.strip())
-    except ValueError:
-        return 0.0
 
 
 def build_word_timeline(
@@ -98,93 +106,172 @@ def build_word_timeline(
     total_duration: float,
 ) -> tuple[list[dict], list[dict]]:
     """
-    Build synced word timeline.
+    Precisely match each sentence word to its Whisper timestamp.
 
-    Strategy:
-    1. Use Whisper timestamps to find sentence boundaries
-    2. Within each sentence, distribute words evenly
-    3. Return timeline + aligned sentences
+    Algorithm:
+    1. Flatten all sentence words into a global list
+    2. For each sentence word, find its matching Whisper timestamp
+       using fuzzy sequential matching
+    3. Build per-word timeline events
 
     Returns:
         word_timeline: [{time, sentence_idx, visible_word_count}]
         aligned:       [{sentence, start, end, words}]
     """
-
     if not word_timestamps:
+        print("  ⚠️  No timestamps — using fallback")
         return _fallback_timeline(sentences, total_duration)
 
-    # ── Match sentences to timestamp words ────────────────────────────────────
-    all_ts_words = [w["word"].lower().strip(".,!?;:\"'()[]") for w in word_timestamps]
-    n_sentences  = len(sentences)
-
-    # Split timestamp words evenly among sentences
-    n_ts         = len(word_timestamps)
-    words_per_s  = max(1, n_ts // n_sentences)
-
-    aligned      = []
-    ts_pos       = 0
-
-    for i, sentence in enumerate(sentences):
-        sent_words = sentence.split()
-        n_sw       = len(sent_words)
-
-        # Allocate timestamp words for this sentence
-        if i == n_sentences - 1:
-            # Last sentence gets all remaining
-            seg = word_timestamps[ts_pos:]
-        else:
-            count = max(1, round(words_per_s * n_sw / max(1, len(sentences[i].split()))))
-            seg   = word_timestamps[ts_pos: ts_pos + count]
-            ts_pos += count
-
-        if not seg:
-            seg = word_timestamps[-1:]  # fallback to last word
-
-        seg_start = seg[0]["start"]
-        seg_end   = seg[-1]["end"]
-
-        # Distribute sentence words evenly within segment time
-        seg_dur   = max(seg_end - seg_start, 0.1)
-        word_dur  = seg_dur / n_sw
-
-        word_objs = []
-        for j, word in enumerate(sent_words):
-            word_objs.append({
-                "word":  word,
-                "start": round(seg_start + j * word_dur,       3),
-                "end":   round(seg_start + (j + 1) * word_dur, 3),
+    # ── Build flat word list with sentence mapping ─────────────────────────────
+    flat_words = []  # [{word, clean, sentence_idx, word_idx_in_sentence}]
+    for s_idx, sentence in enumerate(sentences):
+        for w_idx, word in enumerate(sentence.split()):
+            flat_words.append({
+                "word":                word,
+                "clean":               _clean(word),
+                "sentence_idx":        s_idx,
+                "word_idx_in_sentence": w_idx,
             })
+
+    ts_words = word_timestamps  # [{word, start, end}]
+    ts_clean = [_clean(w["word"]) for w in ts_words]
+    n_ts     = len(ts_words)
+    n_flat   = len(flat_words)
+
+    # ── Sequential fuzzy matching ─────────────────────────────────────────────
+    # For each flat word, find best matching ts word
+    # Use a sliding window to handle insertions/deletions
+    matched_ts_indices = []   # parallel to flat_words
+    ts_cursor = 0
+
+    for fw in flat_words:
+        fc = fw["clean"]
+        if not fc:
+            matched_ts_indices.append(max(0, ts_cursor - 1))
+            continue
+
+        best_idx   = None
+        best_score = -1
+
+        # Search in a window around current cursor
+        window_start = max(0,    ts_cursor - 2)
+        window_end   = min(n_ts, ts_cursor + 6)
+
+        for j in range(window_start, window_end):
+            tc = ts_clean[j]
+            if not tc:
+                continue
+
+            # Exact match
+            if fc == tc:
+                best_idx   = j
+                best_score = 3
+                break
+
+            # Prefix match (handles punctuation differences)
+            if fc.startswith(tc) or tc.startswith(fc):
+                score = 2
+                if score > best_score:
+                    best_score = score
+                    best_idx   = j
+
+            # Substring match
+            elif fc in tc or tc in fc:
+                score = 1
+                if score > best_score:
+                    best_score = score
+                    best_idx   = j
+
+        if best_idx is not None:
+            matched_ts_indices.append(best_idx)
+            ts_cursor = best_idx + 1
+        else:
+            # No match found: use interpolated time
+            fallback_idx = min(ts_cursor, n_ts - 1)
+            matched_ts_indices.append(fallback_idx)
+
+    # ── Build per-word timestamps ─────────────────────────────────────────────
+    # Each flat_word now has a matched ts index
+    # Calculate actual time = ts[matched].start
+    # But smooth it: if adjacent words use same ts, interpolate
+
+    word_times = []
+    for i, (fw, ts_idx) in enumerate(zip(flat_words, matched_ts_indices)):
+        ts         = ts_words[ts_idx]
+        word_start = ts["start"]
+        word_end   = ts["end"]
+
+        # If same ts used for multiple flat words, subdivide
+        # Find how many flat words share this ts
+        same_start = matched_ts_indices.count(ts_idx)
+        if same_start > 1:
+            # Subdivide ts duration among sharing words
+            ts_dur   = max(ts["end"] - ts["start"], 0.05)
+            sub_dur  = ts_dur / same_start
+            # Find position of this word among siblings
+            siblings = [j for j, idx in enumerate(matched_ts_indices) if idx == ts_idx]
+            pos      = siblings.index(i)
+            word_start = ts["start"] + pos * sub_dur
+            word_end   = word_start + sub_dur
+
+        word_times.append({
+            "word":  fw["word"],
+            "start": round(word_start, 4),
+            "end":   round(word_end,   4),
+            "s_idx": fw["sentence_idx"],
+            "w_idx": fw["word_idx_in_sentence"],
+        })
+
+    # ── Build aligned sentences ───────────────────────────────────────────────
+    aligned = []
+    for s_idx, sentence in enumerate(sentences):
+        sent_words = [wt for wt in word_times if wt["s_idx"] == s_idx]
+        if not sent_words:
+            # Fallback for empty
+            prev_end = aligned[-1]["end"] if aligned else 0.0
+            dur      = total_duration / len(sentences)
+            aligned.append({
+                "sentence": sentence,
+                "start":    prev_end,
+                "end":      prev_end + dur,
+                "words":    [],
+            })
+            continue
 
         aligned.append({
             "sentence": sentence,
-            "start":    seg_start,
-            "end":      seg_end,
-            "words":    word_objs,
+            "start":    sent_words[0]["start"],
+            "end":      sent_words[-1]["end"],
+            "words":    [
+                {"word": w["word"], "start": w["start"], "end": w["end"]}
+                for w in sent_words
+            ],
         })
 
     # ── Build timeline events ─────────────────────────────────────────────────
     word_timeline = []
+    for wt in word_times:
+        word_timeline.append({
+            "time":               wt["start"],
+            "sentence_idx":       wt["s_idx"],
+            "visible_word_count": wt["w_idx"] + 1,
+        })
 
-    for sent_idx, sent_data in enumerate(aligned):
-        for w_idx, w in enumerate(sent_data["words"]):
-            word_timeline.append({
-                "time":               w["start"],
-                "sentence_idx":       sent_idx,
-                "visible_word_count": w_idx + 1,
-            })
-
-    # Sort by time
     word_timeline.sort(key=lambda x: x["time"])
 
-    print(f"  ✅ Timeline: {len(word_timeline)} events across {len(aligned)} sentences")
+    # ── Verify alignment quality ──────────────────────────────────────────────
+    matched   = sum(1 for i, fw in enumerate(flat_words)
+                    if _clean(fw["word"]) == ts_clean[matched_ts_indices[i]])
+    quality   = matched / max(len(flat_words), 1) * 100
+    print(f"  ✅ {len(word_timeline)} events | match quality: {quality:.0f}%")
 
-    # Debug: print first 5 events
-    for ev in word_timeline[:5]:
-        sent  = sentences[ev["sentence_idx"]]
-        words = sent.split()
+    # Debug: print sample
+    for ev in word_timeline[:6]:
+        s     = sentences[ev["sentence_idx"]]
+        words = s.split()
         wc    = ev["visible_word_count"]
         word  = words[wc - 1] if 0 < wc <= len(words) else "?"
-        print(f"     t={ev['time']:.2f}s → s{ev['sentence_idx']} word {wc}: '{word}'")
+        print(f"     {ev['time']:.3f}s → '{word}'")
 
     return word_timeline, aligned
 
@@ -194,53 +281,44 @@ def _fallback_timeline(
     total_duration: float,
 ) -> tuple[list[dict], list[dict]]:
     """
-    Fallback: distribute words evenly across duration.
-    Faster sentences get less time, slower ones get more.
+    Fallback: each word gets equal time slice based on total duration.
+    More accurate than per-sentence distribution.
     """
-    print("  ⚠️  Using fallback even-distribution timeline")
+    print("  📐 Fallback: equal time per word")
 
-    # Count total words
-    total_words = sum(len(s.split()) for s in sentences)
+    total_words   = sum(len(s.split()) for s in sentences)
     if total_words == 0:
         return [], []
 
     secs_per_word = total_duration / total_words
-
     word_timeline = []
     aligned       = []
-    current_time  = 0.0
+    t             = 0.0
 
-    for sent_idx, sentence in enumerate(sentences):
+    for s_idx, sentence in enumerate(sentences):
         words     = sentence.split()
-        n_words   = len(words)
-        sent_dur  = secs_per_word * n_words
         word_objs = []
 
         for w_idx, word in enumerate(words):
-            t_start = current_time + w_idx * secs_per_word
-            t_end   = t_start + secs_per_word
-
-            word_objs.append({
-                "word":  word,
-                "start": round(t_start, 3),
-                "end":   round(t_end,   3),
-            })
-
             word_timeline.append({
-                "time":               round(t_start, 3),
-                "sentence_idx":       sent_idx,
+                "time":               round(t, 4),
+                "sentence_idx":       s_idx,
                 "visible_word_count": w_idx + 1,
             })
+            word_objs.append({
+                "word":  word,
+                "start": round(t, 4),
+                "end":   round(t + secs_per_word, 4),
+            })
+            t += secs_per_word
 
         aligned.append({
             "sentence": sentence,
-            "start":    round(current_time,            3),
-            "end":      round(current_time + sent_dur, 3),
+            "start":    aligned[-1]["end"] if aligned else 0.0,
+            "end":      round(t, 4),
             "words":    word_objs,
         })
 
-        current_time += sent_dur
-
     word_timeline.sort(key=lambda x: x["time"])
-    print(f"  ✅ Fallback timeline: {len(word_timeline)} events")
+    print(f"  ✅ Fallback: {len(word_timeline)} events")
     return word_timeline, aligned
