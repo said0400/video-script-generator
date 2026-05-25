@@ -4,20 +4,44 @@ on:
   workflow_dispatch:
     inputs:
       idea:
-        description: "💡 الفكرة (مثال: فوائد الصيام المتقطع)"
+        description: "💡 الفكرة أو الموضوع"
         required: true
         type: string
+
+      content_type:
+        description: "🎭 نوع المحتوى"
+        required: true
+        default: "motivational"
+        type: choice
+        options:
+          - motivational
+          - true_crime
+          - psychological_horror
+          - confessions
+          - human_drama
+          - revenge
+          - strange_habits
+          - shocking_facts
+          - relationship
+          - mindset
+          - mystery
+          - dark_history
+
       tone:
-        description: "🎭 الأسلوب"
+        description: "🎨 الأسلوب"
         required: true
         default: "energetic"
         type: choice
         options:
           - energetic
-          - inspirational
-          - educational
-          - humorous
           - calm
+          - suspenseful
+          - emotional
+          - educational
+          - provocative
+          - humorous
+          - inspirational
+
       voice_en:
         description: "🎙️ صوت النسخة الإنجليزية"
         required: true
@@ -29,6 +53,7 @@ on:
           - female_clear
           - female_warm
           - neutral
+
       voice_ar:
         description: "🎙️ صوت النسخة العربية"
         required: true
@@ -40,24 +65,27 @@ on:
           - female_clear
           - female_warm
           - neutral
+
       script_only:
-        description: "📝 نص فقط؟"
+        description: "📝 نص فقط؟ (بدون فيديو أو صوت)"
         required: true
         default: "false"
         type: choice
         options:
           - "false"
           - "true"
+
       no_video:
-        description: "🎵 صوت + محتوى فقط؟"
+        description: "🎵 صوت + محتوى فقط؟ (بدون فيديو)"
         required: true
         default: "false"
         type: choice
         options:
           - "false"
           - "true"
+
       content_only:
-        description: "📦 محتوى فقط بدون فيديو أو صوت؟"
+        description: "📦 محتوى فقط؟ (hashtags + captions + thumbnail)"
         required: true
         default: "false"
         type: choice
@@ -67,9 +95,9 @@ on:
 
 jobs:
   generate:
-    name: Generate EN + AR Videos + Content
+    name: 🎬 Generate Video + Content
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: 📥 Checkout repository
@@ -138,7 +166,9 @@ jobs:
         run: npx playwright install chromium
 
       - name: 📥 Download used videos DB
-        if: ${{ inputs.script_only == 'false' && inputs.content_only == 'false' }}
+        if: >
+          inputs.script_only == 'false' &&
+          inputs.content_only == 'false'
         uses: dawidd6/action-download-artifact@v6
         with:
           name: used-videos-db
@@ -152,21 +182,25 @@ jobs:
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: |
           FLAGS=""
+
           if [ "${{ inputs.script_only }}" = "true" ]; then
             FLAGS="$FLAGS --script-only"
           fi
+
           if [ "${{ inputs.no_video }}" = "true" ]; then
             FLAGS="$FLAGS --no-video"
           fi
+
           if [ "${{ inputs.content_only }}" = "true" ]; then
             FLAGS="$FLAGS --content-only"
           fi
 
           python main.py "${{ inputs.idea }}" \
-            --tone "${{ inputs.tone }}" \
-            --voice-en "${{ inputs.voice_en }}" \
-            --voice-ar "${{ inputs.voice_ar }}" \
-            --output output \
+            --content-type "${{ inputs.content_type }}" \
+            --tone         "${{ inputs.tone }}" \
+            --voice-en     "${{ inputs.voice_en }}" \
+            --voice-ar     "${{ inputs.voice_ar }}" \
+            --output       output \
             $FLAGS
 
       - name: 📤 Upload English video
