@@ -2,6 +2,7 @@
 """
 Video Script Generator + TTS + Pixabay + Playwright + FFmpeg
 Produces TWO synced videos: English + Arabic + Content Package
+Supports 12 content types: motivational, true_crime, horror, confessions...
 """
 
 import argparse
@@ -10,7 +11,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from generate import generate_script, enforce_duration, print_script
+from generate import (
+    generate_script, enforce_duration,
+    print_script, CONTENT_TYPES, TONES,
+)
 from translate import translate_script
 from tts import synthesize_speech, VOICES
 from pixabay import fetch_videos_for_script
@@ -24,10 +28,28 @@ def parse_args():
         description="🎬 Idea → EN + AR Synced Video + Content Package",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    parser.add_argument("idea", type=str)
+    parser.add_argument(
+        "idea", type=str,
+        help="The video idea or topic",
+    )
+    parser.add_argument(
+        "--content-type", type=str, default="motivational",
+        choices=list(CONTENT_TYPES.keys()),
+        help=(
+            "Content type:\n" +
+            "\n".join(
+                f"  {k:<25} {v['label']}"
+                for k, v in CONTENT_TYPES.items()
+            )
+        ),
+    )
     parser.add_argument(
         "--tone", type=str, default="energetic",
-        choices=["energetic", "inspirational", "educational", "humorous", "calm"],
+        choices=list(TONES.keys()),
+        help=(
+            "Tone:\n" +
+            "\n".join(f"  {k:<15} {v}" for k, v in TONES.items())
+        ),
     )
     parser.add_argument(
         "--voice-en", type=str, default="male_smooth",
@@ -58,7 +80,7 @@ def parse_args():
     return parser.parse_args()
 
 
-# ── Save manifest with sync data ─────────────────────────────────────────────
+# ── Save manifest ─────────────────────────────────────────────────────────────
 def save_manifest(
     script_data: dict,
     video_paths: list,
@@ -75,6 +97,7 @@ def save_manifest(
         "videos":        [str(Path(str(p)).resolve()) for p in video_paths],
         "duration_s":    script_data["estimated_seconds"],
         "lang":          script_data.get("lang", "en"),
+        "content_type":  script_data.get("content_type", "motivational"),
         "word_timeline": word_timeline or [],
         "aligned":       aligned or [],
     }
@@ -117,16 +140,17 @@ def produce_version(
     video_paths: list,
     label: str,
 ) -> Path:
-    print(f"\n{'═' * 55}")
+    print(f"\n{'═' * 58}")
     print(f"  {label}")
-    print(f"{'═' * 55}")
-    print(f"  Title    : {script_data['title']}")
-    print(f"  Language : {script_data.get('lang', 'en').upper()}")
-    print(f"  Voice    : {voice_key}")
-    print(f"  Duration : ~{script_data['estimated_seconds']}s")
-    print(f"  Sentences: {len(script_data['sentences'])}")
+    print(f"{'═' * 58}")
+    print(f"  Title        : {script_data['title']}")
+    print(f"  Language     : {script_data.get('lang', 'en').upper()}")
+    print(f"  Content Type : {script_data.get('content_type', 'motivational')}")
+    print(f"  Voice        : {voice_key}")
+    print(f"  Duration     : ~{script_data['estimated_seconds']}s")
+    print(f"  Sentences    : {len(script_data['sentences'])}")
 
-    # ── Step A: TTS ───────────────────────────────────────────────────────────
+    # ── A: TTS ────────────────────────────────────────────────────────────────
     print(f"\n🎙️   Synthesizing speech...")
     audio_path = synthesize_speech(
         script=script_data["full_script"],
@@ -135,14 +159,13 @@ def produce_version(
         tone=script_data.get("tone", "energetic"),
     )
 
-    # ── Step B: Word-level timestamps via Groq Whisper ────────────────────────
+    # ── B: Word-level timestamps via Groq Whisper ─────────────────────────────
     word_timeline = []
     aligned       = []
 
     try:
         print("\n🎤  Analyzing audio timestamps (Groq Whisper)...")
 
-        # Find saved WAV file
         wav_candidates = (
             list(Path(".").glob(f"{output_base}_audio_*.wav")) +
             list(Path(".").glob(f"{output_base}_audio*.wav"))
@@ -170,7 +193,7 @@ def produce_version(
     except Exception as e:
         print(f"  ⚠️  Sync error: {e} — using even distribution")
 
-    # ── Step C: Save manifest ─────────────────────────────────────────────────
+    # ── C: Save manifest ──────────────────────────────────────────────────────
     manifest_path = save_manifest(
         script_data=script_data,
         video_paths=video_paths,
@@ -180,7 +203,7 @@ def produce_version(
         aligned=aligned,
     )
 
-    # ── Step D: Render ────────────────────────────────────────────────────────
+    # ── D: Render ─────────────────────────────────────────────────────────────
     return render_video(manifest_path, output_base)
 
 
@@ -188,21 +211,35 @@ def produce_version(
 def main():
     args = parse_args()
 
-    print(f"\n{'═' * 55}")
+    ct_label = CONTENT_TYPES.get(
+        args.content_type, {}
+    ).get("label", args.content_type)
+
+    print(f"\n{'═' * 58}")
     print(f"  🚀  Video Script Generator")
-    print(f"{'═' * 55}")
-    print(f"  Idea     : {args.idea}")
-    print(f"  Tone     : {args.tone}")
-    print(f"  Voice EN : {args.voice_en}")
-    print(f"  Voice AR : {args.voice_ar}")
-    print(f"  Output   : {args.output}")
+    print(f"{'═' * 58}")
+    print(f"  Idea         : {args.idea}")
+    print(f"  Content Type : {ct_label}")
+    print(f"  Tone         : {args.tone}")
+    print(f"  Voice EN     : {args.voice_en}")
+    print(f"  Voice AR     : {args.voice_ar}")
+    print(f"  Output       : {args.output}")
     print()
 
     # ── Step 1: Generate English script ──────────────────────────────────────
     print("📝  Generating English script...")
     try:
-        en_data = generate_script(idea=args.idea, tone=args.tone)
-        en_data = enforce_duration(en_data, idea=args.idea, tone=args.tone)
+        en_data = generate_script(
+            idea=args.idea,
+            tone=args.tone,
+            content_type=args.content_type,
+        )
+        en_data = enforce_duration(
+            en_data,
+            idea=args.idea,
+            tone=args.tone,
+            content_type=args.content_type,
+        )
         en_data["lang"] = "en"
     except Exception as e:
         print(f"❌  Script generation failed: {e}")
@@ -219,15 +256,16 @@ def main():
         ar_data["word_count"]        = len(ar_data["full_script"].split())
         ar_data["lang"]              = "ar"
         ar_data["keywords"]          = en_data["keywords"]
-        print(f"✅  Arabic title    : {ar_data['title']}")
-        print(f"    Sentences      : {len(ar_data['sentences'])}")
+        ar_data["content_type"]      = en_data["content_type"]
+        print(f"✅  Arabic title  : {ar_data['title']}")
+        print(f"    Sentences    : {len(ar_data['sentences'])}")
     except Exception as e:
         print(f"❌  Translation failed: {e}")
         sys.exit(1)
 
     # ── Script-only mode ──────────────────────────────────────────────────────
     if args.script_only:
-        print("\n🇬🇧  English Script:")
+        print(f"\n🇬🇧  English Script ({ct_label}):")
         for i, s in enumerate(en_data["sentences"], 1):
             print(f"  {i:>2}. {s}")
         print(f"\n🇸🇦  Arabic Script:")
@@ -237,7 +275,7 @@ def main():
 
     # ── Content-only mode ─────────────────────────────────────────────────────
     if args.content_only:
-        print("\n📦  Generating content package (no video/audio)...")
+        print("\n📦  Generating content package...")
         try:
             content = generate_all_content(en_data, output_base=args.output)
             print_content_summary(content)
@@ -249,7 +287,7 @@ def main():
             print(f"⚠️  Content warning: {e}")
         return
 
-    # ── Step 3: Fetch videos (shared for both versions) ───────────────────────
+    # ── Step 3: Fetch videos ──────────────────────────────────────────────────
     print(f"\n📹  Fetching videos (shared for EN + AR)...")
     try:
         sentences      = en_data["sentences"]
@@ -340,15 +378,16 @@ def main():
     except Exception as e:
         print(f"⚠️  Content warning: {e}")
 
-    # ── Final summary ─────────────────────────────────────────────────────────
-    print(f"\n{'═' * 55}")
+    # ── Summary ───────────────────────────────────────────────────────────────
+    print(f"\n{'═' * 58}")
     print(f"  ✅  ALL DONE!")
-    print(f"{'═' * 55}")
+    print(f"{'═' * 58}")
+    print(f"  {ct_label}")
     print(f"  🇬🇧  English   → {en_video.name}")
     print(f"  🇸🇦  Arabic    → {ar_video.name}")
     print(f"  🖼️   Thumbnail  → {args.output}_thumbnail.png")
     print(f"  📦  Content    → {args.output}_content.json")
-    print(f"{'═' * 55}\n")
+    print(f"{'═' * 58}\n")
 
 
 if __name__ == "__main__":
