@@ -1,7 +1,7 @@
 import os
 import json
 import re
-from groq import Groq
+from google import genai
 
 # ── Content type definitions ──────────────────────────────────────────────────
 CONTENT_TYPES = {
@@ -279,13 +279,19 @@ CRITICAL RULES:
 - Return ONLY the JSON. No text before. No text after. No explanation."""
 
 
+# ── التغيير الوحيد: هذه الدالة فقط ──────────────────────────────────────────
 def generate_script(
     idea: str,
     tone: str = "energetic",
     content_type: str = "motivational",
     feedback: str = None,
 ) -> dict:
-    client        = Groq(api_key=os.environ["GROQ_API_KEY"])
+
+    # إنشاء الكلاينت
+    client = genai.Client(
+        api_key=os.environ.get("GEMINI_API_KEY1"),
+    )
+
     system_prompt = build_system_prompt(content_type, tone)
 
     user_prompt = f'Video idea: "{idea}"\n'
@@ -293,17 +299,19 @@ def generate_script(
         user_prompt += f"\n⚠️ Previous attempt issue: {feedback}\nFix this and rewrite the COMPLETE script.\n"
     user_prompt += "\nWrite the complete script now. Do not cut it short."
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_prompt},
-        ],
-        temperature=0.88,
-        max_tokens=2048,
+    # دمج system + user في prompt واحد لأن Gemini لا يدعم system role بشكل مباشر
+    full_prompt = f"{system_prompt}\n\n{user_prompt}"
+
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=full_prompt,
+        config={
+            "temperature":        0.88,
+            "max_output_tokens":  2048,
+        },
     )
 
-    raw = response.choices[0].message.content.strip()
+    raw = response.text.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$",          "", raw)
 
@@ -313,17 +321,17 @@ def generate_script(
     return data
 
 
+# ── باقي الكود بدون أي تغيير ─────────────────────────────────────────────────
 def _ensure_complete(data: dict) -> dict:
     """Verify script is not truncated."""
     script = data.get("full_script", "")
 
-    # Check for truncation signs
     truncated = (
         script.endswith("...") or
-        script.endswith(",") or
+        script.endswith(",")   or
         script.endswith("and") or
         script.endswith("but") or
-        script.endswith("so") or
+        script.endswith("so")  or
         len(script.split()) < 80
     )
 
@@ -393,7 +401,6 @@ def enforce_duration(
         print(f"  [Attempt {attempt + 1}] {words} words | ~{real_seconds:.1f}s"
               + (" | ⚠️ truncated" if truncated else ""))
 
-        # Check completeness first
         if truncated:
             feedback = (
                 f"Script was cut off. Rewrite it COMPLETELY from start to finish. "
@@ -406,7 +413,6 @@ def enforce_duration(
             )
             continue
 
-        # Check duration
         if 45 <= real_seconds <= 75:
             data["estimated_seconds"] = round(real_seconds)
             data["word_count"]        = words
@@ -430,8 +436,8 @@ def enforce_duration(
             content_type=content_type, feedback=feedback,
         )
 
-    # Final hard trim only if too long (never truncate if too short)
-    script = data.get("full_script", "")
+    # Final hard trim only if too long
+    script     = data.get("full_script", "")
     words_list = script.split()
     if len(words_list) > 200:
         data["full_script"]       = " ".join(words_list[:195])
@@ -465,7 +471,6 @@ def print_script(data: dict) -> None:
         print(f"      🔑 {' | '.join(kws)}")
     print("─" * 65)
     print("  📜 Full Script:")
-    # Print in chunks for readability
     words      = data["full_script"].split()
     chunk_size = 12
     for i in range(0, len(words), chunk_size):
