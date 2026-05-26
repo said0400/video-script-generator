@@ -66,6 +66,21 @@ on:
           - female_warm
           - neutral
 
+      sfx_type:
+        description: "🔊 نوع المؤثر الصوتي عند الانتقال"
+        required: true
+        default: "swoosh"
+        type: choice
+        options:
+          - swoosh
+          - whoosh
+
+      music_volume:
+        description: "🎵 مستوى صوت الموسيقى (0.08 هادئ — 0.18 قوي)"
+        required: true
+        default: "0.12"
+        type: string
+
       script_only:
         description: "📝 نص فقط؟ (بدون فيديو أو صوت)"
         required: true
@@ -200,6 +215,8 @@ jobs:
             --tone         "${{ inputs.tone }}" \
             --voice-en     "${{ inputs.voice_en }}" \
             --voice-ar     "${{ inputs.voice_ar }}" \
+            --sfx-type     "${{ inputs.sfx_type }}" \
+            --music-volume "${{ inputs.music_volume }}" \
             --output       output \
             $FLAGS
 
