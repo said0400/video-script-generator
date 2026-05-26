@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Video Script Generator + TTS + Pixabay + Playwright + FFmpeg
-EN + AR synced videos + Content Package
+Video Script Generator
+Gemini for script + TTS | Pixabay videos | Local music + SFX
+Produces EN + AR synced videos + Content Package
 """
 
 import argparse
@@ -25,6 +26,7 @@ from sync import (
     build_word_timeline,
     _duration_sync,
 )
+from audio_manager import mix_voice_music_sfx
 
 
 def parse_args():
@@ -50,9 +52,18 @@ def parse_args():
         choices=list(VOICES.keys()),
     )
     parser.add_argument("--output", type=str, default="output")
-    parser.add_argument("--script-only",   action="store_true")
-    parser.add_argument("--no-video",      action="store_true")
-    parser.add_argument("--content-only",  action="store_true")
+    parser.add_argument(
+        "--music-volume", type=float, default=0.12,
+        help="Background music volume 0.0-1.0 (default: 0.12)",
+    )
+    parser.add_argument(
+        "--sfx-type", type=str, default="swoosh",
+        choices=["swoosh", "whoosh"],
+        help="SFX type for transitions",
+    )
+    parser.add_argument("--script-only",  action="store_true")
+    parser.add_argument("--no-video",     action="store_true")
+    parser.add_argument("--content-only", action="store_true")
     return parser.parse_args()
 
 
@@ -66,7 +77,7 @@ def save_manifest(
     aligned: list = None,
     real_duration: float = None,
 ) -> Path:
-    duration = real_duration or script_data["estimated_seconds"]
+    duration = real_duration or float(script_data["estimated_seconds"])
     manifest = {
         "title":         script_data["title"],
         "sentences":     script_data["sentences"],
@@ -117,6 +128,8 @@ def produce_version(
     output_base: str,
     video_paths: list,
     label: str,
+    music_volume: float = 0.12,
+    sfx_type: str = "swoosh",
 ) -> Path:
     print(f"\n{'═' * 58}")
     print(f"  {label}")
@@ -128,64 +141,86 @@ def produce_version(
 
     # ── A: TTS ────────────────────────────────────────────────────────────────
     print(f"\n🎙️   Synthesizing speech...")
-    audio_path = synthesize_speech(
+    raw_audio = synthesize_speech(
         script=script_data["full_script"],
-        output_path=f"{output_base}_audio",
+        output_path=f"{output_base}_voice",
         voice_key=voice_key,
         tone=script_data.get("tone", "energetic"),
     )
 
     # ── B: Measure REAL audio duration ───────────────────────────────────────
     wav_candidates = (
-        list(Path(".").glob(f"{output_base}_audio_*.wav")) +
-        list(Path(".").glob(f"{output_base}_audio*.wav"))
+        list(Path(".").glob(f"{output_base}_voice_*.wav")) +
+        list(Path(".").glob(f"{output_base}_voice*.wav"))
     )
 
-    real_duration = None
+    real_duration = float(script_data["estimated_seconds"])
     wav_path      = None
 
     if wav_candidates:
         wav_path      = str(wav_candidates[0])
-        real_duration = get_audio_duration(wav_path)
-
-        if real_duration < 5:
-            print(f"  ⚠️  Audio too short ({real_duration:.1f}s) — using estimated")
-            real_duration = float(script_data["estimated_seconds"])
-        else:
+        measured      = get_audio_duration(wav_path)
+        if measured >= 5:
+            real_duration = measured
             print(f"  ✅ Real duration: {real_duration:.3f}s")
+        else:
+            print(f"  ⚠️  Audio too short ({measured:.1f}s) — using estimated")
     else:
-        print(f"  ⚠️  No WAV found — using estimated duration")
-        real_duration = float(script_data["estimated_seconds"])
+        print(f"  ⚠️  No WAV found — using estimated")
 
-    # ── C: Build word sync timeline ───────────────────────────────────────────
+    # ── C: Mix voice + music + SFX ────────────────────────────────────────────
+    print(f"\n🎚️   Mixing audio (music + SFX)...")
+    sentences      = script_data["sentences"]
+    clip_durations = [real_duration / len(sentences)] * len(sentences)
+    content_type   = script_data.get("content_type", "motivational")
+
+    mixed_audio_path = f"{output_base}_audio_mixed.aac"
+    try:
+        final_audio = mix_voice_music_sfx(
+            voice_path=wav_path or str(raw_audio),
+            content_type=content_type,
+            output_path=mixed_audio_path,
+            clip_durations=clip_durations,
+            sfx_type=sfx_type,
+            music_volume=music_volume,
+            seed=hash(script_data["title"]) % 10000,
+        )
+        # Re-measure final audio duration
+        final_duration = get_audio_duration(str(final_audio))
+        if final_duration >= 5:
+            real_duration = final_duration
+        audio_path = final_audio
+    except Exception as e:
+        print(f"  ⚠️  Audio mix error: {e} — using raw voice")
+        audio_path = raw_audio
+
+    # ── D: Build word sync timeline ───────────────────────────────────────────
     word_timeline = []
     aligned       = []
 
-    print(f"\n🔄  Building word sync (anchored to {real_duration:.3f}s)...")
+    print(f"\n🔄  Building word sync ({real_duration:.3f}s)...")
     try:
-        # Try Whisper first
         word_ts = []
         if wav_path:
             word_ts = get_word_timestamps(wav_path)
 
         word_timeline, aligned = build_word_timeline(
-            sentences=script_data["sentences"],
+            sentences=sentences,
             word_timestamps=word_ts,
             total_duration=real_duration,
         )
         print(f"  ✅ {len(word_timeline)} sync events")
-
     except Exception as e:
-        print(f"  ⚠️  Sync error: {e} — duration fallback")
+        print(f"  ⚠️  Sync error: {e}")
         try:
             word_timeline, aligned = _duration_sync(
-                sentences=script_data["sentences"],
+                sentences=sentences,
                 total_duration=real_duration,
             )
         except Exception as e2:
-            print(f"  ⚠️  Fallback error: {e2}")
+            print(f"  ⚠️  Fallback sync error: {e2}")
 
-    # ── D: Save manifest with real duration ───────────────────────────────────
+    # ── E: Save manifest ──────────────────────────────────────────────────────
     manifest_path = save_manifest(
         script_data=script_data,
         video_paths=video_paths,
@@ -196,7 +231,7 @@ def produce_version(
         real_duration=real_duration,
     )
 
-    # ── E: Render ─────────────────────────────────────────────────────────────
+    # ── F: Render ─────────────────────────────────────────────────────────────
     return render_video(manifest_path, output_base)
 
 
@@ -206,17 +241,19 @@ def main():
     ct_label = CONTENT_TYPES.get(args.content_type, {}).get("label", args.content_type)
 
     print(f"\n{'═' * 58}")
-    print(f"  🚀  Video Script Generator")
+    print(f"  🚀  Video Script Generator (Gemini)")
     print(f"{'═' * 58}")
     print(f"  Idea         : {args.idea}")
     print(f"  Content Type : {ct_label}")
     print(f"  Tone         : {args.tone}")
     print(f"  Voice EN     : {args.voice_en}")
     print(f"  Voice AR     : {args.voice_ar}")
+    print(f"  Music Vol    : {args.music_volume}")
+    print(f"  SFX Type     : {args.sfx_type}")
     print()
 
-    # ── Step 1: English script ────────────────────────────────────────────────
-    print("📝  Generating English script...")
+    # ── Step 1: English script via Gemini ────────────────────────────────────
+    print("📝  Generating script (Gemini)...")
     try:
         en_data = generate_script(
             idea=args.idea,
@@ -280,7 +317,7 @@ def main():
     try:
         sentences      = en_data["sentences"]
         keywords       = en_data["keywords"]
-        duration_s     = en_data["estimated_seconds"]
+        duration_s     = float(en_data["estimated_seconds"])
         clip_durations = [duration_s / len(sentences)] * len(sentences)
 
         video_paths = fetch_videos_for_script(
@@ -298,16 +335,25 @@ def main():
             (en_data, args.voice_en, "en"),
             (ar_data, args.voice_ar, "ar"),
         ]:
-            print(f"\n🎙️   {suffix.upper()} TTS...")
+            print(f"\n🎙️   {suffix.upper()} TTS + Mix...")
             try:
-                synthesize_speech(
+                raw_audio = synthesize_speech(
                     script=lang_data["full_script"],
-                    output_path=f"{args.output}_{suffix}_audio",
+                    output_path=f"{args.output}_{suffix}_voice",
                     voice_key=voice,
                     tone=lang_data["tone"],
                 )
+                dur = get_audio_duration(str(raw_audio))
+                mix_voice_music_sfx(
+                    voice_path=str(raw_audio),
+                    content_type=lang_data["content_type"],
+                    output_path=f"{args.output}_{suffix}_audio_mixed.aac",
+                    clip_durations=[dur / len(lang_data["sentences"])] * len(lang_data["sentences"]),
+                    sfx_type=args.sfx_type,
+                    music_volume=args.music_volume,
+                )
             except Exception as e:
-                print(f"❌  {suffix} TTS failed: {e}")
+                print(f"❌  {suffix} audio failed: {e}")
 
         print("\n📦  Content package...")
         try:
@@ -329,6 +375,8 @@ def main():
             output_base=f"{args.output}_en",
             video_paths=video_paths,
             label="🇬🇧 English Version",
+            music_volume=args.music_volume,
+            sfx_type=args.sfx_type,
         )
     except Exception as e:
         print(f"❌  English render failed: {e}")
@@ -342,6 +390,8 @@ def main():
             output_base=f"{args.output}_ar",
             video_paths=video_paths,
             label="🇸🇦 Arabic Version",
+            music_volume=args.music_volume,
+            sfx_type=args.sfx_type,
         )
     except Exception as e:
         print(f"❌  Arabic render failed: {e}")
