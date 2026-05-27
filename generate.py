@@ -1,7 +1,8 @@
 import os
 import json
 import re
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # ── Content type definitions ──────────────────────────────────────────────────
 CONTENT_TYPES = {
@@ -199,9 +200,8 @@ TONES = {
 }
 
 
-def _get_gemini():
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    return genai.GenerativeModel("gemini-2.0-flash")
+def _get_client():
+    return genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
 def build_system_prompt(content_type: str, tone: str) -> str:
@@ -243,7 +243,7 @@ YOUR MISSION:
 
 4. DELIVER COMPLETE, REAL VALUE
    → No filler. Every word earns its place.
-   → Viewer gets something they can't find elsewhere
+   → Viewer gets something they cannot find elsewhere
    → The ending lands with weight — does not trail off
 
 5. RUN 45–75 SECONDS
@@ -273,8 +273,8 @@ CRITICAL:
 - sentences and keywords arrays MUST have IDENTICAL length
 - keywords: CONCRETE visual search terms (English, 2-4 words)
   GOOD: "person running dark alley", "detective crime board"
-  BAD: "transformation", "journey", "lifestyle"
-- Return ONLY the JSON object"""
+  BAD:  "transformation", "journey", "lifestyle"
+- Return ONLY the JSON object. No text before. No text after."""
 
 
 def generate_script(
@@ -283,19 +283,23 @@ def generate_script(
     content_type: str = "motivational",
     feedback: str = None,
 ) -> dict:
-    model  = _get_gemini()
-    prompt = build_system_prompt(content_type, tone)
+    client = _get_client()
 
-    user_msg = f'Video idea: "{idea}"\n'
+    system_prompt = build_system_prompt(content_type, tone)
+    user_msg      = f'Video idea: "{idea}"\n'
     if feedback:
-        user_msg += f"\n⚠️ Previous attempt issue: {feedback}\nFix this and rewrite the COMPLETE script.\n"
+        user_msg += (
+            f"\n⚠️ Previous attempt issue: {feedback}\n"
+            f"Fix this and rewrite the COMPLETE script.\n"
+        )
     user_msg += "\nWrite the complete script now. Do not cut it short."
 
-    full_prompt = prompt + "\n\n" + user_msg
+    full_prompt = system_prompt + "\n\n" + user_msg
 
-    response = model.generate_content(
-        full_prompt,
-        generation_config=genai.types.GenerationConfig(
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=full_prompt,
+        config=types.GenerateContentConfig(
             temperature=0.88,
             max_output_tokens=2048,
         ),
@@ -314,10 +318,11 @@ def generate_script(
 def _ensure_complete(data: dict) -> dict:
     script    = data.get("full_script", "")
     truncated = (
-        script.endswith("...") or
-        script.endswith(",")   or
-        script.endswith(" and") or
-        script.endswith(" but") or
+        script.endswith("...")   or
+        script.endswith(",")     or
+        script.endswith(" and")  or
+        script.endswith(" but")  or
+        script.endswith(" so")   or
         len(script.split()) < 80
     )
     if truncated:
@@ -376,16 +381,20 @@ def enforce_duration(
         words        = count_words(script)
         truncated    = data.pop("_truncated", False)
 
-        print(f"  [Attempt {attempt+1}] {words} words | ~{real_seconds:.1f}s"
-              + (" | ⚠️ truncated" if truncated else ""))
+        print(
+            f"  [Attempt {attempt+1}] {words} words | ~{real_seconds:.1f}s"
+            + (" | ⚠️ truncated" if truncated else "")
+        )
 
         if truncated:
             feedback = (
                 "Script was cut off. Rewrite COMPLETELY from start to finish. "
                 "Do not stop mid-sentence. Target 110-190 words."
             )
-            data = generate_script(idea=idea, tone=tone,
-                                   content_type=content_type, feedback=feedback)
+            data = generate_script(
+                idea=idea, tone=tone,
+                content_type=content_type, feedback=feedback,
+            )
             continue
 
         if 45 <= real_seconds <= 75:
@@ -396,7 +405,8 @@ def enforce_duration(
         if real_seconds < 45:
             feedback = (
                 f"Too short: {real_seconds:.0f}s / {words} words. "
-                f"Expand significantly. Add depth and emotion. Target 110-190 words."
+                f"Expand significantly. Add more depth and emotion. "
+                f"Target 110-190 words. Do NOT cut short."
             )
         else:
             feedback = (
@@ -405,10 +415,12 @@ def enforce_duration(
             )
 
         print(f"  ⚠️  {feedback[:80]}...")
-        data = generate_script(idea=idea, tone=tone,
-                               content_type=content_type, feedback=feedback)
+        data = generate_script(
+            idea=idea, tone=tone,
+            content_type=content_type, feedback=feedback,
+        )
 
-    # Final
+    # Final clamp
     words_list = data.get("full_script", "").split()
     if len(words_list) > 200:
         data["full_script"]       = " ".join(words_list[:195])
