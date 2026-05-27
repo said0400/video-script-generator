@@ -12,31 +12,27 @@ from google import genai
 from google.genai import types
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Gemini Client
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Gemini client ────────────────────────────────────────────────────────────
 def get_client():
     return genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 
-def _clean_json_response(text: str) -> str:
-    """Clean Gemini response before JSON parsing."""
+def _clean_json(raw: str) -> str:
+    """Clean Gemini JSON responses."""
 
-    if not text:
+    if not raw:
         return "{}"
 
-    # Remove markdown wrappers
-    text = text.replace("```json", "")
-    text = text.replace("```", "")
+    raw = raw.replace("```json", "")
+    raw = raw.replace("```", "")
 
-    # Remove strange google links if they appear
-    text = re.sub(
+    raw = re.sub(
         r"http://googleusercontent\.com/\S+",
         "",
-        text
+        raw
     )
 
-    return text.strip()
+    return raw.strip()
 
 
 def _gemini_generate(
@@ -44,7 +40,6 @@ def _gemini_generate(
     temperature: float = 0.7,
     max_tokens: int = 1024
 ) -> str:
-    """Unified Gemini generation helper."""
 
     client = get_client()
 
@@ -61,307 +56,461 @@ def _gemini_generate(
     return response.text.strip()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 # 1. HASHTAGS
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 def generate_hashtags(script_data: dict) -> dict:
     """Generate platform-optimized hashtags in EN + AR."""
 
-    prompt = f"""
-You are a social media SEO expert.
+    prompt = f"""You are a social media SEO expert.
+Generate hashtags for a video about: "{script_data['title']}"
+Full script: {script_data['full_script'][:300]}
 
-Generate hashtags for a video about:
-"{script_data['title']}"
-
-Full script:
-{script_data['full_script'][:500]}
-
-Return ONLY a valid JSON object:
-
+Return ONLY a JSON object (no markdown):
 {{
-  "tiktok": ["#tag1", "#tag2"],
-  "instagram": ["#tag1", "#tag2"],
-  "youtube": ["#tag1", "#tag2"],
-  "facebook": ["#tag1", "#tag2"],
-  "arabic": ["#وسم1", "#وسم2"],
-  "trending": ["#trend1", "#trend2"]
+  "tiktok":    ["#tag1", "#tag2", "... 15 tags total"],
+  "instagram": ["#tag1", "#tag2", "... 20 tags total"],
+  "youtube":   ["#tag1", "#tag2", "... 10 tags total"],
+  "facebook":  ["#tag1", "#tag2", "... 10 tags total"],
+  "arabic":    ["#وسم1", "#وسم2", "... 10 Arabic tags total"],
+  "trending":  ["#tag1", "#tag2", "... 5 currently trending related tags"]
 }}
 
 Rules:
-- TikTok: 15 hashtags
-- Instagram: 20 hashtags
-- YouTube: 10 hashtags
-- Facebook: 10 hashtags
-- Arabic: 10 Arabic hashtags
-- Trending: 5 related trending hashtags
 - Mix viral + niche + broad tags
-- Include Arabic and English
+- Include English AND Arabic tags in each platform list
+- Tags must be directly related to the video topic
 - No spaces inside hashtags
-- Return ONLY JSON
-"""
+- Return actual tags, not placeholder text"""
 
     raw = _gemini_generate(
         prompt,
         temperature=0.7,
-        max_tokens=1024
+        max_tokens=1024,
     )
 
-    raw = _clean_json_response(raw)
+    raw = _clean_json(raw)
 
-    try:
-        return json.loads(raw)
-
-    except Exception as e:
-        print("Hashtag JSON Parse Error:", e)
-        print(raw)
-
-        return {
-            "tiktok": [],
-            "instagram": [],
-            "youtube": [],
-            "facebook": [],
-            "arabic": [],
-            "trending": []
-        }
+    return json.loads(raw)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 # 2. CAPTIONS
-# ─────────────────────────────────────────────────────────────────────────────
-def generate_captions(script_data: dict) -> dict:
-    """Generate viral captions for all platforms."""
+# ────────────────────────────────────────────────────────────────────────────
+def generate_captions(script_data: dict, hashtags: dict) -> dict:
+    """Generate ready-to-post captions for each platform in EN + AR."""
 
-    prompt = f"""
-You are a viral social media copywriter.
+    tiktok_tags = " ".join(hashtags.get("tiktok",    [])[:10])
+    ig_tags     = " ".join(hashtags.get("instagram", [])[:15])
+    yt_tags     = " ".join(hashtags.get("youtube",   [])[:8])
+    fb_tags     = " ".join(hashtags.get("facebook",  [])[:8])
+    ar_tags     = " ".join(hashtags.get("arabic",    [])[:8])
 
-Create captions for this video:
+    prompt = f"""You are a viral social media copywriter.
+Create platform-specific captions for this video:
 
-TITLE:
-{script_data['title']}
+Title (EN): {script_data['title']}
+Script: {script_data['full_script'][:400]}
 
-SCRIPT:
-{script_data['full_script'][:700]}
-
-Return ONLY valid JSON:
-
+Return ONLY a JSON object (no markdown):
 {{
-  "tiktok": "caption",
-  "instagram": "caption",
-  "youtube": "caption",
-  "facebook": "caption",
-  "short": "very short hook caption",
-  "arabic": "arabic caption"
+  "tiktok_en":    "<2-3 punchy lines + hook question + emojis>\\n\\n{tiktok_tags}",
+  "tiktok_ar":    "<Arabic TikTok caption + emojis>\\n\\n{ar_tags}",
+  "instagram_en": "<3-4 lines storytelling + strong CTA>\\n\\n{ig_tags}",
+  "instagram_ar": "<Arabic Instagram caption>\\n\\n{ar_tags}",
+  "youtube_en":   "<100-150 words SEO description>\\n\\n{yt_tags}",
+  "youtube_ar":   "<Arabic YouTube description>\\n\\n{ar_tags}",
+  "facebook_en":  "<2-3 conversational sentences + question>\\n\\n{fb_tags}",
+  "facebook_ar":  "<Arabic Facebook caption>\\n\\n{ar_tags}"
 }}
 
 Rules:
-- Highly engaging
-- Use hooks
-- Add emotion
-- Optimized for virality
-- Include emojis naturally
-- Keep platform style appropriate
-- Return ONLY JSON
-"""
+- TikTok: short, punchy, emoji-heavy, ends with question
+- Instagram: storytelling, aspirational, strong CTA
+- YouTube: SEO-rich, informative, keyword-dense first 2 lines
+- Facebook: conversational, shareable, ends with question
+- Every caption must have a strong hook in the FIRST line
+- Return actual captions not placeholder text"""
 
     raw = _gemini_generate(
         prompt,
         temperature=0.8,
-        max_tokens=1024
+        max_tokens=2048,
     )
 
-    raw = _clean_json_response(raw)
+    raw = _clean_json(raw)
 
-    try:
-        return json.loads(raw)
-
-    except Exception as e:
-        print("Caption JSON Parse Error:", e)
-        print(raw)
-
-        return {
-            "tiktok": "",
-            "instagram": "",
-            "youtube": "",
-            "facebook": "",
-            "short": "",
-            "arabic": ""
-        }
+    return json.loads(raw)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. THUMBNAIL IDEAS
-# ─────────────────────────────────────────────────────────────────────────────
-def generate_thumbnail_ideas(script_data: dict) -> dict:
-    """Generate thumbnail concepts."""
+# ────────────────────────────────────────────────────────────────────────────
+# 3. THUMBNAIL HTML
+# ────────────────────────────────────────────────────────────────────────────
+def generate_thumbnail_html(
+    script_data: dict,
+    output_path: str = "thumbnail.html",
+) -> Path:
+    """Generate a professional thumbnail as HTML file."""
 
-    prompt = f"""
-You are a YouTube thumbnail expert.
+    title    = script_data["title"]
+    is_ar    = any("\u0600" <= c <= "\u06ff" for c in title)
+    hook     = script_data.get("hook", "")
 
-Create thumbnail ideas for this video:
+    if not hook and script_data.get("sentences"):
+        hook = script_data["sentences"][0]
 
-TITLE:
-{script_data['title']}
+    dir_attr      = "rtl" if is_ar else "ltr"
+    lang_attr     = "ar" if is_ar else "en"
+    body_font     = "'Noto Naskh Arabic',serif" if is_ar else "'Inter',sans-serif"
+    title_font    = "'Noto Naskh Arabic',serif" if is_ar else "'Inter',sans-serif"
+    title_fs      = "65px" if is_ar else "72px"
+    hook_fs       = "34px" if is_ar else "32px"
+    letter_sp     = "0.01em" if is_ar else "-0.03em"
+    new_video_lbl = "فيديو جديد" if is_ar else "NEW VIDEO"
+    hook_short    = hook[:80] + ("..." if len(hook) > 80 else "")
 
-SCRIPT:
-{script_data['full_script'][:600]}
+    tone_gradients = {
+        "energetic":     ("linear-gradient(135deg,#FF6B35,#F7C59F,#1a1a2e)", "#FF6B35"),
+        "inspirational": ("linear-gradient(135deg,#667eea,#764ba2,#1a1a2e)", "#a78bfa"),
+        "educational":   ("linear-gradient(135deg,#0093E9,#80D0C7,#1a1a2e)", "#0093E9"),
+        "humorous":      ("linear-gradient(135deg,#FDFC47,#24FE41,#1a1a2e)", "#FDFC47"),
+        "calm":          ("linear-gradient(135deg,#2193b0,#6dd5ed,#1a1a2e)", "#6dd5ed"),
+    }
 
-Return ONLY valid JSON:
+    tone             = script_data.get("tone", "energetic")
+    gradient, accent = tone_gradients.get(tone, tone_gradients["energetic"])
 
-{{
-  "main_text": "thumbnail text",
-  "emotion": "emotion style",
-  "colors": ["color1", "color2"],
-  "elements": ["element1", "element2"],
-  "composition": "composition description",
-  "clickbait_level": "low/medium/high",
-  "variations": [
-    "idea 1",
-    "idea 2",
-    "idea 3"
-  ]
-}}
+    accent_shadow = accent + "88"
+    accent_bg     = accent + "33"
+    accent_border = accent + "88"
+    accent_glow1  = accent + "22"
+    accent_glow2  = accent + "15"
 
-Rules:
-- Extremely clickable
-- High CTR focused
-- Emotional
-- Curiosity-driven
-- Return ONLY JSON
-"""
+    html = f"""<!DOCTYPE html>
+<html lang="{lang_attr}">
+<head>
+  <meta charset="UTF-8"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700&family=Inter:wght@800;900&display=swap" rel="stylesheet"/>
+  <style>
+    * {{ margin:0; padding:0; box-sizing:border-box; }}
 
-    raw = _gemini_generate(
-        prompt,
-        temperature=0.9,
-        max_tokens=1024
-    )
-
-    raw = _clean_json_response(raw)
-
-    try:
-        return json.loads(raw)
-
-    except Exception as e:
-        print("Thumbnail JSON Parse Error:", e)
-        print(raw)
-
-        return {
-            "main_text": "",
-            "emotion": "",
-            "colors": [],
-            "elements": [],
-            "composition": "",
-            "clickbait_level": "",
-            "variations": []
-        }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. TREND IDEAS
-# ─────────────────────────────────────────────────────────────────────────────
-def generate_trend_ideas(script_data: dict) -> dict:
-    """Generate related viral content ideas."""
-
-    prompt = f"""
-You are a viral content strategist.
-
-Based on this video:
-
-TITLE:
-{script_data['title']}
-
-SCRIPT:
-{script_data['full_script'][:700]}
-
-Generate related viral content ideas.
-
-Return ONLY valid JSON:
-
-{{
-  "video_ideas": [
-    {{
-      "title": "idea title",
-      "hook": "viral hook",
-      "platform": "tiktok/youtube/instagram",
-      "viral_score": 1
+    html, body {{
+      width: 1280px;
+      height: 720px;
+      overflow: hidden;
+      font-family: {body_font};
     }}
-  ]
-}}
+
+    .bg {{
+      position: absolute;
+      inset: 0;
+      background: {gradient};
+    }}
+
+    .overlay {{
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 65%;
+      background: linear-gradient(to top, rgba(0,0,0,0.88), transparent);
+    }}
+
+    .accent-bar {{
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 14px;
+      background: {accent};
+      box-shadow: 0 0 40px {accent_shadow};
+    }}
+
+    .corner-circle {{
+      position: absolute;
+      top: -120px; right: -120px;
+      width: 450px; height: 450px;
+      border-radius: 50%;
+      background: radial-gradient(circle, {accent_glow1}, transparent 70%);
+    }}
+
+    .corner-circle-2 {{
+      position: absolute;
+      bottom: -100px; left: 80px;
+      width: 320px; height: 320px;
+      border-radius: 50%;
+      background: radial-gradient(circle, {accent_glow2}, transparent 70%);
+    }}
+
+    .logo {{
+      position: absolute;
+      top: 40px; right: 56px;
+    }}
+
+    .logo-icon {{
+      width: 60px; height: 60px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.15);
+      border: 2px solid rgba(255,255,255,0.45);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      color: #fff;
+    }}
+
+    .content {{
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 56px 80px;
+      direction: {dir_attr};
+    }}
+
+    .tag {{
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: {accent_bg};
+      border: 2px solid {accent_border};
+      border-radius: 50px;
+      padding: 12px 32px;
+      margin-bottom: 28px;
+      width: fit-content;
+    }}
+
+    .tag-dot {{
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: {accent};
+      box-shadow: 0 0 12px {accent};
+    }}
+
+    .tag-text {{
+      font-size: 22px;
+      font-weight: 800;
+      color: {accent};
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }}
+
+    .title {{
+      font-family: {title_font};
+      font-size: {title_fs};
+      font-weight: 900;
+      color: #ffffff;
+      line-height: 1.15;
+      letter-spacing: {letter_sp};
+      text-shadow: 0 4px 32px rgba(0,0,0,0.85);
+      margin-bottom: 22px;
+      max-width: 1060px;
+    }}
+
+    .hook {{
+      font-family: {body_font};
+      font-size: {hook_fs};
+      font-weight: 700;
+      color: rgba(255,255,255,0.70);
+      line-height: 1.45;
+      max-width: 920px;
+      text-shadow: 0 2px 12px rgba(0,0,0,0.75);
+    }}
+  </style>
+</head>
+<body>
+
+  <div class="bg"></div>
+  <div class="corner-circle"></div>
+  <div class="corner-circle-2"></div>
+  <div class="overlay"></div>
+  <div class="accent-bar"></div>
+
+  <div class="logo">
+    <div class="logo-icon">&#9654;</div>
+  </div>
+
+  <div class="content">
+    <div class="tag">
+      <div class="tag-dot"></div>
+      <span class="tag-text">{new_video_lbl}</span>
+    </div>
+
+    <div class="title">{title}</div>
+    <div class="hook">{hook_short}</div>
+  </div>
+
+</body>
+</html>"""
+
+    path = Path(output_path)
+
+    path.write_text(html, encoding="utf-8")
+
+    print(f"🖼️   Thumbnail HTML → {path.name}")
+
+    return path
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 4. TREND IDEAS
+# ────────────────────────────────────────────────────────────────────────────
+def generate_trend_ideas(script_data: dict, count: int = 10) -> list:
+    """Generate trending video ideas related to the current topic."""
+
+    prompt = f"""You are a viral content strategist for TikTok, Instagram Reels, and YouTube Shorts.
+
+The user just made a video about: "{script_data['title']}"
+Niche/topic: {script_data['full_script'][:200]}
+
+Generate {count} NEW trending video ideas in the same niche that would perform well right now.
+
+Return ONLY a JSON array (no markdown):
+[
+  {{
+    "title_en": "<catchy English title>",
+    "title_ar": "<Arabic title>",
+    "hook_en": "<first line of the video in English>",
+    "hook_ar": "<first line in Arabic>",
+    "why_viral": "<one sentence: why this will go viral>",
+    "best_platform": "tiktok|instagram|youtube|all",
+    "tone": "energetic|inspirational|educational|humorous|calm",
+    "estimated_views": "<view range e.g. 100K-500K>"
+  }}
+]
 
 Rules:
-- Generate 10 ideas
-- Highly viral concepts
-- Short-form optimized
-- Strong hooks
-- Trend-friendly
-- Return ONLY JSON
-"""
+- Ideas must be SPECIFIC not generic
+- Mix educational, shocking, controversial, and aspirational angles
+- Each idea must be unique
+- Focus on what performs well on short-form video right now
+- Return exactly {count} ideas"""
 
     raw = _gemini_generate(
         prompt,
         temperature=0.9,
-        max_tokens=1500
+        max_tokens=3000,
     )
 
-    raw = _clean_json_response(raw)
+    raw = _clean_json(raw)
+
+    return json.loads(raw)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 5. GENERATE ALL + SAVE
+# ────────────────────────────────────────────────────────────────────────────
+def generate_all_content(script_data: dict, output_base: str = "output") -> dict:
+    """Run all content generation and save to JSON."""
+
+    results = {}
+
+    print("  🔖  Hashtags...")
 
     try:
-        return json.loads(raw)
+        results["hashtags"] = generate_hashtags(script_data)
 
     except Exception as e:
-        print("Trend Ideas JSON Parse Error:", e)
-        print(raw)
+        print(f"  ⚠️  Hashtags failed: {e}")
+        results["hashtags"] = {}
 
-        return {
-            "video_ideas": []
-        }
+    print("  📝  Captions...")
+
+    try:
+        results["captions"] = generate_captions(
+            script_data,
+            results["hashtags"]
+        )
+
+    except Exception as e:
+        print(f"  ⚠️  Captions failed: {e}")
+        results["captions"] = {}
+
+    print("  🖼️   Thumbnail HTML...")
+
+    try:
+        thumb_path = generate_thumbnail_html(
+            script_data,
+            output_path=f"{output_base}_thumbnail.html",
+        )
+
+        results["thumbnail_html"] = str(thumb_path)
+
+    except Exception as e:
+        print(f"  ⚠️  Thumbnail failed: {e}")
+        results["thumbnail_html"] = ""
+
+    print("  💡  Trend ideas...")
+
+    try:
+        results["trend_ideas"] = generate_trend_ideas(
+            script_data,
+            count=10
+        )
+
+    except Exception as e:
+        print(f"  ⚠️  Trend ideas failed: {e}")
+        results["trend_ideas"] = []
+
+    content_path = Path(f"{output_base}_content.json")
+
+    content_path.write_text(
+        json.dumps(results, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    print(f"  ✅  Content saved → {content_path.name}")
+
+    return results
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SAVE OUTPUTS
-# ─────────────────────────────────────────────────────────────────────────────
-def save_metadata(script_data: dict, output_dir: str = "output") -> dict:
-    """Generate and save all metadata."""
+# ────────────────────────────────────────────────────────────────────────────
+# 6. PRINT SUMMARY
+# ────────────────────────────────────────────────────────────────────────────
+def print_content_summary(results: dict):
+    """Print readable summary to console."""
 
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    print("\n" + "═" * 60)
+    print("  📦  CONTENT PACKAGE SUMMARY")
+    print("═" * 60)
 
-    hashtags = generate_hashtags(script_data)
-    captions = generate_captions(script_data)
-    thumbnails = generate_thumbnail_ideas(script_data)
-    trends = generate_trend_ideas(script_data)
+    h = results.get("hashtags", {})
 
-    final_data = {
-        "title": script_data.get("title", ""),
-        "hashtags": hashtags,
-        "captions": captions,
-        "thumbnail_ideas": thumbnails,
-        "trend_ideas": trends,
-    }
+    if h:
+        print("\n🔖  HASHTAGS:")
 
-    output_path = Path(output_dir) / "metadata.json"
+        for platform, tags in h.items():
+            preview = " ".join(tags[:4]) if tags else "—"
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(final_data, f, ensure_ascii=False, indent=2)
+            print(f"  {platform:<12} ({len(tags):>2}) : {preview}...")
 
-    print(f"Metadata saved to: {output_path}")
+    c = results.get("captions", {})
 
-    return final_data
+    if c:
+        print("\n📝  CAPTIONS:")
 
+        for key, val in c.items():
+            first_line = val.split("\n")[0][:90] if val else "—"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TEST
-# ─────────────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
+            print(f"\n  [{key.upper()}]")
+            print(f"  {first_line}...")
 
-    demo_script = {
-        "title": "كيف أصبحت هذه الشركة مليارية في سنة واحدة؟",
-        "full_script": """
-في أقل من سنة، تحولت هذه الشركة الصغيرة إلى إمبراطورية رقمية.
-السبب لم يكن الحظ...
-بل استراتيجية ذكية جعلت ملايين الناس يتحدثون عنها يوميًا.
-وهذا ما يمكنك تعلمه منها اليوم.
-"""
-    }
+    thumb = results.get("thumbnail_html", "")
 
-    result = save_metadata(demo_script)
+    if thumb:
+        print(f"\n🖼️   THUMBNAIL HTML: {Path(thumb).name}")
 
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    ideas = results.get("trend_ideas", [])
+
+    if ideas:
+        print(f"\n💡  TREND IDEAS ({len(ideas)}):")
+
+        for i, idea in enumerate(ideas, 1):
+            print(f"\n  {i:>2}. 🇬🇧 {idea.get('title_en','')}")
+            print(f"      🇸🇦 {idea.get('title_ar','')}")
+            print(f"      📈 {idea.get('why_viral','')}")
+
+            platform = idea.get('best_platform', '')
+            views    = idea.get('estimated_views', '')
+
+            print(f"      🎯 {platform}  |  👁️ {views}")
+
+    print("\n" + "═" * 60)
