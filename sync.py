@@ -1,6 +1,6 @@
 """
 Word sync using REAL audio duration measured by ffprobe.
-No estimation. No Whisper dependency.
+Whisper optional — duration sync always works.
 """
 
 import re
@@ -30,13 +30,19 @@ def get_audio_duration(audio_path: str) -> float:
 
 def get_word_timestamps(audio_path: str) -> list[dict]:
     """
-    Try Groq Whisper. Returns [] on any failure.
-    Caller must handle empty list gracefully.
+    Try Groq Whisper for word timestamps.
+    Returns [] on any failure — caller handles gracefully.
     """
     import os
+
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        print("  ℹ️  GROQ_API_KEY not set — skipping Whisper, using duration sync")
+        return []
+
     try:
         from groq import Groq
-        client = Groq(api_key=os.environ["GROQ_API_KEY"])
+        client = Groq(api_key=groq_key)
         apath  = Path(audio_path)
 
         print(f"  🎤 Whisper: {apath.name}")
@@ -50,7 +56,7 @@ def get_word_timestamps(audio_path: str) -> list[dict]:
 
         words = []
 
-        # Word-level
+        # Word-level timestamps
         raw = getattr(response, "words", None)
         if raw:
             for w in raw:
@@ -105,9 +111,7 @@ def build_word_timeline(
 ) -> tuple[list[dict], list[dict]]:
     """
     Build word timeline anchored to REAL audio duration.
-
-    total_duration MUST be the value from get_audio_duration(),
-    not an estimate. This is the single source of truth.
+    total_duration MUST come from get_audio_duration() — not estimated.
     """
     if not sentences:
         return [], []
@@ -122,7 +126,7 @@ def build_word_timeline(
         if result[0]:
             return result
 
-    # Always fall back to duration sync — it's the ground truth
+    # Always fall back to duration sync
     return _duration_sync(sentences, total_duration)
 
 
@@ -136,20 +140,19 @@ def _whisper_sync(
     total_duration: float,
 ) -> tuple[list[dict], list[dict]]:
     """
-    Use Whisper timestamps BUT scale them to real audio duration.
-    Whisper timestamps are relative to audio start — they may drift.
-    We rescale so the last timestamp aligns with total_duration.
+    Use Whisper timestamps scaled to real audio duration.
+    Scaling corrects any drift between Whisper time and actual audio.
     """
     if not ts_words:
         return [], []
 
-    # ── Scale Whisper timestamps to real duration ─────────────────────────────
+    # Scale Whisper timestamps to real duration
     whisper_end = ts_words[-1]["end"]
     if whisper_end <= 0:
         return [], []
 
     scale = total_duration / whisper_end
-    print(f"  📐 Whisper scale factor: {scale:.4f} "
+    print(f"  📐 Whisper scale: {scale:.4f}x "
           f"(whisper={whisper_end:.2f}s → real={total_duration:.2f}s)")
 
     scaled_ts = [
@@ -161,7 +164,7 @@ def _whisper_sync(
         for w in ts_words
     ]
 
-    # ── Match sentence words to scaled timestamps ─────────────────────────────
+    # Match sentence words to scaled timestamps
     flat      = []
     for s_idx, sentence in enumerate(sentences):
         for w_idx, word in enumerate(sentence.split()):
@@ -196,8 +199,11 @@ def _whisper_sync(
 
         matched.append(best)
 
-    # ── Quality check ─────────────────────────────────────────────────────────
-    exact   = sum(1 for i, fw in enumerate(flat) if fw["clean"] == ts_clean[matched[i]])
+    # Quality check
+    exact   = sum(
+        1 for i, fw in enumerate(flat)
+        if fw["clean"] == ts_clean[matched[i]]
+    )
     quality = exact / max(len(flat), 1) * 100
     print(f"  📊 Match quality: {quality:.0f}%")
 
@@ -205,7 +211,7 @@ def _whisper_sync(
         print(f"  ⚠️  Quality too low — switching to duration sync")
         return [], []
 
-    # ── Build word_times ──────────────────────────────────────────────────────
+    # Build word_times
     word_times = []
     for i, (fw, ts_idx) in enumerate(zip(flat, matched)):
         ts = scaled_ts[ts_idx]
@@ -226,15 +232,11 @@ def _duration_sync(
 ) -> tuple[list[dict], list[dict]]:
     """
     Distribute all words evenly across REAL audio duration.
-
-    This is the ground truth method:
-    - Uses actual audio duration (not estimated)
-    - Words are spaced equally → no drift, no accumulation error
-    - Small lead-in/lead-out to match TTS silence
+    Ground truth method — no drift, no accumulation error.
     """
-    LEAD_IN   = 0.20   # TTS silence at start
-    TRAIL_OUT = 0.20   # TTS silence at end
-    usable    = total_duration - LEAD_IN - TRAIL_OUT
+    LEAD_IN   = 0.20
+    TRAIL_OUT = 0.20
+    usable    = max(total_duration - LEAD_IN - TRAIL_OUT, total_duration * 0.85)
 
     total_words = sum(len(s.split()) for s in sentences)
     if total_words == 0:
@@ -259,7 +261,7 @@ def _duration_sync(
             })
             t += secs_per_word
 
-    print(f"  ✅ Duration sync: {len(word_times)} events built")
+    print(f"  ✅ Duration sync: {len(word_times)} events")
     return _build_output(sentences, word_times, total_duration)
 
 
@@ -268,7 +270,7 @@ def _build_output(
     word_times: list[dict],
     total_duration: float,
 ) -> tuple[list[dict], list[dict]]:
-    """Build aligned + timeline from word_times."""
+    """Build aligned sentences + timeline events from word_times."""
 
     # Aligned sentences
     aligned = []
@@ -305,7 +307,7 @@ def _build_output(
     ]
     word_timeline.sort(key=lambda x: x["time"])
 
-    # Print sample
+    # Debug sample
     for ev in word_timeline[:5]:
         s    = sentences[ev["sentence_idx"]]
         ws   = s.split()
