@@ -67,7 +67,7 @@ on:
           - neutral
 
       sfx_type:
-        description: "🔊 نوع المؤثر الصوتي عند الانتقال"
+        description: "🔊 مؤثر الانتقال بين الكليبات"
         required: true
         default: "swoosh"
         type: choice
@@ -76,7 +76,7 @@ on:
           - whoosh
 
       music_volume:
-        description: "🎵 مستوى صوت الموسيقى (0.08 هادئ — 0.18 قوي)"
+        description: "🎵 مستوى صوت الموسيقى (0.08=هادئ | 0.12=متوسط | 0.18=قوي)"
         required: true
         default: "0.12"
         type: string
@@ -192,7 +192,6 @@ jobs:
 
       - name: 🎬 Run generator
         env:
-          GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
           GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: |
@@ -215,8 +214,8 @@ jobs:
             --tone         "${{ inputs.tone }}" \
             --voice-en     "${{ inputs.voice_en }}" \
             --voice-ar     "${{ inputs.voice_ar }}" \
-            --sfx-type     "${{ inputs.sfx_type }}" \
             --music-volume "${{ inputs.music_volume }}" \
+            --sfx-type     "${{ inputs.sfx_type }}" \
             --output       output \
             $FLAGS
 
@@ -250,7 +249,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: audio-${{ github.run_number }}
-          path: output_*_audio_*.wav
+          path: |
+            output_en_audio_mixed.aac
+            output_ar_audio_mixed.aac
+            output_en_voice_*.wav
+            output_ar_voice_*.wav
           retention-days: 7
 
       - name: 📤 Upload content package
