@@ -1,6 +1,6 @@
 """
 Text-to-Speech via Google Gemini 2.5 Flash TTS.
-Includes retry logic and audio completeness verification.
+Includes multi-API key rotation logic and audio completeness verification.
 """
 import mimetypes
 import os
@@ -11,6 +11,7 @@ from pathlib import Path
 
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 
 VOICES = {
     "male_smooth":  "Orus",
@@ -33,7 +34,48 @@ TONE_STYLES = {
     "provocative":   "Bold, slightly intense. Makes you stop and think.",
 }
 
-MIN_DURATION_S = 10.0   # Warn if audio shorter than this
+# 🛠️ تم تعديلها من 10.0 إلى 2.0 لأن نصوصك قصيرة وتسبب إعادات برمجية مستمرة
+MIN_DURATION_S = 2.0   
+
+
+# 🌐 نظام إدارة وتدوير مفاتيح الـ API
+def _get_api_keys() -> list[str]:
+    """تجميع وتصفية مفاتيح جيميناي المتاحة في ملف الـ .env"""
+    keys = [
+        os.getenv("GEMINI_API_KEY"),
+        os.getenv("GEMINI_API_KEY_1"),
+        os.getenv("GEMINI_API_KEY_2"),
+        os.getenv("GEMINI_API_KEY_3")
+    ]
+    return [k for k in keys if k]
+
+# متغيرات عالمية لإدارة الفهرس الحالي للمفاتيح
+API_KEYS = _get_api_keys()
+current_key_index = 0
+
+
+def _get_genai_client() -> genai.Client:
+    """إنشاء عميل جيميناي باستخدام المفتاح النشط حالياً"""
+    global current_key_index
+    if not API_KEYS:
+        # حل احتياطي في حال لم يقرأ الـ env بشكل صحيح
+        fallback_key = os.getenv("GEMINI_API_KEY")
+        if not fallback_key:
+            raise RuntimeError("❌ No GEMINI_API_KEY found in environment variables!")
+        return genai.Client(api_key=fallback_key)
+    
+    return genai.Client(api_key=API_KEYS[current_key_index])
+
+
+def _rotate_api_key():
+    """الانتقال التلقائي للمفتاح التالي عند نفاذ حصة الحالي"""
+    global current_key_index
+    if len(API_KEYS) <= 1:
+        print("⚠️ No alternative Gemini API keys found to rotate.")
+        return
+
+    current_key_index = (current_key_index + 1) % len(API_KEYS)
+    print(f"🔄 [API ROTATION] Key slot changed to index #{current_key_index}")
 
 
 def _build_prompt(script: str, tone: str) -> str:
@@ -70,13 +112,16 @@ def synthesize_speech(
     tone: str = "energetic",
     retries: int = 3,
 ) -> Path:
-    client     = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
     voice_name = VOICES.get(voice_key, "Orus")
     prompt     = _build_prompt(script, tone)
     expected_words = len(script.split())
+    
+    attempt = 0
+    # الحد الأقصى للمحاولات الكلية يرتفع تلقائياً بناءً على عدد المفاتيح لديك لضمان نجاح العملية
+    max_total_attempts = max(retries, len(API_KEYS) * 2) 
 
-    for attempt in range(retries):
-        print(f"  🎙️  TTS [{attempt+1}/{retries}] voice={voice_name} | {expected_words} words")
+    while attempt < max_total_attempts:
+        print(f"  🎙️  TTS [Attempt {attempt+1}/{max_total_attempts}] voice={voice_name} | Key Index={current_key_index}")
 
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
         config   = types.GenerateContentConfig(
@@ -90,6 +135,8 @@ def synthesize_speech(
         )
 
         try:
+            # استدعاء وبناء العميل بالمفتاح الحالي
+            client = _get_genai_client()
             audio_chunks: list[tuple[bytes, str]] = []
 
             for chunk in client.models.generate_content_stream(
@@ -103,7 +150,7 @@ def synthesize_speech(
             if not audio_chunks:
                 raise RuntimeError("TTS returned no audio data")
 
-            # Save first chunk
+            # حفظ المقاطع الصوتية
             data, mime = audio_chunks[0]
             ext  = mimetypes.guess_extension(mime)
             if ext is None:
@@ -114,33 +161,47 @@ def synthesize_speech(
             Path(file_name).write_bytes(data)
             saved = Path(file_name)
 
-            # Verify completeness
+            # فحص صحة الملف وطوله زمنياً
             duration = _get_duration(str(saved))
-            print(f"  ✅ Audio: {saved.name} ({duration:.1f}s)")
+            print(f"  ✅ Audio Check: {saved.name} ({duration:.1f}s)")
 
             if duration < MIN_DURATION_S:
                 print(f"  ⚠️  Audio too short ({duration:.1f}s) — retrying...")
                 saved.unlink(missing_ok=True)
-                time.sleep(2 ** attempt)
+                attempt += 1
+                time.sleep(1)
                 continue
 
-            # Quality gate: ~100 wpm minimum
+            # فحص جودة سرعة الإلقاء التقديرية
             min_expected = (expected_words / 200) * 60
-            if duration < min_expected * 0.6:
+            if duration < min_expected * 0.5:
                 print(f"  ⚠️  Likely truncated (expected ≥{min_expected:.0f}s, got {duration:.1f}s)")
-                if attempt < retries - 1:
-                    saved.unlink(missing_ok=True)
-                    time.sleep(2 ** attempt)
-                    continue
+                saved.unlink(missing_ok=True)
+                attempt += 1
+                time.sleep(1)
+                continue
 
+            # تم التوليد بنجاح! يتم إرجاع الملف فوراً للحفاظ على التقدم
             return saved
 
+        except APIError as e:
+            # 🛑 اقتناص أخطاء جيميناي الرسمية وتحديداً خطأ الـ Quota 429
+            if e.code == 429 or "RESOURCE_EXHAUSTED" in str(e):
+                print(f"  🛑 Key #{current_key_index} hit Rate Limit (429 RESOURCE_EXHAUSTED).")
+                _rotate_api_key()
+                print("  ⚡ Switched key context. Retrying immediately without data loss...")
+            else:
+                print(f"  ⚠️  Gemini API Error: {e}")
+            
+            attempt += 1
+            time.sleep(1)
+            
         except Exception as e:
-            print(f"  ⚠️  TTS error: {e}")
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
+            print(f"  ⚠️  Unexpected TTS error: {e}")
+            attempt += 1
+            time.sleep(1)
 
-    raise RuntimeError(f"TTS failed after {retries} attempts")
+    raise RuntimeError(f"TTS failed completely after exhausting keys and {max_total_attempts} total attempts.")
 
 
 def _save(path: str, data: bytes) -> None:
