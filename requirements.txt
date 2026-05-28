@@ -1,3 +1,5 @@
 google-genai
+groq
 requests
 playwright
+openpyxl
