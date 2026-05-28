@@ -1,423 +1,575 @@
 #!/usr/bin/env python3
 """
-Video Script Generator
-Gemini for script + TTS | Pixabay videos | Local music + SFX
-Produces EN + AR synced videos + Content Package
+🎬 Motivational Video Generator
+Reads EN + AR scripts from Excel/CSV → produces synced videos.
+
+Key features:
+  - Resume: skips already-done renders via SQLite
+  - Parallel: EN + AR rendered simultaneously (ThreadPoolExecutor)
+  - SRT: sentence + word-level subtitles auto-generated
+  - Formats: 9:16 base + 1:1 + 16:9 exports
+  - Sources: Local videos → Pexels → Pixabay → fallback
+  - A/B: optional variant with verbal_hook as opening
 """
 
 import argparse
 import json
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from generate import (
-    generate_script, enforce_duration,
-    print_script, CONTENT_TYPES, TONES,
-)
-from translate import translate_script
-from tts import synthesize_speech, VOICES
-from pixabay import fetch_videos_for_script
-from content import generate_all_content, print_content_summary
-from thumbnail import render_thumbnail
-from sync import (
-    get_audio_duration,
-    get_word_timestamps,
-    build_word_timeline,
-    _duration_sync,
-)
+from db            import (init_db, is_render_done, get_render_output,
+                            mark_render_start, mark_render_done, mark_render_failed,
+                            save_script_meta, print_db_summary)
+from script_reader import (read_scripts, validate_scripts, split_into_sentences,
+                            print_scripts_summary)
+from keywords      import get_keywords_for_sentences
+from tts           import synthesize_speech, VOICES
+from video_sources import fetch_videos_for_script
+from srt           import generate_srt, generate_word_srt
+from export        import export_all
+from thumb_gen     import generate_thumbnail_html
+from thumbnail     import render_thumbnail
+from sync          import (get_audio_duration, get_word_timestamps,
+                            build_word_timeline, _duration_sync)
 from audio_manager import mix_voice_music_sfx
 
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="🎬 Idea → EN + AR Synced Video + Content",
-        formatter_class=argparse.RawTextHelpFormatter,
-    )
-    parser.add_argument("idea", type=str)
-    parser.add_argument(
-        "--content-type", type=str, default="motivational",
-        choices=list(CONTENT_TYPES.keys()),
-    )
-    parser.add_argument(
-        "--tone", type=str, default="energetic",
-        choices=list(TONES.keys()),
-    )
-    parser.add_argument(
-        "--voice-en", type=str, default="male_smooth",
-        choices=list(VOICES.keys()),
-    )
-    parser.add_argument(
-        "--voice-ar", type=str, default="female_warm",
-        choices=list(VOICES.keys()),
-    )
-    parser.add_argument("--output", type=str, default="output")
-    parser.add_argument(
-        "--music-volume", type=float, default=0.12,
-        help="Background music volume 0.0-1.0 (default: 0.12)",
-    )
-    parser.add_argument(
-        "--sfx-type", type=str, default="swoosh",
-        choices=["swoosh", "whoosh"],
-        help="SFX type for transitions",
-    )
-    parser.add_argument("--script-only",  action="store_true")
-    parser.add_argument("--no-video",     action="store_true")
-    parser.add_argument("--content-only", action="store_true")
-    return parser.parse_args()
+CONTENT_TYPE = "motivational"
+WPM          = 150.0
+MIN_S        = 30
+MAX_S        = 80
 
 
-# ── Save manifest ─────────────────────────────────────────────────────────────
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="🎬 Motivational Video Generator")
+    p.add_argument("input_file",      type=str, help="Excel/CSV with scripts")
+    p.add_argument("--voice-en",      type=str, default="male_smooth",  choices=list(VOICES.keys()))
+    p.add_argument("--voice-ar",      type=str, default="female_warm",  choices=list(VOICES.keys()))
+    p.add_argument("--tone",          type=str, default="energetic",
+                   choices=["energetic","inspirational","emotional","calm"])
+    p.add_argument("--music-volume",  type=float, default=0.12)
+    p.add_argument("--sfx-type",      type=str, default="swoosh", choices=["swoosh","whoosh"])
+    p.add_argument("--output-dir",    type=str, default="output")
+    p.add_argument("--video-number",  type=str, default=None,
+                   help="Process only this video number")
+    p.add_argument("--formats",       type=str, default="1x1,16x9",
+                   help="Additional export formats: 1x1,16x9,4x5")
+    p.add_argument("--script-only",   action="store_true",
+                   help="Print scripts only — no TTS or video")
+    p.add_argument("--no-video",      action="store_true",
+                   help="TTS + audio mix only — skip video render")
+    p.add_argument("--force",         action="store_true",
+                   help="Re-render even if already done")
+    p.add_argument("--ab-test",       action="store_true",
+                   help="Generate variant B with verbal_hook as opening")
+    p.add_argument("--no-export",     action="store_true",
+                   help="Skip additional format exports (faster)")
+    return p.parse_args()
+
+
+# ── Script data builder ───────────────────────────────────────────────────────
+
+def _estimate(text: str) -> int:
+    return max(MIN_S, min(MAX_S, int(len(text.split()) / (WPM / 60))))
+
+
+def build_script_data(
+    record: dict,
+    lang: str,
+    keywords: list[list[str]],
+    tone: str,
+    hook_prefix: str = "",
+) -> dict:
+    content   = record["en_content"] if lang == "en" else record["ar_content"]
+    sentences = split_into_sentences(content, lang=lang)
+
+    if not sentences:
+        raise ValueError(f"No sentences in {lang.upper()} for #{record['number']}")
+
+    if hook_prefix.strip():
+        sentences = [hook_prefix.strip()] + sentences
+        content   = hook_prefix.strip() + " " + content
+
+    kws = (keywords[:len(sentences)] +
+           [["person motivational", "success achievement", "goal focus"]] * len(sentences))[:len(sentences)]
+
+    return {
+        "title":             record["title"],
+        "hook":              sentences[0],
+        "full_script":       content,
+        "sentences":         sentences,
+        "keywords":          kws,
+        "estimated_seconds": _estimate(content),
+        "word_count":        len(content.split()),
+        "tone":              tone,
+        "content_type":      CONTENT_TYPE,
+        "lang":              lang,
+    }
+
+
+# ── Manifest ──────────────────────────────────────────────────────────────────
+
 def save_manifest(
     script_data: dict,
     video_paths: list,
     audio_path,
     out: str,
-    word_timeline: list = None,
+    timeline: list = None,
     aligned: list = None,
     real_duration: float = None,
 ) -> Path:
-    duration = real_duration or float(script_data["estimated_seconds"])
     manifest = {
         "title":         script_data["title"],
         "sentences":     script_data["sentences"],
         "keywords":      script_data["keywords"],
         "audio":         str(Path(str(audio_path)).resolve()),
         "videos":        [str(Path(str(p)).resolve()) for p in video_paths],
-        "duration_s":    duration,
+        "duration_s":    real_duration or float(script_data["estimated_seconds"]),
         "lang":          script_data.get("lang", "en"),
-        "content_type":  script_data.get("content_type", "motivational"),
-        "word_timeline": word_timeline or [],
+        "content_type":  CONTENT_TYPE,
+        "word_timeline": timeline or [],
         "aligned":       aligned or [],
     }
     path = Path(f"{out}_manifest.json").resolve()
-    path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    print(f"📋  Manifest → {path.name} (duration={duration:.2f}s)")
+    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
 
-# ── Render video ──────────────────────────────────────────────────────────────
-def render_video(manifest_path: Path, output: str) -> Path:
-    out_file      = Path(output + "_final.mp4").resolve()
-    render_script = Path("remotion/render.mjs").resolve()
-
-    cmd = ["node", str(render_script), str(manifest_path), str(out_file)]
-    print(f"🔧  Rendering → {out_file.name}")
-
-    result = subprocess.run(
-        cmd, text=True,
-        stderr=subprocess.STDOUT,
-        stdout=subprocess.PIPE,
+def _render_node(manifest_path: Path, output_base: str) -> Path:
+    out    = Path(output_base + "_final.mp4").resolve()
+    script = Path("remotion/render.mjs").resolve()
+    print(f"  🔧 Rendering → {out.name}")
+    r = subprocess.run(
+        ["node", str(script), str(manifest_path), str(out)],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
-    print(result.stdout)
-
-    if result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
-
-    print(f"🎉  Video → {out_file.name}")
-    return out_file
+    if r.returncode != 0:
+        raise RuntimeError(f"Node render failed:\n{r.stdout[-600:]}")
+    print(f"  🎉 Done → {out.name}")
+    return out
 
 
-# ── Produce one version ───────────────────────────────────────────────────────
-def produce_version(
+# ── Audio pipeline ────────────────────────────────────────────────────────────
+
+def produce_audio(
     script_data: dict,
     voice_key: str,
     output_base: str,
-    video_paths: list,
-    label: str,
-    music_volume: float = 0.12,
-    sfx_type: str = "swoosh",
-) -> Path:
-    print(f"\n{'═' * 58}")
-    print(f"  {label}")
-    print(f"{'═' * 58}")
-    print(f"  Title    : {script_data['title']}")
-    print(f"  Language : {script_data.get('lang', 'en').upper()}")
-    print(f"  Voice    : {voice_key}")
-    print(f"  Sentences: {len(script_data['sentences'])}")
+    music_volume: float,
+    sfx_type: str,
+) -> tuple[Path, float, list, list]:
+    sentences = script_data["sentences"]
+    lang_tag  = script_data.get("lang", "en").upper()
 
-    # ── A: TTS ────────────────────────────────────────────────────────────────
-    print(f"\n🎙️   Synthesizing speech...")
-    raw_audio = synthesize_speech(
+    # TTS
+    print(f"\n  🎙️  {lang_tag} TTS  (voice={voice_key}, {len(sentences)} sentences)")
+    synthesize_speech(
         script=script_data["full_script"],
         output_path=f"{output_base}_voice",
         voice_key=voice_key,
         tone=script_data.get("tone", "energetic"),
     )
 
-    # ── B: Measure REAL audio duration ───────────────────────────────────────
+    # Find WAV
     wav_candidates = (
-        list(Path(".").glob(f"{output_base}_voice_*.wav")) +
-        list(Path(".").glob(f"{output_base}_voice*.wav"))
+        sorted(Path(".").glob(f"{output_base}_voice_*.wav")) +
+        sorted(Path(".").glob(f"{output_base}_voice*.wav"))
     )
+    real_dur  = float(script_data["estimated_seconds"])
+    wav_path  = str(wav_candidates[0]) if wav_candidates else None
 
-    real_duration = float(script_data["estimated_seconds"])
-    wav_path      = None
-
-    if wav_candidates:
-        wav_path      = str(wav_candidates[0])
-        measured      = get_audio_duration(wav_path)
+    if wav_path:
+        measured = get_audio_duration(wav_path)
         if measured >= 5:
-            real_duration = measured
-            print(f"  ✅ Real duration: {real_duration:.3f}s")
-        else:
-            print(f"  ⚠️  Audio too short ({measured:.1f}s) — using estimated")
-    else:
-        print(f"  ⚠️  No WAV found — using estimated")
+            real_dur = measured
 
-    # ── C: Mix voice + music + SFX ────────────────────────────────────────────
-    print(f"\n🎚️   Mixing audio (music + SFX)...")
-    sentences      = script_data["sentences"]
-    clip_durations = [real_duration / len(sentences)] * len(sentences)
-    content_type   = script_data.get("content_type", "motivational")
+    # Mix voice + music + SFX
+    print(f"  🎚️  Mixing  (music={music_volume}, sfx={sfx_type})")
+    clip_dur = [real_dur / len(sentences)] * len(sentences)
+    mixed    = f"{output_base}_audio_mixed.aac"
 
-    mixed_audio_path = f"{output_base}_audio_mixed.aac"
     try:
         final_audio = mix_voice_music_sfx(
-            voice_path=wav_path or str(raw_audio),
-            content_type=content_type,
-            output_path=mixed_audio_path,
-            clip_durations=clip_durations,
+            voice_path=wav_path or f"{output_base}_voice_0.wav",
+            content_type=CONTENT_TYPE,
+            output_path=mixed,
+            clip_durations=clip_dur,
             sfx_type=sfx_type,
             music_volume=music_volume,
             seed=hash(script_data["title"]) % 10000,
         )
-        # Re-measure final audio duration
-        final_duration = get_audio_duration(str(final_audio))
-        if final_duration >= 5:
-            real_duration = final_duration
+        dur = get_audio_duration(str(final_audio))
+        if dur >= 5:
+            real_dur = dur
         audio_path = final_audio
     except Exception as e:
-        print(f"  ⚠️  Audio mix error: {e} — using raw voice")
-        audio_path = raw_audio
+        print(f"  ⚠️  Mix error: {e} — using raw voice")
+        audio_path = Path(wav_path or f"{output_base}_voice_0.wav")
 
-    # ── D: Build word sync timeline ───────────────────────────────────────────
-    word_timeline = []
-    aligned       = []
-
-    print(f"\n🔄  Building word sync ({real_duration:.3f}s)...")
+    # Word sync
+    timeline, aligned = [], []
     try:
-        word_ts = []
-        if wav_path:
-            word_ts = get_word_timestamps(wav_path)
-
-        word_timeline, aligned = build_word_timeline(
-            sentences=sentences,
-            word_timestamps=word_ts,
-            total_duration=real_duration,
-        )
-        print(f"  ✅ {len(word_timeline)} sync events")
-    except Exception as e:
-        print(f"  ⚠️  Sync error: {e}")
+        word_ts = get_word_timestamps(wav_path) if wav_path else []
+        timeline, aligned = build_word_timeline(sentences, word_ts, real_dur)
+    except Exception:
         try:
-            word_timeline, aligned = _duration_sync(
-                sentences=sentences,
-                total_duration=real_duration,
-            )
-        except Exception as e2:
-            print(f"  ⚠️  Fallback sync error: {e2}")
+            timeline, aligned = _duration_sync(sentences, real_dur)
+        except Exception:
+            pass
 
-    # ── E: Save manifest ──────────────────────────────────────────────────────
-    manifest_path = save_manifest(
-        script_data=script_data,
+    return audio_path, real_dur, timeline, aligned
+
+
+# ── Full version pipeline ─────────────────────────────────────────────────────
+
+def produce_version(
+    *,
+    script_data: dict,
+    voice_key: str,
+    output_base: str,
+    video_paths: list,
+    label: str,
+    music_volume: float,
+    sfx_type: str,
+    export_formats: list[str],
+    video_number: str,
+    lang: str,
+    force: bool = False,
+) -> dict:
+    """
+    Full pipeline for one language. Returns dict with output paths.
+    Thread-safe (each call uses unique output_base).
+    """
+    result = {"label": label, "final": None, "srt": None, "word_srt": None, "exports": {}}
+
+    # Resume check
+    if not force and is_render_done(video_number, lang):
+        existing = get_render_output(video_number, lang)
+        print(f"  ⏭️  {label} already done → {Path(existing).name}")
+        result["final"] = Path(existing)
+        return result
+
+    mark_render_start(video_number, lang)
+
+    try:
+        audio_path, real_dur, timeline, aligned = produce_audio(
+            script_data=script_data,
+            voice_key=voice_key,
+            output_base=output_base,
+            music_volume=music_volume,
+            sfx_type=sfx_type,
+        )
+
+        manifest = save_manifest(
+            script_data=script_data,
+            video_paths=video_paths,
+            audio_path=audio_path,
+            out=output_base,
+            timeline=timeline,
+            aligned=aligned,
+            real_duration=real_dur,
+        )
+
+        final_video = _render_node(manifest, output_base)
+
+        # SRT subtitles
+        if aligned:
+            result["srt"]      = generate_srt(aligned, f"{output_base}.srt")
+            result["word_srt"] = generate_word_srt(aligned, f"{output_base}_words.srt")
+
+        # Additional format exports
+        if export_formats:
+            result["exports"] = export_all(str(final_video), output_base, export_formats)
+
+        mark_render_done(video_number, lang, str(final_video), real_dur)
+        result["final"] = final_video
+
+    except Exception as e:
+        mark_render_failed(video_number, lang, str(e))
+        raise
+
+    return result
+
+
+# ── Process one video record ──────────────────────────────────────────────────
+
+def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
+    num   = record["number"]
+    title = record["title"]
+
+    print(f"\n{'═'*62}")
+    print(f"  🎬  Video #{num}:  {title}")
+    print(f"{'═'*62}")
+
+    out_base       = str(Path(out_dir) / f"video_{num}")
+    export_formats = [] if args.no_export else [f.strip() for f in args.formats.split(",") if f.strip()]
+
+    # Validate
+    if not record["en_content"].strip():
+        print(f"  ❌ No English content — skipping")
+        return
+
+    en_sentences = split_into_sentences(record["en_content"], "en")
+    ar_sentences = split_into_sentences(record["ar_content"], "ar") if record["ar_content"].strip() else []
+
+    if not en_sentences:
+        print(f"  ❌ Could not parse English sentences — skipping")
+        return
+
+    print(f"  📝 EN: {len(en_sentences)} sentences  |  AR: {len(ar_sentences)} sentences")
+
+    # Show content strategy (if available)
+    hooks = {k: record.get(k, "") for k in ["verbal_hook","visual_hook","written_hook","value"]}
+    funnel = {k: record.get(k, "") for k in ["tofu","mofu","bofu"]}
+    if any(hooks.values()):
+        print(f"\n  📊 Content Strategy:")
+        for k, v in hooks.items():
+            if v:
+                print(f"     {k}: {v[:75]}")
+    if any(funnel.values()):
+        for k, v in funnel.items():
+            if v:
+                print(f"     {k.upper()}: {v[:70]}")
+
+    # Keywords via Groq
+    print(f"\n  🔑 Fetching keywords (Groq)...")
+    try:
+        keywords = get_keywords_for_sentences(en_sentences, title)
+    except Exception as e:
+        print(f"  ⚠️  Keywords error: {e} — using fallback")
+        keywords = [["person motivational","success achievement","goal focus"]] * len(en_sentences)
+
+    # Build script data
+    try:
+        en_data = build_script_data(record, "en", keywords, args.tone)
+    except ValueError as e:
+        print(f"  ❌ {e}")
+        return
+
+    ar_data = None
+    if ar_sentences:
+        ar_kws = keywords[:len(ar_sentences)]
+        try:
+            ar_data = build_script_data(record, "ar", ar_kws, args.tone)
+        except ValueError as e:
+            print(f"  ⚠️  AR: {e}")
+
+    # A/B variant (verbal_hook as opening)
+    ab_data = None
+    if args.ab_test and record.get("verbal_hook", "").strip():
+        try:
+            ab_data = build_script_data(
+                record, "en", keywords, args.tone,
+                hook_prefix=record["verbal_hook"],
+            )
+            print(f"  🔀 A/B variant: verbal hook as opener")
+        except Exception as e:
+            print(f"  ⚠️  A/B build failed: {e}")
+
+    save_script_meta(num, title, en_data, ar_data)
+
+    # ── Script-only mode ──────────────────────────────────────────────────────
+    if args.script_only:
+        print(f"\n  🇬🇧  English:")
+        for i, s in enumerate(en_sentences, 1):
+            kw = " | ".join(keywords[i-1]) if i <= len(keywords) else ""
+            print(f"    {i:>2}. {s}")
+            print(f"        🔑 {kw}")
+        if ar_sentences:
+            print(f"\n  🇸🇦  Arabic:")
+            for i, s in enumerate(ar_sentences, 1):
+                print(f"    {i:>2}. {s}")
+        return
+
+    # ── Fetch videos (shared across all language versions) ────────────────────
+    print(f"\n  📹 Fetching stock videos...")
+    clip_dur  = [en_data["estimated_seconds"] / len(en_sentences)] * len(en_sentences)
+    vid_dir   = str(Path(out_dir) / f"videos_{num}")
+
+    try:
+        video_paths = fetch_videos_for_script(
+            keywords_per_sentence=keywords,
+            clip_durations=clip_dur,
+            output_dir=vid_dir,
+        )
+    except Exception as e:
+        print(f"  ❌ Video fetch failed: {e}")
+        return
+
+    # ── Audio-only mode ───────────────────────────────────────────────────────
+    if args.no_video:
+        for ld, voice, suffix in [
+            (en_data, args.voice_en, "en"),
+            *([(ar_data, args.voice_ar, "ar")] if ar_data else []),
+        ]:
+            print(f"\n  🎵 {suffix.upper()} audio only...")
+            try:
+                produce_audio(ld, voice, f"{out_base}_{suffix}",
+                              args.music_volume, args.sfx_type)
+            except Exception as e:
+                print(f"  ❌ {suffix} audio: {e}")
+        return
+
+    # ── Thumbnail ─────────────────────────────────────────────────────────────
+    hook_for_thumb = record.get("written_hook") or record.get("verbal_hook") or en_data["hook"]
+    try:
+        html_path = generate_thumbnail_html(
+            title=title, hook=hook_for_thumb,
+            tone=args.tone, output_path=f"{out_base}_thumbnail.html",
+        )
+        render_thumbnail(html_path=str(html_path), output_png=f"{out_base}_thumbnail.png")
+    except Exception as e:
+        print(f"  ⚠️  Thumbnail: {e}")
+
+    # ── Build render version list ─────────────────────────────────────────────
+    versions = [
+        dict(script_data=en_data, voice_key=args.voice_en,
+             output_base=f"{out_base}_en", label="🇬🇧 English",
+             lang="en"),
+    ]
+    if ar_data:
+        versions.append(dict(
+            script_data=ar_data, voice_key=args.voice_ar,
+            output_base=f"{out_base}_ar", label="🇸🇦 Arabic",
+            lang="ar",
+        ))
+    if ab_data:
+        versions.append(dict(
+            script_data=ab_data, voice_key=args.voice_en,
+            output_base=f"{out_base}_en_b", label="🔀 English B (A/B)",
+            lang="en_b",
+        ))
+
+    # Shared kwargs
+    shared = dict(
         video_paths=video_paths,
-        audio_path=audio_path,
-        out=output_base,
-        word_timeline=word_timeline,
-        aligned=aligned,
-        real_duration=real_duration,
+        music_volume=args.music_volume,
+        sfx_type=args.sfx_type,
+        export_formats=export_formats,
+        video_number=num,
+        force=args.force,
     )
 
-    # ── F: Render ─────────────────────────────────────────────────────────────
-    return render_video(manifest_path, output_base)
+    # ── Parallel render ───────────────────────────────────────────────────────
+    print(f"\n  📽️  Rendering {len(versions)} version(s) in parallel...")
+    outputs: dict[str, dict] = {}
+
+    with ThreadPoolExecutor(max_workers=len(versions)) as pool:
+        future_map = {
+            pool.submit(produce_version, **v, **shared): v["lang"]
+            for v in versions
+        }
+        for future in as_completed(future_map):
+            lang_key = future_map[future]
+            try:
+                res = future.result()
+                outputs[lang_key] = res
+            except Exception as e:
+                print(f"\n  ❌ {lang_key.upper()} render failed: {e}")
+                outputs[lang_key] = {"error": str(e)}
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    print(f"\n  {'─'*50}")
+    print(f"  📦  Video #{num} — {title}")
+    for lang_key, res in outputs.items():
+        if res.get("final"):
+            f    = res["final"]
+            mb   = f.stat().st_size / 1_048_576 if f.exists() else 0
+            print(f"     ✅ {lang_key.upper():6} → {f.name}  ({mb:.1f} MB)")
+            if res.get("srt"):
+                print(f"        📄 SRT: {res['srt'].name}")
+            for fmt, fpath in res.get("exports", {}).items():
+                print(f"        📦 {fmt}: {fpath.name}")
+        elif res.get("error"):
+            print(f"     ❌ {lang_key.upper():6} → FAILED: {res['error'][:60]}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-def main():
-    args     = parse_args()
-    ct_label = CONTENT_TYPES.get(args.content_type, {}).get("label", args.content_type)
 
-    print(f"\n{'═' * 58}")
-    print(f"  🚀  Video Script Generator (Gemini)")
-    print(f"{'═' * 58}")
-    print(f"  Idea         : {args.idea}")
-    print(f"  Content Type : {ct_label}")
-    print(f"  Tone         : {args.tone}")
-    print(f"  Voice EN     : {args.voice_en}")
-    print(f"  Voice AR     : {args.voice_ar}")
-    print(f"  Music Vol    : {args.music_volume}")
-    print(f"  SFX Type     : {args.sfx_type}")
+def main() -> None:
+    args = parse_args()
+
+    # Init DB
+    init_db()
+
+    print(f"\n{'═'*62}")
+    print(f"  🚀  Motivational Video Generator")
+    print(f"{'═'*62}")
+    print(f"  Input      : {args.input_file}")
+    print(f"  Voice EN   : {args.voice_en}  |  Voice AR: {args.voice_ar}")
+    print(f"  Tone       : {args.tone}")
+    print(f"  Music Vol  : {args.music_volume}  |  SFX: {args.sfx_type}")
+    print(f"  Output Dir : {args.output_dir}")
+    print(f"  Formats    : {args.formats}")
+    print(f"  A/B Test   : {args.ab_test}  |  Force: {args.force}")
     print()
+    print_db_summary()
 
-    # ── Step 1: English script via Gemini ────────────────────────────────────
-    print("📝  Generating script (Gemini)...")
+    # Read + validate scripts
+    print(f"\n📖  Reading scripts...")
     try:
-        en_data = generate_script(
-            idea=args.idea,
-            tone=args.tone,
-            content_type=args.content_type,
-        )
-        en_data = enforce_duration(
-            en_data,
-            idea=args.idea,
-            tone=args.tone,
-            content_type=args.content_type,
-        )
-        en_data["lang"] = "en"
+        all_scripts = read_scripts(args.input_file)
     except Exception as e:
-        print(f"❌  Script generation failed: {e}")
+        print(f"❌  Cannot read file: {e}")
         sys.exit(1)
 
-    print_script(en_data)
+    valid, errors = validate_scripts(all_scripts)
+    if errors:
+        print(f"\n⚠️  Validation warnings:")
+        for err in errors:
+            print(err)
 
-    # ── Step 2: Arabic translation ────────────────────────────────────────────
-    print("🔄  Translating to Arabic...")
-    try:
-        ar_data = translate_script(en_data, target_lang="ar")
-        ar_data["tone"]              = en_data["tone"]
-        ar_data["estimated_seconds"] = en_data["estimated_seconds"]
-        ar_data["word_count"]        = len(ar_data["full_script"].split())
-        ar_data["lang"]              = "ar"
-        ar_data["keywords"]          = en_data["keywords"]
-        ar_data["content_type"]      = en_data["content_type"]
-        print(f"✅  Arabic: {ar_data['title']} ({len(ar_data['sentences'])} sentences)")
-    except Exception as e:
-        print(f"❌  Translation failed: {e}")
+    if not valid:
+        print("❌  No valid scripts found")
         sys.exit(1)
 
-    # ── Script-only ───────────────────────────────────────────────────────────
-    if args.script_only:
-        print(f"\n🇬🇧  English ({ct_label}):")
-        for i, s in enumerate(en_data["sentences"], 1):
-            print(f"  {i:>2}. {s}")
-        print(f"\n🇸🇦  Arabic:")
-        for i, s in enumerate(ar_data["sentences"], 1):
-            print(f"  {i:>2}. {s}")
-        return
+    print_scripts_summary(valid)
 
-    # ── Content-only ──────────────────────────────────────────────────────────
-    if args.content_only:
-        print("\n📦  Content package only...")
+    # Filter by video number
+    if args.video_number:
+        valid = [s for s in valid if str(s["number"]) == str(args.video_number)]
+        if not valid:
+            print(f"❌  Video #{args.video_number} not found")
+            sys.exit(1)
+        print(f"  🎯 Processing only video #{args.video_number}")
+
+    # Create output dir
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Process each video
+    success = failed = skipped = 0
+
+    for i, record in enumerate(valid, 1):
+        print(f"\n[{i}/{len(valid)}]")
+
+        # Quick resume check
+        en_done = is_render_done(record["number"], "en") and not args.force
+        ar_done = (is_render_done(record["number"], "ar") or not record["ar_content"]) and not args.force
+
+        if en_done and ar_done:
+            print(f"  ⏭️  Video #{record['number']} already complete — skipping")
+            skipped += 1
+            continue
+
         try:
-            content = generate_all_content(en_data, output_base=args.output)
-            print_content_summary(content)
-            render_thumbnail(
-                html_path=f"{args.output}_thumbnail.html",
-                output_png=f"{args.output}_thumbnail.png",
-            )
+            process_video(record, args, args.output_dir)
+            success += 1
+        except KeyboardInterrupt:
+            print("\n⛔  Interrupted")
+            break
         except Exception as e:
-            print(f"⚠️  Content warning: {e}")
-        return
+            print(f"  ❌  Unexpected error: {e}")
+            failed += 1
 
-    # ── Step 3: Fetch videos ──────────────────────────────────────────────────
-    print(f"\n📹  Fetching videos...")
-    try:
-        sentences      = en_data["sentences"]
-        keywords       = en_data["keywords"]
-        duration_s     = float(en_data["estimated_seconds"])
-        clip_durations = [duration_s / len(sentences)] * len(sentences)
-
-        video_paths = fetch_videos_for_script(
-            keywords_per_sentence=keywords,
-            clip_durations=clip_durations,
-            output_dir="videos",
-        )
-    except Exception as e:
-        print(f"❌  Pixabay fetch failed: {e}")
-        sys.exit(1)
-
-    # ── No-video mode ─────────────────────────────────────────────────────────
-    if args.no_video:
-        for lang_data, voice, suffix in [
-            (en_data, args.voice_en, "en"),
-            (ar_data, args.voice_ar, "ar"),
-        ]:
-            print(f"\n🎙️   {suffix.upper()} TTS + Mix...")
-            try:
-                raw_audio = synthesize_speech(
-                    script=lang_data["full_script"],
-                    output_path=f"{args.output}_{suffix}_voice",
-                    voice_key=voice,
-                    tone=lang_data["tone"],
-                )
-                dur = get_audio_duration(str(raw_audio))
-                mix_voice_music_sfx(
-                    voice_path=str(raw_audio),
-                    content_type=lang_data["content_type"],
-                    output_path=f"{args.output}_{suffix}_audio_mixed.aac",
-                    clip_durations=[dur / len(lang_data["sentences"])] * len(lang_data["sentences"]),
-                    sfx_type=args.sfx_type,
-                    music_volume=args.music_volume,
-                )
-            except Exception as e:
-                print(f"❌  {suffix} audio failed: {e}")
-
-        print("\n📦  Content package...")
-        try:
-            content = generate_all_content(en_data, output_base=args.output)
-            print_content_summary(content)
-            render_thumbnail(
-                html_path=f"{args.output}_thumbnail.html",
-                output_png=f"{args.output}_thumbnail.png",
-            )
-        except Exception as e:
-            print(f"⚠️  Content warning: {e}")
-        return
-
-    # ── Step 4: English video ─────────────────────────────────────────────────
-    try:
-        en_video = produce_version(
-            script_data=en_data,
-            voice_key=args.voice_en,
-            output_base=f"{args.output}_en",
-            video_paths=video_paths,
-            label="🇬🇧 English Version",
-            music_volume=args.music_volume,
-            sfx_type=args.sfx_type,
-        )
-    except Exception as e:
-        print(f"❌  English render failed: {e}")
-        sys.exit(1)
-
-    # ── Step 5: Arabic video ──────────────────────────────────────────────────
-    try:
-        ar_video = produce_version(
-            script_data=ar_data,
-            voice_key=args.voice_ar,
-            output_base=f"{args.output}_ar",
-            video_paths=video_paths,
-            label="🇸🇦 Arabic Version",
-            music_volume=args.music_volume,
-            sfx_type=args.sfx_type,
-        )
-    except Exception as e:
-        print(f"❌  Arabic render failed: {e}")
-        sys.exit(1)
-
-    # ── Step 6: Content package ───────────────────────────────────────────────
-    print("\n📦  Generating content package...")
-    try:
-        content = generate_all_content(en_data, output_base=args.output)
-        print_content_summary(content)
-        render_thumbnail(
-            html_path=f"{args.output}_thumbnail.html",
-            output_png=f"{args.output}_thumbnail.png",
-        )
-    except Exception as e:
-        print(f"⚠️  Content warning: {e}")
-
-    # ── Summary ───────────────────────────────────────────────────────────────
-    print(f"\n{'═' * 58}")
-    print(f"  ✅  ALL DONE — {ct_label}")
-    print(f"{'═' * 58}")
-    print(f"  🇬🇧  {en_video.name}")
-    print(f"  🇸🇦  {ar_video.name}")
-    print(f"  🖼️   {args.output}_thumbnail.png")
-    print(f"  📦  {args.output}_content.json")
-    print(f"{'═' * 58}\n")
+    # Final summary
+    print(f"\n{'═'*62}")
+    print(f"  ✅  Done — {success} success | {failed} failed | {skipped} skipped")
+    print(f"  📁  Output: {args.output_dir}/")
+    print_db_summary()
+    print(f"{'═'*62}\n")
 
 
 if __name__ == "__main__":
