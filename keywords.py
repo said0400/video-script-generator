@@ -28,6 +28,81 @@ def _clean(raw: str) -> str:
     return raw.strip()
 
 
+# =========================================================
+# NEW FUNCTION — Analyze retention score
+# =========================================================
+def analyze_retention_score(sentences: list[str]) -> dict:
+    """
+    تحليل قوة الاحتفاظ بالمشاهد.
+    يعطي score لكل جملة ويقترح تحسينات.
+    """
+
+    if not sentences:
+        return {}
+
+    client = Groq(api_key=os.environ["GROQ_API_KEY"])
+
+    numbered = "\n".join(
+        f"{i+1}. {s}" for i, s in enumerate(sentences)
+    )
+
+    prompt = f"""
+أنت خبير في تحليل محتوى TikTok وReels وShorts.
+
+حلل هذا السكريبت وأعطِ تقرير احترافي:
+
+{numbered}
+
+أعد JSON فقط:
+
+{{
+  "overall_score": 0,
+  "hook_strength": 0,
+  "open_loops": [],
+  "drop_risk_points": [],
+  "re_hook_suggestions": [],
+  "pattern_interrupt_needed_at": [],
+  "cta_strength": 0,
+  "estimated_watch_rate": ""
+}}
+"""
+
+    try:
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.3,
+            max_tokens=1000,
+        )
+
+        raw = _clean(resp.choices[0].message.content)
+
+        data = json.loads(raw)
+
+        print("  ✅ Retention analysis completed")
+
+        return data
+
+    except Exception as e:
+        print(f"  ⚠️ Retention analysis failed: {e}")
+
+        return {
+            "overall_score": 0,
+            "hook_strength": 0,
+            "open_loops": [],
+            "drop_risk_points": [],
+            "re_hook_suggestions": [],
+            "pattern_interrupt_needed_at": [],
+            "cta_strength": 0,
+            "estimated_watch_rate": "unknown"
+        }
+
+
 def get_keywords_for_sentences(
     sentences: list[str],
     title: str,
@@ -65,35 +140,64 @@ def get_keywords_for_sentences(
             )
             raw  = _clean(resp.choices[0].message.content)
             data = json.loads(raw)
+
             if isinstance(data, list) and len(data) >= n // 2:
                 kws = _normalize(data, n)
+
                 print(f"  ✅ Keywords: {n} sentences × 3 keywords (Groq)")
+
                 return kws
+
             raise ValueError(f"got {len(data)} rows, expected {n}")
+
         except Exception as e:
             print(f"  ⚠️  Keywords attempt {attempt+1}/{retries}: {e}")
+
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)
 
     print(f"  ↩️  Fallback keywords")
+
     return _fallback(n)
 
 
 def _normalize(data: list, n: int) -> list[list[str]]:
     result: list[list[str]] = []
+
     for item in data[:n]:
-        kws = [str(k).strip() for k in (item if isinstance(item, list) else [str(item)])]
+        kws = [
+            str(k).strip()
+            for k in (
+                item if isinstance(item, list)
+                else [str(item)]
+            )
+        ]
+
         while len(kws) < 3:
-            kws.append(FALLBACKS[len(result) % len(FALLBACKS)])
+            kws.append(
+                FALLBACKS[len(result) % len(FALLBACKS)]
+            )
+
         result.append(kws[:3])
+
     while len(result) < n:
         i = len(result)
-        result.append([FALLBACKS[i % len(FALLBACKS)], "person achieving goal", "success mindset focus"])
+
+        result.append([
+            FALLBACKS[i % len(FALLBACKS)],
+            "person achieving goal",
+            "success mindset focus"
+        ])
+
     return result
 
 
 def _fallback(n: int) -> list[list[str]]:
     return [
-        [FALLBACKS[i % len(FALLBACKS)], "person achieving goal", "success mindset focus"]
+        [
+            FALLBACKS[i % len(FALLBACKS)],
+            "person achieving goal",
+            "success mindset focus"
+        ]
         for i in range(n)
     ]
