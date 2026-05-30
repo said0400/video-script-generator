@@ -1,12 +1,12 @@
 """
 Text-to-Speech via Google Gemini 2.5 Flash TTS.
-Features: API key rotation, retry logic, advanced pacing prompt, completeness check.
-(Replaces both tts.py and tts_styles.py — tts_styles.py can be deleted)
+Features: API key rotation (thread-safe), retry logic, advanced pacing prompt.
 """
 import mimetypes
 import os
 import struct
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -37,7 +37,7 @@ TONE_STYLES = {
 MIN_DURATION_S = 2.0
 
 
-# ── API Key Rotation ───────────────────────────────────────────────────────────
+# ── Thread-safe API Key Rotation ──────────────────────────────────────────────
 
 def _get_api_keys() -> list[str]:
     keys = [
@@ -49,27 +49,34 @@ def _get_api_keys() -> list[str]:
     return [k for k in keys if k]
 
 
-_API_KEYS   = _get_api_keys()
-_key_index  = 0
+_API_KEYS  = _get_api_keys()
+_key_index = 0
+_key_lock  = threading.Lock()          # ← Thread-safe key rotation
 
 
 def _get_client() -> genai.Client:
-    global _key_index
+    """Create a Gemini client using the current active key (thread-safe)."""
+    with _key_lock:
+        idx = _key_index
+
     if not _API_KEYS:
         key = os.getenv("GEMINI_API_KEY", "")
         if not key:
             raise RuntimeError("No GEMINI_API_KEY found in environment")
         return genai.Client(api_key=key)
-    return genai.Client(api_key=_API_KEYS[_key_index])
+
+    return genai.Client(api_key=_API_KEYS[idx])
 
 
 def _rotate_key() -> None:
+    """Rotate to next API key. Thread-safe."""
     global _key_index
-    if len(_API_KEYS) <= 1:
-        print("  ⚠️  No additional API keys available")
-        return
-    _key_index = (_key_index + 1) % len(_API_KEYS)
-    print(f"  🔄 API key rotated → slot #{_key_index}")
+    with _key_lock:
+        if len(_API_KEYS) <= 1:
+            print("  ⚠️  No additional API keys to rotate")
+            return
+        _key_index = (_key_index + 1) % len(_API_KEYS)
+        print(f"  🔄 API key rotated → slot #{_key_index}")
 
 
 def _is_rate_limit(e: Exception) -> bool:
@@ -80,7 +87,7 @@ def _is_rate_limit(e: Exception) -> bool:
 # ── TTS Style Injection ────────────────────────────────────────────────────────
 
 def _inject_style(sentences: list[str], tone: str) -> list[str]:
-    """Add emphasis markers for better TTS delivery."""
+    """Add emphasis markers to sentences for better TTS delivery."""
     styled = []
     n      = len(sentences)
 
@@ -88,7 +95,7 @@ def _inject_style(sentences: list[str], tone: str) -> list[str]:
         s = s.strip()
 
         if i == 0:
-            # Hook: uppercase short hooks for strong emphasis
+            # Hook: capitalize short hooks for strong emphasis
             s = s.upper() if len(s.split()) <= 7 else s
 
         elif i == n - 2 and n > 2:
@@ -104,7 +111,6 @@ def _inject_style(sentences: list[str], tone: str) -> list[str]:
             kw in s.lower()
             for kw in ["why", "how", "what", "when", "لماذا", "كيف", "ماذا", "متى"]
         ):
-            # Turn implicit questions into explicit ones
             s = s.rstrip(".") + "?"
 
         styled.append(s)
@@ -113,11 +119,12 @@ def _inject_style(sentences: list[str], tone: str) -> list[str]:
 
 
 def _build_prompt(script: str, tone: str) -> str:
-    """Basic prompt — used when no sentence list is provided."""
+    """Basic TTS prompt — used when sentence list is not available."""
     style = TONE_STYLES.get(tone.lower(), TONE_STYLES["energetic"])
     return (
         f"Read the following script:\n\n"
-        f"# Director's Note\nStyle: {style}\n"
+        f"# Director's Note\n"
+        f"Style: {style}\n"
         f"Pace: Natural conversational — not rushed, not trailing off.\n"
         f"Accent: Neutral international English.\n\n"
         f"## CRITICAL: Read EVERY word from start to LAST word. Do NOT stop early.\n\n"
@@ -130,7 +137,7 @@ def _build_advanced_prompt(
     tone: str,
     has_open_loop: bool = False,
 ) -> str:
-    """Advanced prompt with per-sentence pacing instructions."""
+    """Advanced TTS prompt with per-sentence pacing instructions."""
     styled    = _inject_style(sentences, tone)
     full_text = " ".join(styled)
     n         = len(sentences)
@@ -138,12 +145,12 @@ def _build_advanced_prompt(
     tone_map = {
         "energetic":     "HIGH ENERGY. Dynamic pace. First sentence like a punch. Last sentence memorable.",
         "inspirational": "Warm and building. Start calm, rise to powerful by the end.",
-        "emotional":     "Vulnerable and honest. Like telling a close friend. Slight pause before insights.",
+        "emotional":     "Vulnerable and honest. Like confiding in a close friend. Pause before insights.",
         "calm":          "Measured. Deliberate. Each word has weight. No rushing.",
     }
 
     open_loop_note = (
-        "\nNOTE: This script contains an open loop (unanswered question). "
+        "\nNOTE: This script contains an open loop (unanswered question early on). "
         "Raise vocal tension when introducing it. Resolve with full confidence at the end."
     ) if has_open_loop else ""
 
@@ -169,12 +176,16 @@ SCRIPT ({n} sentences, {len(full_text.split())} words):
 {full_text}"""
 
 
-# ── Audio Check ────────────────────────────────────────────────────────────────
+# ── Audio check ────────────────────────────────────────────────────────────────
 
 def _get_duration(path: str) -> float:
     r = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            path,
+        ],
         capture_output=True, text=True,
     )
     try:
@@ -183,7 +194,7 @@ def _get_duration(path: str) -> float:
         return 0.0
 
 
-# ── Main TTS Function ──────────────────────────────────────────────────────────
+# ── Main TTS function ──────────────────────────────────────────────────────────
 
 def synthesize_speech(
     script: str,
@@ -199,25 +210,30 @@ def synthesize_speech(
 
     Parameters:
       script        — full script text
-      output_path   — base path for output file (no extension)
+      output_path   — base path for output (no extension)
       voice_key     — key from VOICES dict
       tone          — narration tone
       sentences     — if provided, uses advanced pacing prompt
-      has_open_loop — adds vocal tension guidance for open loop scripts
-      retries       — base retry count (auto-scales with available API keys)
+      has_open_loop — adds open loop vocal guidance
+      retries       — base retry count (scales with available keys)
     """
     voice_name     = VOICES.get(voice_key, "Orus")
     expected_words = len(script.split())
 
-    prompt       = (_build_advanced_prompt(sentences, tone, has_open_loop)
-                    if sentences and len(sentences) > 1
-                    else _build_prompt(script, tone))
+    prompt = (
+        _build_advanced_prompt(sentences, tone, has_open_loop)
+        if sentences and len(sentences) > 1
+        else _build_prompt(script, tone)
+    )
 
     max_attempts = max(retries, len(_API_KEYS) * 2) if _API_KEYS else retries
 
     for attempt in range(max_attempts):
-        print(f"  🎙️  TTS [{attempt+1}/{max_attempts}] voice={voice_name} "
-              f"key=#{_key_index} | {expected_words} words")
+        with _key_lock:
+            current_idx = _key_index
+
+        print(f"  🎙️  TTS [{attempt+1}/{max_attempts}] "
+              f"voice={voice_name}  key=#{current_idx}  {expected_words} words")
 
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
         config   = types.GenerateContentConfig(
@@ -264,11 +280,12 @@ def synthesize_speech(
                 time.sleep(1)
                 continue
 
-            # Completeness check: warn if audio seems truncated
+            # Completeness check
             if expected_words > 20:
                 min_expected = (expected_words / 200) * 60
                 if duration < min_expected * 0.5:
-                    print(f"  ⚠️  Likely truncated (expected ≥{min_expected:.0f}s, got {duration:.1f}s)")
+                    print(f"  ⚠️  Likely truncated "
+                          f"(expected ≥{min_expected:.0f}s, got {duration:.1f}s)")
                     if attempt < max_attempts - 1:
                         saved.unlink(missing_ok=True)
                         time.sleep(1)
@@ -278,7 +295,7 @@ def synthesize_speech(
 
         except Exception as e:
             if _is_rate_limit(e):
-                print(f"  🛑 Rate limit on key #{_key_index}: {str(e)[:80]}")
+                print(f"  🛑 Rate limit on key #{current_idx}: {str(e)[:80]}")
                 _rotate_key()
             else:
                 print(f"  ⚠️  TTS error [{type(e).__name__}]: {str(e)[:100]}")
@@ -289,18 +306,17 @@ def synthesize_speech(
     raise RuntimeError(f"TTS failed after {max_attempts} attempts")
 
 
-# ── WAV helpers ────────────────────────────────────────────────────────────────
+# ── WAV conversion helpers ─────────────────────────────────────────────────────
 
 def _to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    p          = _parse_mime(mime_type)
-    bps        = p["bits_per_sample"]
-    rate       = p["rate"]
-    n_ch       = 1
-    data_size  = len(audio_data)
-    bps_bytes  = bps // 8
-    block_align = n_ch * bps_bytes
-    byte_rate  = rate * block_align
-    header     = struct.pack(
+    p           = _parse_mime(mime_type)
+    bps         = p["bits_per_sample"]
+    rate        = p["rate"]
+    n_ch        = 1
+    data_size   = len(audio_data)
+    block_align = n_ch * (bps // 8)
+    byte_rate   = rate * block_align
+    header      = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
         b"RIFF", 36 + data_size, b"WAVE",
         b"fmt ", 16, 1, n_ch, rate, byte_rate, block_align, bps,
@@ -314,9 +330,13 @@ def _parse_mime(mime: str) -> dict:
     for part in mime.split(";"):
         p = part.strip()
         if p.lower().startswith("rate="):
-            try: rate = int(p.split("=", 1)[1])
-            except ValueError: pass
+            try:
+                rate = int(p.split("=", 1)[1])
+            except ValueError:
+                pass
         elif p.startswith("audio/L"):
-            try: bps = int(p.split("L", 1)[1])
-            except ValueError: pass
+            try:
+                bps = int(p.split("L", 1)[1])
+            except ValueError:
+                pass
     return {"bits_per_sample": bps, "rate": rate}
