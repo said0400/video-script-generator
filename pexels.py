@@ -1,6 +1,6 @@
 """
-Pexels Videos API — search and download only.
-Returns raw .mp4 Path or None. Scaling/validation done in video_sources.py.
+Pexels Videos API — search and download.
+Prefers portrait orientation and minimum 5 seconds duration.
 """
 import os
 import re
@@ -10,7 +10,8 @@ from pathlib import Path
 
 from db import is_video_used, mark_video_used
 
-API_URL = "https://api.pexels.com/videos/search"
+API_URL      = "https://api.pexels.com/videos/search"
+MIN_DURATION = 5   # Minimum video duration in seconds
 
 
 def search_pexels(
@@ -21,13 +22,10 @@ def search_pexels(
     session_used: set,
     retries: int = 3,
 ) -> Path | None:
-    """Search Pexels and download best matching video. Returns raw Path or None."""
-
     api_key = os.environ.get("PEXELS_API_KEY", "")
     if not api_key:
         return None
 
-    # ── API search with retry ─────────────────────────────────────────────────
     videos = []
     for attempt in range(retries):
         try:
@@ -45,18 +43,13 @@ def search_pexels(
             r.raise_for_status()
             videos = r.json().get("videos", [])
             break
-        except requests.exceptions.Timeout:
-            print(f"    ⚠️  Pexels timeout [{attempt+1}/{retries}]")
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response else 0
             if status == 429:
-                # Rate limited — wait longer
-                print(f"    ⚠️  Pexels rate limit — waiting...")
+                print(f"    ⚠️  Pexels rate limit — waiting 5s")
                 time.sleep(5)
             else:
-                print(f"    ⚠️  Pexels HTTP {status}: {e}")
+                print(f"    ⚠️  Pexels HTTP {status}")
                 if attempt < retries - 1:
                     time.sleep(2 ** attempt)
         except Exception as e:
@@ -66,27 +59,26 @@ def search_pexels(
     else:
         return None
 
-    if not videos:
-        return None
+    # Sort by duration descending — prefer longer videos
+    videos = sorted(videos, key=lambda v: v.get("duration", 0), reverse=True)
 
-    # ── Pick best unused video ────────────────────────────────────────────────
     for video in videos:
+        # Skip videos shorter than minimum
+        if video.get("duration", 0) < MIN_DURATION:
+            continue
+
         vid_id = str(video["id"])
         sk     = f"px_{vid_id}"
-
         if sk in session_used or is_video_used(vid_id, "pexels"):
             continue
 
-        # Pick best quality MP4 file
+        # Pick best quality MP4
         files = sorted(
             [f for f in video.get("video_files", []) if f.get("file_type") == "video/mp4"],
             key=lambda f: f.get("width", 0) * f.get("height", 0),
             reverse=True,
         )
-        if not files:
-            continue
-
-        url = files[0].get("link")
+        url = files[0].get("link") if files else None
         if not url:
             continue
 
@@ -102,36 +94,19 @@ def search_pexels(
 
 
 def _download(url: str, dest: Path, retries: int = 3) -> bool:
-    """Download file with retry. Returns True on success."""
     for attempt in range(retries):
         try:
             with requests.get(url, stream=True, timeout=60) as r:
                 r.raise_for_status()
-
-                ct = r.headers.get("Content-Type", "")
-                if "video" not in ct and "octet-stream" not in ct:
-                    print(f"    ⚠️  Unexpected Content-Type: {ct}")
-                    return False
-
                 with open(dest, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
+                    for chunk in r.iter_content(8192):
                         if chunk:
                             f.write(chunk)
-
-            # Validate file size (at least 50KB)
-            if dest.exists() and dest.stat().st_size > 50_000:
+            if dest.exists() and dest.stat().st_size > 100_000:
                 return True
-
             dest.unlink(missing_ok=True)
-            return False
-
-        except requests.exceptions.Timeout:
-            print(f"    ⚠️  Pexels download timeout [{attempt+1}/{retries}]")
         except Exception as e:
-            print(f"    ⚠️  Pexels download error [{attempt+1}/{retries}]: {e}")
-
-        dest.unlink(missing_ok=True)
-        if attempt < retries - 1:
-            time.sleep(2 ** attempt)
-
+            dest.unlink(missing_ok=True)
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
     return False
