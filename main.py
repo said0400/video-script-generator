@@ -3,13 +3,15 @@
 🎬 Motivational Video Generator
 Reads EN + AR scripts from Excel/CSV → produces synced videos.
 
-Key features:
-  - Resume: skips already-done renders via SQLite
-  - Parallel: EN + AR rendered simultaneously (ThreadPoolExecutor)
-  - SRT: sentence + word-level subtitles auto-generated
-  - Formats: 9:16 base + 1:1 + 16:9 exports
-  - Sources: Local videos → Pexels → Pixabay → fallback
-  - A/B: optional variant with verbal_hook as opening
+Features:
+  - Resume via SQLite (skips completed renders)
+  - Parallel EN + AR rendering (ThreadPoolExecutor)
+  - SRT subtitles auto-generated
+  - Multiple export formats (9:16 + 1x1 + 16x9)
+  - Sources: Local → Pexels → Pixabay → fallback
+  - A/B hook variants
+  - Advanced TTS with per-sentence pacing
+  - Optional retention analysis (--analyze)
 """
 
 import argparse
@@ -24,7 +26,7 @@ from db            import (init_db, is_render_done, get_render_output,
                             save_script_meta, print_db_summary)
 from script_reader import (read_scripts, validate_scripts, split_into_sentences,
                             print_scripts_summary)
-from keywords      import get_keywords_for_sentences
+from keywords      import get_keywords_for_sentences, analyze_retention_score
 from tts           import synthesize_speech, VOICES
 from video_sources import fetch_videos_for_script
 from srt           import generate_srt, generate_word_srt
@@ -44,33 +46,38 @@ MAX_S        = 80
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="🎬 Motivational Video Generator")
-    p.add_argument("input_file",      type=str, help="Excel/CSV with scripts")
-    p.add_argument("--voice-en",      type=str, default="male_smooth",  choices=list(VOICES.keys()))
-    p.add_argument("--voice-ar",      type=str, default="female_warm",  choices=list(VOICES.keys()))
-    p.add_argument("--tone",          type=str, default="energetic",
-                   choices=["energetic","inspirational","emotional","calm"])
-    p.add_argument("--music-volume",  type=float, default=0.12)
-    p.add_argument("--sfx-type",      type=str, default="swoosh", choices=["swoosh","whoosh"])
-    p.add_argument("--output-dir",    type=str, default="output")
-    p.add_argument("--video-number",  type=str, default=None,
+    p = argparse.ArgumentParser(
+        description="🎬 Motivational Video Generator",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    p.add_argument("input_file",       type=str,   help="Excel/CSV with scripts")
+    p.add_argument("--voice-en",       type=str,   default="male_smooth",  choices=list(VOICES.keys()))
+    p.add_argument("--voice-ar",       type=str,   default="female_warm",  choices=list(VOICES.keys()))
+    p.add_argument("--tone",           type=str,   default="energetic",
+                   choices=["energetic", "inspirational", "emotional", "calm"])
+    p.add_argument("--music-volume",   type=float, default=0.12)
+    p.add_argument("--sfx-type",       type=str,   default="swoosh", choices=["swoosh", "whoosh"])
+    p.add_argument("--output-dir",     type=str,   default="output")
+    p.add_argument("--video-number",   type=str,   default=None,
                    help="Process only this video number")
-    p.add_argument("--formats",       type=str, default="1x1,16x9",
+    p.add_argument("--formats",        type=str,   default="1x1,16x9",
                    help="Additional export formats: 1x1,16x9,4x5")
-    p.add_argument("--script-only",   action="store_true",
-                   help="Print scripts only — no TTS or video")
-    p.add_argument("--no-video",      action="store_true",
-                   help="TTS + audio mix only — skip video render")
-    p.add_argument("--force",         action="store_true",
+    p.add_argument("--script-only",    action="store_true",
+                   help="Print scripts + analysis only — no TTS or video")
+    p.add_argument("--no-video",       action="store_true",
+                   help="TTS + audio only — skip video render")
+    p.add_argument("--force",          action="store_true",
                    help="Re-render even if already done")
-    p.add_argument("--ab-test",       action="store_true",
-                   help="Generate variant B with verbal_hook as opening")
-    p.add_argument("--no-export",     action="store_true",
+    p.add_argument("--ab-test",        action="store_true",
+                   help="Generate variant B using verbal_hook as opening")
+    p.add_argument("--no-export",      action="store_true",
                    help="Skip additional format exports (faster)")
+    p.add_argument("--analyze",        action="store_true",
+                   help="Run retention score analysis on each script")
     return p.parse_args()
 
 
-# ── Script data builder ───────────────────────────────────────────────────────
+# ── Script data builder ────────────────────────────────────────────────────────
 
 def _estimate(text: str) -> int:
     return max(MIN_S, min(MAX_S, int(len(text.split()) / (WPM / 60))))
@@ -93,8 +100,10 @@ def build_script_data(
         sentences = [hook_prefix.strip()] + sentences
         content   = hook_prefix.strip() + " " + content
 
-    kws = (keywords[:len(sentences)] +
-           [["person motivational", "success achievement", "goal focus"]] * len(sentences))[:len(sentences)]
+    kws = (
+        keywords[:len(sentences)] +
+        [["person motivational", "success achievement", "goal focus"]] * len(sentences)
+    )[:len(sentences)]
 
     return {
         "title":             record["title"],
@@ -107,6 +116,7 @@ def build_script_data(
         "tone":              tone,
         "content_type":      CONTENT_TYPE,
         "lang":              lang,
+        "has_open_loop":     bool(record.get("open_loop", "").strip()),
     }
 
 
@@ -152,7 +162,7 @@ def _render_node(manifest_path: Path, output_base: str) -> Path:
     return out
 
 
-# ── Audio pipeline ────────────────────────────────────────────────────────────
+# ── Audio pipeline ─────────────────────────────────────────────────────────────
 
 def produce_audio(
     script_data: dict,
@@ -161,41 +171,48 @@ def produce_audio(
     music_volume: float,
     sfx_type: str,
 ) -> tuple[Path, float, list, list]:
-    sentences = script_data["sentences"]
-    lang_tag  = script_data.get("lang", "en").upper()
+    """TTS → mix → word sync. Returns (audio_path, duration, timeline, aligned)."""
+    sentences     = script_data["sentences"]
+    lang_tag      = script_data.get("lang", "en").upper()
+    has_open_loop = script_data.get("has_open_loop", False)
 
-    # TTS
+    # TTS with advanced prompt
     print(f"\n  🎙️  {lang_tag} TTS  (voice={voice_key}, {len(sentences)} sentences)")
     synthesize_speech(
         script=script_data["full_script"],
         output_path=f"{output_base}_voice",
         voice_key=voice_key,
         tone=script_data.get("tone", "energetic"),
+        sentences=sentences,
+        has_open_loop=has_open_loop,
     )
 
-    # Find WAV
+    # Find produced WAV
+    out_dir = Path(output_base).parent
+    prefix  = Path(output_base).name
     wav_candidates = (
-        sorted(Path(".").glob(f"{output_base}_voice_*.wav")) +
-        sorted(Path(".").glob(f"{output_base}_voice*.wav"))
+        sorted(out_dir.glob(f"{prefix}_voice_*.wav")) +
+        sorted(out_dir.glob(f"{prefix}_voice*.wav"))
     )
-    real_dur  = float(script_data["estimated_seconds"])
-    wav_path  = str(wav_candidates[0]) if wav_candidates else None
+    real_dur = float(script_data["estimated_seconds"])
+    wav_path = str(wav_candidates[0]) if wav_candidates else None
 
     if wav_path:
         measured = get_audio_duration(wav_path)
         if measured >= 5:
             real_dur = measured
+            print(f"  📏 Real duration: {real_dur:.3f}s")
 
     # Mix voice + music + SFX
     print(f"  🎚️  Mixing  (music={music_volume}, sfx={sfx_type})")
-    clip_dur = [real_dur / len(sentences)] * len(sentences)
-    mixed    = f"{output_base}_audio_mixed.aac"
+    clip_dur  = [real_dur / len(sentences)] * len(sentences)
+    mixed_out = f"{output_base}_audio_mixed.aac"
 
     try:
         final_audio = mix_voice_music_sfx(
             voice_path=wav_path or f"{output_base}_voice_0.wav",
             content_type=CONTENT_TYPE,
-            output_path=mixed,
+            output_path=mixed_out,
             clip_durations=clip_dur,
             sfx_type=sfx_type,
             music_volume=music_volume,
@@ -214,6 +231,7 @@ def produce_audio(
     try:
         word_ts = get_word_timestamps(wav_path) if wav_path else []
         timeline, aligned = build_word_timeline(sentences, word_ts, real_dur)
+        print(f"  ✅ Sync: {len(timeline)} events")
     except Exception:
         try:
             timeline, aligned = _duration_sync(sentences, real_dur)
@@ -223,7 +241,7 @@ def produce_audio(
     return audio_path, real_dur, timeline, aligned
 
 
-# ── Full version pipeline ─────────────────────────────────────────────────────
+# ── Full version pipeline ──────────────────────────────────────────────────────
 
 def produce_version(
     *,
@@ -240,8 +258,9 @@ def produce_version(
     force: bool = False,
 ) -> dict:
     """
-    Full pipeline for one language. Returns dict with output paths.
-    Thread-safe (each call uses unique output_base).
+    Full pipeline for one language version.
+    Thread-safe — each call uses a unique output_base.
+    Returns dict: {label, final, srt, word_srt, exports}
     """
     result = {"label": label, "final": None, "srt": None, "word_srt": None, "exports": {}}
 
@@ -294,7 +313,7 @@ def produce_version(
     return result
 
 
-# ── Process one video record ──────────────────────────────────────────────────
+# ── Process one video ──────────────────────────────────────────────────────────
 
 def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
     num   = record["number"]
@@ -307,7 +326,7 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
     out_base       = str(Path(out_dir) / f"video_{num}")
     export_formats = [] if args.no_export else [f.strip() for f in args.formats.split(",") if f.strip()]
 
-    # Validate
+    # Validate content
     if not record["en_content"].strip():
         print(f"  ❌ No English content — skipping")
         return
@@ -321,18 +340,18 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
 
     print(f"  📝 EN: {len(en_sentences)} sentences  |  AR: {len(ar_sentences)} sentences")
 
-    # Show content strategy (if available)
-    hooks = {k: record.get(k, "") for k in ["verbal_hook","visual_hook","written_hook","value"]}
-    funnel = {k: record.get(k, "") for k in ["tofu","mofu","bofu"]}
+    # Show content strategy
+    hooks  = {k: record.get(k, "") for k in ["verbal_hook", "visual_hook", "written_hook", "value"]}
+    funnel = {k: record.get(k, "") for k in ["tofu", "mofu", "bofu"]}
     if any(hooks.values()):
         print(f"\n  📊 Content Strategy:")
         for k, v in hooks.items():
             if v:
-                print(f"     {k}: {v[:75]}")
+                print(f"     {k}: {v[:70]}")
     if any(funnel.values()):
         for k, v in funnel.items():
             if v:
-                print(f"     {k.upper()}: {v[:70]}")
+                print(f"     {k.upper()}: {v[:65]}")
 
     # Keywords via Groq
     print(f"\n  🔑 Fetching keywords (Groq)...")
@@ -340,7 +359,23 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
         keywords = get_keywords_for_sentences(en_sentences, title)
     except Exception as e:
         print(f"  ⚠️  Keywords error: {e} — using fallback")
-        keywords = [["person motivational","success achievement","goal focus"]] * len(en_sentences)
+        keywords = [["person motivational", "success achievement", "goal focus"]] * len(en_sentences)
+
+    # Retention analysis (optional)
+    if args.analyze or args.script_only:
+        print(f"\n  📈 Retention analysis...")
+        try:
+            analysis = analyze_retention_score(en_sentences)
+            if analysis:
+                print(f"     Overall score    : {analysis.get('overall_score', '?')}/100")
+                print(f"     Hook strength    : {analysis.get('hook_strength', '?')}/100")
+                print(f"     CTA strength     : {analysis.get('cta_strength', '?')}/100")
+                print(f"     Est. watch rate  : {analysis.get('estimated_watch_rate', '?')}")
+                drops = analysis.get("drop_risk_points", [])
+                if drops:
+                    print(f"     ⚠️  Drop risks    : {', '.join(str(d) for d in drops[:3])}")
+        except Exception as e:
+            print(f"  ⚠️  Analysis failed: {e}")
 
     # Build script data
     try:
@@ -357,7 +392,7 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
         except ValueError as e:
             print(f"  ⚠️  AR: {e}")
 
-    # A/B variant (verbal_hook as opening)
+    # A/B variant — verbal_hook as opening
     ab_data = None
     if args.ab_test and record.get("verbal_hook", "").strip():
         try:
@@ -371,23 +406,23 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
 
     save_script_meta(num, title, en_data, ar_data)
 
-    # ── Script-only mode ──────────────────────────────────────────────────────
+    # Script-only mode
     if args.script_only:
-        print(f"\n  🇬🇧  English:")
+        print(f"\n  🇬🇧  English ({len(en_sentences)} sentences):")
         for i, s in enumerate(en_sentences, 1):
             kw = " | ".join(keywords[i-1]) if i <= len(keywords) else ""
             print(f"    {i:>2}. {s}")
             print(f"        🔑 {kw}")
         if ar_sentences:
-            print(f"\n  🇸🇦  Arabic:")
+            print(f"\n  🇸🇦  Arabic ({len(ar_sentences)} sentences):")
             for i, s in enumerate(ar_sentences, 1):
                 print(f"    {i:>2}. {s}")
         return
 
-    # ── Fetch videos (shared across all language versions) ────────────────────
+    # Fetch stock videos (shared across all language versions)
     print(f"\n  📹 Fetching stock videos...")
-    clip_dur  = [en_data["estimated_seconds"] / len(en_sentences)] * len(en_sentences)
-    vid_dir   = str(Path(out_dir) / f"videos_{num}")
+    clip_dur = [en_data["estimated_seconds"] / len(en_sentences)] * len(en_sentences)
+    vid_dir  = str(Path(out_dir) / f"videos_{num}")
 
     try:
         video_paths = fetch_videos_for_script(
@@ -399,7 +434,7 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
         print(f"  ❌ Video fetch failed: {e}")
         return
 
-    # ── Audio-only mode ───────────────────────────────────────────────────────
+    # Audio-only mode
     if args.no_video:
         for ld, voice, suffix in [
             (en_data, args.voice_en, "en"),
@@ -413,8 +448,8 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
                 print(f"  ❌ {suffix} audio: {e}")
         return
 
-    # ── Thumbnail ─────────────────────────────────────────────────────────────
-    hook_for_thumb = record.get("written_hook") or record.get("verbal_hook") or en_data["hook"]
+    # Thumbnail
+    hook_for_thumb = (record.get("written_hook") or record.get("verbal_hook") or en_data["hook"])
     try:
         html_path = generate_thumbnail_html(
             title=title, hook=hook_for_thumb,
@@ -424,26 +459,22 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
     except Exception as e:
         print(f"  ⚠️  Thumbnail: {e}")
 
-    # ── Build render version list ─────────────────────────────────────────────
+    # Build version list
     versions = [
         dict(script_data=en_data, voice_key=args.voice_en,
-             output_base=f"{out_base}_en", label="🇬🇧 English",
-             lang="en"),
+             output_base=f"{out_base}_en", label="🇬🇧 English", lang="en"),
     ]
     if ar_data:
         versions.append(dict(
             script_data=ar_data, voice_key=args.voice_ar,
-            output_base=f"{out_base}_ar", label="🇸🇦 Arabic",
-            lang="ar",
+            output_base=f"{out_base}_ar", label="🇸🇦 Arabic", lang="ar",
         ))
     if ab_data:
         versions.append(dict(
             script_data=ab_data, voice_key=args.voice_en,
-            output_base=f"{out_base}_en_b", label="🔀 English B (A/B)",
-            lang="en_b",
+            output_base=f"{out_base}_en_b", label="🔀 English B (A/B)", lang="en_b",
         ))
 
-    # Shared kwargs
     shared = dict(
         video_paths=video_paths,
         music_volume=args.music_volume,
@@ -453,7 +484,7 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
         force=args.force,
     )
 
-    # ── Parallel render ───────────────────────────────────────────────────────
+    # Parallel render
     print(f"\n  📽️  Rendering {len(versions)} version(s) in parallel...")
     outputs: dict[str, dict] = {}
 
@@ -471,18 +502,19 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
                 print(f"\n  ❌ {lang_key.upper()} render failed: {e}")
                 outputs[lang_key] = {"error": str(e)}
 
-    # ── Summary ───────────────────────────────────────────────────────────────
+    # Summary
     print(f"\n  {'─'*50}")
     print(f"  📦  Video #{num} — {title}")
     for lang_key, res in outputs.items():
         if res.get("final"):
-            f    = res["final"]
-            mb   = f.stat().st_size / 1_048_576 if f.exists() else 0
+            f  = res["final"]
+            mb = f.stat().st_size / 1_048_576 if f.exists() else 0
             print(f"     ✅ {lang_key.upper():6} → {f.name}  ({mb:.1f} MB)")
             if res.get("srt"):
                 print(f"        📄 SRT: {res['srt'].name}")
             for fmt, fpath in res.get("exports", {}).items():
-                print(f"        📦 {fmt}: {fpath.name}")
+                if fpath:
+                    print(f"        📦 {fmt}: {fpath.name}")
         elif res.get("error"):
             print(f"     ❌ {lang_key.upper():6} → FAILED: {res['error'][:60]}")
 
@@ -491,8 +523,6 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
 
 def main() -> None:
     args = parse_args()
-
-    # Init DB
     init_db()
 
     print(f"\n{'═'*62}")
@@ -504,11 +534,11 @@ def main() -> None:
     print(f"  Music Vol  : {args.music_volume}  |  SFX: {args.sfx_type}")
     print(f"  Output Dir : {args.output_dir}")
     print(f"  Formats    : {args.formats}")
-    print(f"  A/B Test   : {args.ab_test}  |  Force: {args.force}")
+    print(f"  A/B Test   : {args.ab_test}  |  Force: {args.force}  |  Analyze: {args.analyze}")
     print()
     print_db_summary()
 
-    # Read + validate scripts
+    # Read + validate
     print(f"\n📖  Reading scripts...")
     try:
         all_scripts = read_scripts(args.input_file)
@@ -536,10 +566,8 @@ def main() -> None:
             sys.exit(1)
         print(f"  🎯 Processing only video #{args.video_number}")
 
-    # Create output dir
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    # Process each video
     success = failed = skipped = 0
 
     for i, record in enumerate(valid, 1):
@@ -547,9 +575,11 @@ def main() -> None:
 
         # Quick resume check
         en_done = is_render_done(record["number"], "en") and not args.force
-        ar_done = (is_render_done(record["number"], "ar") or not record["ar_content"]) and not args.force
+        ar_done = (
+            is_render_done(record["number"], "ar") or not record["ar_content"].strip()
+        ) and not args.force
 
-        if en_done and ar_done:
+        if en_done and ar_done and not args.script_only and not args.no_video:
             print(f"  ⏭️  Video #{record['number']} already complete — skipping")
             skipped += 1
             continue
@@ -564,7 +594,6 @@ def main() -> None:
             print(f"  ❌  Unexpected error: {e}")
             failed += 1
 
-    # Final summary
     print(f"\n{'═'*62}")
     print(f"  ✅  Done — {success} success | {failed} failed | {skipped} skipped")
     print(f"  📁  Output: {args.output_dir}/")
