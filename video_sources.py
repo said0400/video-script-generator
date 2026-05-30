@@ -27,20 +27,25 @@ FALLBACK_KWS = [
 ]
 
 
-# ── Quality check ─────────────────────────────────────────────────────────────
+# ── Quality validation ────────────────────────────────────────────────────────
 
 def is_valid_video(path: Path, min_duration: float = 0.5) -> bool:
+    """Check video has valid stream, minimum duration, and reasonable dimensions."""
     r = subprocess.run(
         [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "stream=width,height,duration",
-            "-of", "csv=p=0", str(path),
+            "-of", "csv=p=0",
+            str(path),
         ],
         capture_output=True, text=True,
     )
+    out = r.stdout.strip()
+    if not out:
+        return False
     try:
-        parts    = r.stdout.strip().split(",")
+        parts    = out.split(",")
         width    = int(parts[0])
         height   = int(parts[1])
         duration = float(parts[2])
@@ -73,12 +78,15 @@ def convert_to_9x16(raw: Path, out: Path, duration: float) -> bool:
 # ── Local videos ──────────────────────────────────────────────────────────────
 
 def _get_local(keyword: str, session_used: set) -> Path | None:
+    """Try to find a matching local video."""
     if not LOCAL_DIR.exists():
         return None
+
     all_vids  = list(LOCAL_DIR.glob("*.mp4")) + list(LOCAL_DIR.glob("*.mov"))
     available = [v for v in all_vids if str(v) not in session_used]
     if not available:
         return None
+
     kw      = keyword.lower().replace(" ", "_")
     matched = [v for v in available if kw in v.stem.lower()]
     chosen  = random.choice(matched or available)
@@ -86,7 +94,7 @@ def _get_local(keyword: str, session_used: set) -> Path | None:
     return chosen
 
 
-# ── Fetch one clip ────────────────────────────────────────────────────────────
+# ── Fetch one prepared clip ───────────────────────────────────────────────────
 
 def fetch_one_clip(
     keyword: str,
@@ -97,12 +105,19 @@ def fetch_one_clip(
     tmp_dir: str,
     session_used: set,
 ) -> Path | None:
+    """
+    Fetch and prepare one video clip for a keyword.
+    Priority: Local → Pexels → Pixabay → Fallback keywords.
+    Returns prepared (scaled + cropped) .mp4 or None.
+    """
     Path(tmp_dir).mkdir(parents=True, exist_ok=True)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    out = Path(tmp_dir) / f"s{index:02d}_sub{sub}.mp4"
+    # Unique output path per sentence+sub to avoid collision in parallel runs
+    out = Path(tmp_dir) / f"s{index:02d}_sub{sub:02d}.mp4"
 
     def _prepare(raw: Path | None) -> Path | None:
+        """Scale, validate, and return prepared clip."""
         if not raw or not raw.exists():
             return None
         ok = convert_to_9x16(raw, out, clip_duration)
@@ -112,18 +127,18 @@ def fetch_one_clip(
         out.unlink(missing_ok=True)
         return None
 
-    # 1. Local
+    # 1. Local video
     local = _get_local(keyword, session_used)
     if local:
         import shutil
-        copy = Path(output_dir) / f"{index:02d}_{sub}_local_raw.mp4"
-        shutil.copy(local, copy)
-        result = _prepare(copy)
+        raw_copy = Path(output_dir) / f"{index:02d}_{sub:02d}_local_raw.mp4"
+        shutil.copy(local, raw_copy)
+        result = _prepare(raw_copy)
         if result:
             print(f"    ✅ Local: {local.name}")
             return result
 
-    # 2. Pexels (better quality, portrait-optimised)
+    # 2. Pexels (portrait-optimised, higher quality)
     raw = search_pexels(keyword, index, sub, output_dir, session_used)
     result = _prepare(raw)
     if result:
@@ -149,23 +164,45 @@ def fetch_one_clip(
             print(f"    ↩️  Fallback '{fb_kw}': ✅")
             return result
 
-    print(f"    ❌ No clip found for '{keyword}'")
+    print(f"    ❌ No clip found for: '{keyword}'")
     return None
 
 
 # ── Concatenate sub-clips ─────────────────────────────────────────────────────
 
 def _concat(clips: list[Path], idx: int, tmp_dir: str) -> Path:
+    """Concatenate multiple clips into one using ffmpeg concat demuxer."""
     if len(clips) == 1:
         return clips[0]
+
     lst = Path(tmp_dir) / f"s{idx:02d}_list.txt"
-    lst.write_text("\n".join(f"file '{p}'" for p in clips))
+
+    # Properly escape paths for ffmpeg concat demuxer
+    # Single quotes in paths must be escaped as '\''
+    lines = []
+    for p in clips:
+        escaped = str(p).replace("\\", "/").replace("'", "'\\''")
+        lines.append(f"file '{escaped}'")
+    lst.write_text("\n".join(lines), encoding="utf-8")
+
     out = Path(tmp_dir) / f"s{idx:02d}_concat.mp4"
     r   = subprocess.run(
-        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lst), "-c", "copy", str(out)],
+        [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", str(lst),
+            "-c", "copy",
+            str(out),
+        ],
         capture_output=True,
     )
-    return out if r.returncode == 0 and out.exists() else clips[0]
+
+    if r.returncode == 0 and out.exists():
+        return out
+
+    # Fallback: return first clip if concat failed
+    print(f"  ⚠️  Concat failed for sentence {idx} — using first clip only")
+    return clips[0]
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -176,8 +213,12 @@ def fetch_videos_for_script(
     output_dir: str = "videos",
     tmp_dir: str = "/tmp/vsg_clips",
 ) -> list[Path]:
+    """
+    Fetch one prepared video clip per sentence.
+    Each sentence has 3 keywords; sub-clips are concatenated.
+    """
     Path(output_dir).mkdir(exist_ok=True)
-    session_used: set  = set()
+    session_used: set      = set()
     final_paths: list[Path] = []
 
     print(f"\n📹  Fetching videos  ({get_used_count()} used globally)")
@@ -186,15 +227,27 @@ def fetch_videos_for_script(
         print(f"\n  🎬 [{i+1}/{len(keywords_per_sentence)}] {duration:.1f}s — {keywords}")
 
         clips: list[Path] = []
-        sub_dur = duration / len(keywords)
+        sub_dur = duration / max(len(keywords), 1)
 
         for sub_i, kw in enumerate(keywords):
-            clip = fetch_one_clip(kw, i, sub_i, sub_dur, output_dir, tmp_dir, session_used)
+            clip = fetch_one_clip(
+                keyword=kw,
+                index=i,
+                sub=sub_i,
+                clip_duration=sub_dur,
+                output_dir=output_dir,
+                tmp_dir=tmp_dir,
+                session_used=session_used,
+            )
             if clip:
                 clips.append(clip)
 
         if not clips:
-            raise RuntimeError(f"No video clips for sentence {i+1}: {keywords}")
+            raise RuntimeError(
+                f"No video clips found for sentence {i+1}. "
+                f"Keywords tried: {keywords}. "
+                f"Check PIXABAY_API_KEY and PEXELS_API_KEY."
+            )
 
         final = _concat(clips, i, tmp_dir)
         final_paths.append(final)
