@@ -1,9 +1,9 @@
 """
-Manages background music and SFX.
+Manages background music and SFX from local assets.
 
-Directory structure expected:
-  assets/music/motivation/  ← motivation*.mp3 / *.wav
-  assets/music/cinematic/   ← cinematic*.mp3 / *.wav
+Directory structure:
+  assets/music/motivation/  ← *.mp3 / *.wav
+  assets/music/cinematic/   ← *.mp3 / *.wav
   sfx/swoosh/               ← Swoosh*.mp3 / *.wav
   sfx/whoosh/               ← Whoosh*.mp3 / *.wav
 """
@@ -14,7 +14,7 @@ from pathlib import Path
 
 # ── Asset paths ───────────────────────────────────────────────────────────────
 MUSIC_DIR = Path("assets") / "music"
-SFX_DIR   = Path("sfx")              # ← Fixed: was Path("assets") / "sfx" — WRONG
+SFX_DIR   = Path("sfx")            # ← NOT assets/sfx — that was the bug
 
 MUSIC_POOLS: dict[str, Path] = {
     "motivation": MUSIC_DIR / "motivation",
@@ -27,9 +27,10 @@ SFX_POOLS: dict[str, Path] = {
 }
 
 
+# ── Music selection ────────────────────────────────────────────────────────────
+
 def get_music_file(content_type: str = "motivational", seed: int = None) -> Path | None:
-    """Pick a random music file. All motivational content uses the motivation pool."""
-    # Motivational-only project — always use motivation pool
+    """Pick a random music file from the motivation pool."""
     pool_dir = MUSIC_POOLS.get("motivation")
 
     if not pool_dir or not pool_dir.exists():
@@ -61,6 +62,8 @@ def get_sfx_file(sfx_type: str = "swoosh", seed: int = None) -> Path | None:
     return random.Random(seed).choice(files)
 
 
+# ── Audio mixing ───────────────────────────────────────────────────────────────
+
 def mix_audio(
     voice_path: str,
     music_path: str,
@@ -69,15 +72,14 @@ def mix_audio(
     fade_in: float = 1.0,
     fade_out: float = 2.0,
 ) -> Path:
-    """
-    Mix voiceover + background music.
-    Output duration = exact voiceover duration.
-    """
+    """Mix voiceover with background music. Output = exact voice duration."""
     probe = subprocess.run(
-        ["ffprobe", "-v", "error",
-         "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1",
-         voice_path],
+        [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            voice_path,
+        ],
         capture_output=True, text=True,
     )
     try:
@@ -85,9 +87,8 @@ def mix_audio(
     except ValueError:
         voice_dur = 60.0
 
-    print(f"  🎚️  Mixing: voice={voice_dur:.2f}s music_vol={music_volume*100:.0f}%")
-
     fade_out_st = max(0.0, voice_dur - fade_out)
+    print(f"  🎚️  Mixing: voice={voice_dur:.2f}s  music_vol={music_volume*100:.0f}%")
 
     result = subprocess.run(
         [
@@ -119,16 +120,15 @@ def mix_audio(
     return Path(output_path)
 
 
+# ── SFX track builder ─────────────────────────────────────────────────────────
+
 def build_sfx_track(
     n_clips: int,
     clip_durations: list[float],
     sfx_type: str = "swoosh",
     output_path: str = "/tmp/sfx_track.wav",
 ) -> Path | None:
-    """
-    Build a SFX track with swoosh/whoosh at each clip transition.
-    Returns Path to the track, or None if unavailable.
-    """
+    """Build a SFX track with swoosh/whoosh at each clip transition."""
     if n_clips <= 1:
         return None
 
@@ -140,7 +140,7 @@ def build_sfx_track(
     if not all_sfx:
         return None
 
-    # Transition timestamps
+    # Calculate transition timestamps
     transition_times: list[float] = []
     t = 0.0
     for dur in clip_durations[:-1]:
@@ -148,8 +148,8 @@ def build_sfx_track(
         transition_times.append(t)
 
     total_dur = sum(clip_durations)
-    inputs    = []
-    delays    = []
+    inputs: list[str] = []
+    delays: list[str] = []
 
     for i, trans_t in enumerate(transition_times):
         sfx_file  = random.choice(all_sfx)
@@ -184,6 +184,8 @@ def build_sfx_track(
     return Path(output_path)
 
 
+# ── Full pipeline ──────────────────────────────────────────────────────────────
+
 def mix_voice_music_sfx(
     voice_path: str,
     content_type: str,
@@ -197,8 +199,8 @@ def mix_voice_music_sfx(
     """
     Full audio pipeline:
       1. Pick background music
-      2. Mix voice + music
-      3. Add transition SFX
+      2. Mix voice + music  →  intermediate temp file
+      3. Add transition SFX →  final output_path
 
     Returns path to final mixed audio.
     """
@@ -208,10 +210,9 @@ def mix_voice_music_sfx(
         print("  ⚠️  No music found — voice only")
         return Path(voice_path)
 
-    # Mix voice + music
-    mixed_path = output_path.replace(".wav", "_vm.aac").replace(".mp3", "_vm.aac")
-    if not mixed_path.endswith(".aac"):
-        mixed_path = output_path + "_vm.aac"
+    # ── FIXED: use a distinct temp path to avoid ffmpeg read/write collision ──
+    p          = Path(output_path)
+    mixed_path = str(p.parent / f".tmp_{p.stem}_vm.aac")
 
     mixed = mix_audio(
         voice_path=voice_path,
@@ -220,7 +221,11 @@ def mix_voice_music_sfx(
         music_volume=music_volume,
     )
 
-    # Add SFX transitions
+    # If mix failed, mixed == voice_path (fallback)
+    if str(mixed) == str(voice_path):
+        return Path(voice_path)
+
+    # ── Add SFX at transitions ────────────────────────────────────────────────
     if clip_durations and len(clip_durations) > 1:
         sfx_track = build_sfx_track(
             n_clips=len(clip_durations),
@@ -230,9 +235,14 @@ def mix_voice_music_sfx(
         )
 
         if sfx_track:
+            # Measure intermediate file duration
             probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "default=noprint_wrappers=1:nokey=1", str(mixed)],
+                [
+                    "ffprobe", "-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    str(mixed),
+                ],
                 capture_output=True, text=True,
             )
             try:
@@ -240,6 +250,7 @@ def mix_voice_music_sfx(
             except ValueError:
                 dur = 60.0
 
+            # Mix voice+music with SFX → final output_path (different from mixed_path)
             result = subprocess.run(
                 [
                     "ffmpeg", "-y",
@@ -256,11 +267,20 @@ def mix_voice_music_sfx(
                 capture_output=True, text=True,
             )
 
+            # Clean up temp intermediate file
+            Path(mixed_path).unlink(missing_ok=True)
+
             if result.returncode == 0:
                 print(f"  ✅ Final audio with SFX → {Path(output_path).name}")
                 return Path(output_path)
             else:
-                print(f"  ⚠️  SFX mix failed — returning voice+music only")
-                return mixed
+                print(f"  ⚠️  SFX mix failed: {result.stderr[-150:]}")
+                # Rename mixed to output_path as fallback
+                import shutil
+                shutil.move(mixed_path, output_path)
+                return Path(output_path)
 
-    return mixed
+    # No SFX needed — rename temp to final output
+    import shutil
+    shutil.move(mixed_path, output_path)
+    return Path(output_path)
