@@ -1,6 +1,8 @@
 """
 Generate visual stock-footage keywords per sentence using Groq LLaMA.
 Also provides optional retention score analysis.
+
+FIX: أضفنا rate limiting صحيح بين API calls وتحسين retry logic.
 """
 import json
 import os
@@ -21,6 +23,10 @@ FALLBACKS = [
     "goal setting focus desk",
     "winner raising arms achievement",
 ]
+
+# FIX: ثوابن لإدارة Rate Limits بدلاً من القيم المبعثرة
+_RETRY_DELAYS   = [1.0, 2.0, 4.0]   # exponential backoff بالثواني
+_RATE_LIMIT_429 = 10.0               # انتظار إضافي عند 429
 
 
 def _clean_json(raw: str) -> str:
@@ -77,11 +83,22 @@ def get_keywords_for_sentences(
 
         except json.JSONDecodeError as e:
             print(f"  ⚠️  Keywords JSON parse [{attempt+1}/{retries}]: {e}")
-        except Exception as e:
-            print(f"  ⚠️  Keywords error [{attempt+1}/{retries}]: {e}")
 
+        except Exception as e:
+            err_str = str(e)
+            print(f"  ⚠️  Keywords error [{attempt+1}/{retries}]: {err_str[:120]}")
+
+            # FIX: تعرف على Rate Limit 429 وانتظر أطول
+            if "429" in err_str or "rate_limit" in err_str.lower():
+                wait = _RATE_LIMIT_429
+                print(f"  ⏳ Rate limit — waiting {wait}s")
+                time.sleep(wait)
+                continue
+
+        # FIX: exponential backoff بدلاً من قيمة ثابتة
         if attempt < retries - 1:
-            time.sleep(2 ** attempt)
+            wait = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+            time.sleep(wait)
 
     print(f"  ↩️  Using fallback keywords")
     return _fallback(n)
@@ -136,16 +153,15 @@ Rules:
             raw  = _clean_json(resp.choices[0].message.content)
             data = json.loads(raw)
 
-            # Validate and sanitize
             result = {
-                "overall_score":              int(data.get("overall_score", 0)),
-                "hook_strength":              int(data.get("hook_strength", 0)),
-                "cta_strength":               int(data.get("cta_strength", 0)),
-                "open_loops":                 [str(x) for x in data.get("open_loops", [])],
-                "drop_risk_at":               [str(x) for x in data.get("drop_risk_at", [])],
-                "re_hook_suggestions":        [str(x) for x in data.get("re_hook_suggestions", [])],
-                "pattern_interrupt_needed_at":[str(x) for x in data.get("pattern_interrupt_needed_at", [])],
-                "estimated_watch_rate":       str(data.get("estimated_watch_rate", "unknown")),
+                "overall_score":               int(data.get("overall_score", 0)),
+                "hook_strength":               int(data.get("hook_strength", 0)),
+                "cta_strength":                int(data.get("cta_strength", 0)),
+                "open_loops":                  [str(x) for x in data.get("open_loops", [])],
+                "drop_risk_at":                [str(x) for x in data.get("drop_risk_at", [])],
+                "re_hook_suggestions":         [str(x) for x in data.get("re_hook_suggestions", [])],
+                "pattern_interrupt_needed_at": [str(x) for x in data.get("pattern_interrupt_needed_at", [])],
+                "estimated_watch_rate":        str(data.get("estimated_watch_rate", "unknown")),
             }
 
             # Clamp scores to valid range
@@ -161,9 +177,8 @@ Rules:
             print(f"  ⚠️  Analysis error [{attempt+1}/2]: {e}")
 
         if attempt == 0:
-            time.sleep(1)
+            time.sleep(_RETRY_DELAYS[0])
 
-    # Return empty analysis on failure
     return {
         "overall_score": 0,
         "hook_strength": 0,
