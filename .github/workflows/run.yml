@@ -5,7 +5,7 @@ on:
     inputs:
 
       scripts_file:
-        description: "📄 Path to scripts file in repo (e.g. scripts/videos.xlsx)"
+        description: "📄 Path to scripts file (e.g. scripts/videos.xlsx)"
         required: true
         default: "scripts/videos.xlsx"
         type: string
@@ -21,44 +21,28 @@ on:
         required: true
         default: "male_smooth"
         type: choice
-        options:
-          - male_smooth
-          - male_warm
-          - female_clear
-          - female_warm
-          - neutral
+        options: [male_smooth, male_warm, female_clear, female_warm, neutral]
 
       voice_ar:
         description: "🎙️ Arabic voice"
         required: true
         default: "female_warm"
         type: choice
-        options:
-          - male_smooth
-          - male_warm
-          - female_clear
-          - female_warm
-          - neutral
+        options: [male_smooth, male_warm, female_clear, female_warm, neutral]
 
       tone:
         description: "🎨 Narration tone"
         required: true
         default: "energetic"
         type: choice
-        options:
-          - energetic
-          - inspirational
-          - emotional
-          - calm
+        options: [energetic, inspirational, emotional, calm]
 
       sfx_type:
         description: "🔊 Transition SFX"
         required: true
         default: "swoosh"
         type: choice
-        options:
-          - swoosh
-          - whoosh
+        options: [swoosh, whoosh]
 
       music_volume:
         description: "🎵 Music volume (0.08=quiet | 0.12=medium | 0.18=loud)"
@@ -77,40 +61,47 @@ on:
         required: true
         default: "false"
         type: choice
-        options:
-          - "false"
-          - "true"
+        options: ["false", "true"]
 
       no_video:
         description: "🎵 Audio only? (skip video render)"
         required: true
         default: "false"
         type: choice
-        options:
-          - "false"
-          - "true"
+        options: ["false", "true"]
 
       ab_test:
-        description: "🔀 A/B test? (generate verbal_hook variant)"
+        description: "🔀 A/B test? (verbal_hook variant)"
         required: true
         default: "false"
         type: choice
-        options:
-          - "false"
-          - "true"
+        options: ["false", "true"]
 
       force:
         description: "⚡ Force re-render? (ignore resume)"
         required: true
         default: "false"
         type: choice
-        options:
-          - "false"
-          - "true"
+        options: ["false", "true"]
+
+      # ── Facebook Publishing ─────────────────────────────────────────────────
+      publish_fb:
+        description: "📘 Auto-publish to Facebook after render?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+      fb_language:
+        description: "🌐 Facebook publish language"
+        required: true
+        default: "ar"
+        type: choice
+        options: [ar, en, both]
 
 jobs:
   generate:
-    name: 🎬 Generate Videos
+    name: 🎬 Generate + Publish
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -166,19 +157,17 @@ jobs:
           if_no_artifact_found: ignore
           search_artifacts: true
 
-      - name: 📥 Restore used videos DB (legacy)
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          name: used-videos-db
-          if_no_artifact_found: ignore
-          search_artifacts: true
-
-      - name: 🎬 Run generator
+      - name: 🎬 Run generator + publish
         env:
-          GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
-          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          GROQ_API_KEY:    ${{ secrets.GROQ_API_KEY }}
-          PEXELS_API_KEY:  ${{ secrets.PEXELS_API_KEY }}
+          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
+          PIXABAY_API_KEY:  ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY:   ${{ secrets.PEXELS_API_KEY }}
+          GROQ_API_KEY:     ${{ secrets.GROQ_API_KEY }}
+          FB_PAGE_ID:       ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_TOKEN:    ${{ secrets.FB_PAGE_TOKEN }}
         run: |
           FLAGS=""
 
@@ -186,6 +175,7 @@ jobs:
           [ "${{ inputs.no_video }}"    = "true" ] && FLAGS="$FLAGS --no-video"
           [ "${{ inputs.ab_test }}"     = "true" ] && FLAGS="$FLAGS --ab-test"
           [ "${{ inputs.force }}"       = "true" ] && FLAGS="$FLAGS --force"
+          [ "${{ inputs.publish_fb }}"  = "true" ] && FLAGS="$FLAGS --publish-fb --fb-lang ${{ inputs.fb_language }}"
 
           [ -n "${{ inputs.video_number }}" ] && \
             FLAGS="$FLAGS --video-number ${{ inputs.video_number }}"
@@ -235,7 +225,7 @@ jobs:
           path: output/**/*_thumbnail.png
           retention-days: 30
 
-      - name: 📤 Upload audio files
+      - name: 📤 Upload audio
         if: ${{ inputs.no_video == 'true' && inputs.script_only == 'false' }}
         uses: actions/upload-artifact@v4
         with:
@@ -243,7 +233,7 @@ jobs:
           path: output/**/*_audio_mixed.aac
           retention-days: 7
 
-      - name: 📤 Save SQLite database (for resume)
+      - name: 📤 Save SQLite database (resume)
         if: always()
         uses: actions/upload-artifact@v4
         with:
