@@ -1,216 +1,369 @@
 """
-Unified video source manager.
-Priority: Local → Pexels → Pixabay → Fallback keywords.
-Min clip duration: 4 seconds for quality footage.
+video_sources.py — Unified stock video fetcher
+Sources (in priority order): Local → Pexels → Pixabay
 """
+
+from __future__ import annotations
+
+import os
+import re
+import time
 import random
 import subprocess
 from pathlib import Path
 
-from db      import get_used_count
-from pexels  import search_pexels
-from pixabay import search_pixabay
+import requests
 
-LOCAL_DIR    = Path("local_videos")
-MIN_DURATION = 4.0   # Minimum valid video duration (seconds)
+from db import is_video_used, mark_video_used
 
-FALLBACK_KWS = [
-    "person running sunrise",
-    "athlete training hard",
-    "success celebration team",
-    "businessman walking confident",
-    "sunrise mountain peak",
-    "hands writing notebook goals",
-    "motivational gym workout",
-    "goal achievement winner",
-    "person morning routine motivation",
-    "focus desk work productivity",
-]
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+MIN_DURATION     = 5
+MIN_FILE_BYTES   = 100_000
+DOWNLOAD_TIMEOUT = 90
+API_TIMEOUT      = 15
+
+PEXELS_API_URL  = "https://api.pexels.com/videos/search"
+PIXABAY_API_URL = "https://pixabay.com/api/videos/"
+
+RETRY_DELAYS = [1.0, 2.0, 4.0]
 
 
-def is_valid_video(path: Path, min_duration: float = MIN_DURATION) -> bool:
-    """Check video has valid stream, minimum duration, and minimum dimensions."""
+# ── Shared helpers ────────────────────────────────────────────────────────────
+
+def _probe_video(path: Path) -> float:
     r = subprocess.run(
         [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=width,height,duration",
-            "-of", "csv=p=0", str(path),
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
         ],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=10,
     )
-    out = r.stdout.strip()
-    if not out:
-        return False
     try:
-        parts    = out.split(",")
-        width    = int(parts[0])
-        height   = int(parts[1])
-        duration = float(parts[2])
-        return duration >= min_duration and width >= 200 and height >= 200
-    except (ValueError, IndexError):
-        return False
+        return float(r.stdout.strip())
+    except (ValueError, subprocess.TimeoutExpired):
+        return 0.0
 
 
-def convert_to_9x16(raw: Path, out: Path, duration: float) -> bool:
-    """Scale and crop raw clip to 1080×1920 portrait."""
-    r = subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", str(raw),
-            "-t", f"{duration:.3f}",
-            "-vf", (
-                "scale=1080:1920:force_original_aspect_ratio=increase,"
-                "crop=1080:1920,setsar=1"
-            ),
-            "-r", "30",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
-            "-an", str(out),
-        ],
-        capture_output=True,
-    )
-    return r.returncode == 0 and out.exists() and out.stat().st_size > 50_000
+def _download(url: str, dest: Path, retries: int = 3) -> bool:
+    for attempt in range(retries):
+        try:
+            with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as r:
+                r.raise_for_status()
+                ct = r.headers.get("Content-Type", "")
+                if ct and "video" not in ct and "octet-stream" not in ct:
+                    return False
+                with open(dest, "wb") as f:
+                    for chunk in r.iter_content(8192):
+                        if chunk:
+                            f.write(chunk)
+
+            if not dest.exists() or dest.stat().st_size < MIN_FILE_BYTES:
+                dest.unlink(missing_ok=True)
+                raise ValueError("File too small or missing")
+
+            dur = _probe_video(dest)
+            if dur < MIN_DURATION:
+                dest.unlink(missing_ok=True)
+                raise ValueError(f"Video duration {dur:.1f}s < minimum")
+
+            return True
+
+        except Exception:
+            dest.unlink(missing_ok=True)
+            if attempt < retries - 1:
+                time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)])
+
+    return False
 
 
-def _get_local(keyword: str, session_used: set) -> Path | None:
-    if not LOCAL_DIR.exists():
-        return None
-    all_vids  = list(LOCAL_DIR.glob("*.mp4")) + list(LOCAL_DIR.glob("*.mov"))
-    available = [v for v in all_vids if str(v) not in session_used]
-    if not available:
-        return None
-    kw      = keyword.lower().replace(" ", "_")
-    matched = [v for v in available if kw in v.stem.lower()]
-    chosen  = random.choice(matched or available)
-    session_used.add(str(chosen))
-    return chosen
+def _safe_name(keyword: str, length: int = 20) -> str:
+    return re.sub(r"[^a-z0-9_]", "_", keyword.lower())[:length]
 
 
-def fetch_one_clip(
+# ── Local videos ──────────────────────────────────────────────────────────────
+
+def _search_local(
     keyword: str,
     index: int,
     sub: int,
-    clip_duration: float,
     output_dir: str,
-    tmp_dir: str,
     session_used: set,
 ) -> Path | None:
-    """
-    Fetch one prepared video clip.
-    Priority: Local → Pexels → Pixabay → Fallback keywords.
-    """
-    Path(tmp_dir).mkdir(parents=True, exist_ok=True)
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
-
-    out = Path(tmp_dir) / f"s{index:02d}_sub{sub:02d}.mp4"
-
-    def _prepare(raw: Path | None) -> Path | None:
-        if not raw or not raw.exists():
-            return None
-        ok = convert_to_9x16(raw, out, clip_duration)
-        raw.unlink(missing_ok=True)
-        if ok and is_valid_video(out, min_duration=min(clip_duration * 0.8, MIN_DURATION)):
-            return out
-        out.unlink(missing_ok=True)
+    local_dir = Path("assets") / "videos"
+    if not local_dir.exists():
         return None
 
-    # 1. Local
-    local = _get_local(keyword, session_used)
-    if local:
-        import shutil
-        raw_copy = Path(output_dir) / f"{index:02d}_{sub:02d}_local_raw.mp4"
-        shutil.copy(local, raw_copy)
-        result = _prepare(raw_copy)
-        if result:
-            print(f"    ✅ Local: {local.name}")
-            return result
+    all_videos = list(local_dir.glob("*.mp4")) + list(local_dir.glob("*.mov"))
+    if not all_videos:
+        return None
 
-    # 2. Pexels
-    raw = search_pexels(keyword, index, sub, output_dir, session_used)
-    result = _prepare(raw)
-    if result:
-        print(f"    ✅ Pexels: '{keyword}'")
-        return result
+    kw_clean = keyword.lower().replace(" ", "_")
+    matches  = [v for v in all_videos if kw_clean in v.stem.lower()]
+    pool     = matches if matches else all_videos
 
-    # 3. Pixabay
-    raw = search_pixabay(keyword, index, sub, output_dir, session_used)
-    result = _prepare(raw)
-    if result:
-        print(f"    ✅ Pixabay: '{keyword}'")
-        return result
+    unused = [v for v in pool if str(v) not in session_used]
+    if not unused:
+        unused = pool
 
-    # 4. Fallback keywords
-    for fb_kw in FALLBACK_KWS:
-        if fb_kw == keyword:
+    pick = random.choice(unused)
+    session_used.add(str(pick))
+    print(f"    📁 Local: {pick.name}")
+    return pick
+
+
+# ── Pexels ────────────────────────────────────────────────────────────────────
+
+def _search_pexels(
+    keyword: str,
+    index: int,
+    sub: int,
+    output_dir: str,
+    session_used: set,
+    retries: int = 3,
+) -> Path | None:
+    api_key = os.environ.get("PEXELS_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    videos = []
+    for attempt in range(retries):
+        try:
+            r = requests.get(
+                PEXELS_API_URL,
+                headers={"Authorization": api_key},
+                params={
+                    "query":       keyword,
+                    "per_page":    15,
+                    "orientation": "portrait",
+                    "size":        "medium",
+                },
+                timeout=API_TIMEOUT,
+            )
+            r.raise_for_status()
+            videos = r.json().get("videos", [])
+            break
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response else 0
+            if status == 429:
+                print(f"    ⚠️  Pexels rate limit — waiting 10s")
+                time.sleep(10)
+            elif status in (401, 403):
+                print(f"    ❌ Pexels auth error ({status})")
+                return None
+            else:
+                if attempt < retries - 1:
+                    time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS)-1)])
+        except Exception as e:
+            print(f"    ⚠️  Pexels [{attempt+1}/{retries}]: {e}")
+            if attempt < retries - 1:
+                time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS)-1)])
+
+    videos = sorted(videos, key=lambda v: v.get("duration", 0), reverse=True)
+
+    for video in videos:
+        if video.get("duration", 0) < MIN_DURATION:
             continue
-        raw = search_pexels(fb_kw, index, sub + 100, output_dir, session_used)
-        if not raw:
-            raw = search_pixabay(fb_kw, index, sub + 100, output_dir, session_used)
-        result = _prepare(raw)
-        if result:
-            print(f"    ↩️  Fallback '{fb_kw}': ✅")
-            return result
+        vid_id = str(video["id"])
+        sk     = f"px_{vid_id}"
+        if sk in session_used or is_video_used(vid_id, "pexels"):
+            continue
 
-    print(f"    ❌ No clip found for: '{keyword}'")
+        files = sorted(
+            [f for f in video.get("video_files", []) if f.get("file_type") == "video/mp4"],
+            key=lambda f: f.get("width", 0) * f.get("height", 0),
+            reverse=True,
+        )
+        url = files[0].get("link") if files else None
+        if not url:
+            continue
+
+        dest = Path(output_dir) / f"{index:02d}_{sub}_px_{_safe_name(keyword)}_raw.mp4"
+        if _download(url, dest, retries=retries):
+            session_used.add(sk)
+            mark_video_used(vid_id, keyword, "pexels")
+            print(f"    🎬 Pexels: {dest.name}")
+            return dest
+
     return None
 
 
-def _concat(clips: list[Path], idx: int, tmp_dir: str) -> Path:
-    if len(clips) == 1:
-        return clips[0]
-    lst = Path(tmp_dir) / f"s{idx:02d}_list.txt"
-    lines = []
-    for p in clips:
-        escaped = str(p).replace("\\", "/").replace("'", "'\\''")
-        lines.append(f"file '{escaped}'")
-    lst.write_text("\n".join(lines), encoding="utf-8")
-    out = Path(tmp_dir) / f"s{idx:02d}_concat.mp4"
-    r   = subprocess.run(
-        ["ffmpeg","-y","-f","concat","-safe","0","-i",str(lst),"-c","copy",str(out)],
-        capture_output=True,
-    )
-    return out if r.returncode == 0 and out.exists() else clips[0]
+# ── Pixabay ───────────────────────────────────────────────────────────────────
 
+def _search_pixabay(
+    keyword: str,
+    index: int,
+    sub: int,
+    output_dir: str,
+    session_used: set,
+    retries: int = 3,
+) -> Path | None:
+    api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    hits = []
+    for attempt in range(retries):
+        try:
+            r = requests.get(
+                PIXABAY_API_URL,
+                params={
+                    "key":        api_key,
+                    "q":          keyword,
+                    "video_type": "film",
+                    "per_page":   20,
+                    "safesearch": "true",
+                    "order":      "popular",
+                },
+                timeout=API_TIMEOUT,
+            )
+            r.raise_for_status()
+            hits = r.json().get("hits", [])
+            break
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response else 0
+            if status == 429:
+                print(f"    ⚠️  Pixabay rate limit — waiting 10s")
+                time.sleep(10)
+            elif status in (400, 401):
+                print(f"    ❌ Pixabay auth error ({status})")
+                return None
+            else:
+                if attempt < retries - 1:
+                    time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS)-1)])
+        except Exception as e:
+            print(f"    ⚠️  Pixabay [{attempt+1}/{retries}]: {e}")
+            if attempt < retries - 1:
+                time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS)-1)])
+
+    hits = sorted(hits, key=lambda h: h.get("duration", 0), reverse=True)
+
+    for hit in hits:
+        if hit.get("duration", 0) < MIN_DURATION:
+            continue
+        vid_id = str(hit["id"])
+        sk     = f"pb_{vid_id}"
+        if sk in session_used or is_video_used(vid_id, "pixabay"):
+            continue
+
+        vids = hit.get("videos", {})
+        url  = (
+            vids.get("medium", {}).get("url") or
+            vids.get("large",  {}).get("url") or
+            vids.get("small",  {}).get("url") or
+            vids.get("tiny",   {}).get("url")
+        )
+        if not url or ".mp4" not in url.lower():
+            continue
+
+        dest = Path(output_dir) / f"{index:02d}_{sub}_pb_{_safe_name(keyword)}_raw.mp4"
+        if _download(url, dest, retries=retries):
+            session_used.add(sk)
+            mark_video_used(vid_id, keyword, "pixabay")
+            print(f"    🎬 Pixabay: {dest.name}")
+            return dest
+
+    return None
+
+
+# ── Fallback ──────────────────────────────────────────────────────────────────
+
+def _get_fallback_video(output_dir: str, index: int) -> Path | None:
+    out      = Path(output_dir)
+    existing = sorted(out.glob("*_raw.mp4"))
+    if existing:
+        print(f"    ♻️  Reusing: {existing[0].name}")
+        return existing[0]
+
+    for pattern in ["assets/videos/*.mp4", "assets/videos/*.mov"]:
+        found = list(Path(".").glob(pattern))
+        if found:
+            print(f"    📁 Asset fallback: {found[0].name}")
+            return found[0]
+
+    return None
+
+
+# ── Main fetch function ───────────────────────────────────────────────────────
 
 def fetch_videos_for_script(
     keywords_per_sentence: list[list[str]],
     clip_durations: list[float],
-    output_dir: str = "videos",
-    tmp_dir: str = "/tmp/vsg_clips",
+    output_dir: str,
+    aligned: list[dict] | None = None,
 ) -> list[Path]:
-    Path(output_dir).mkdir(exist_ok=True)
-    session_used: set      = set()
-    final_paths: list[Path] = []
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    print(f"\n📹  Fetching videos  ({get_used_count()} used globally)")
+    n             = len(keywords_per_sentence)
+    session_used  : set[str] = set()
+    results       : list[Path | None] = [None] * n
 
-    for i, (keywords, duration) in enumerate(zip(keywords_per_sentence, clip_durations)):
-        print(f"\n  🎬 [{i+1}/{len(keywords_per_sentence)}] {duration:.1f}s — {keywords}")
+    print(f"\n  📹 Fetching {n} videos...")
 
-        clips: list[Path] = []
-        sub_dur = duration / max(len(keywords), 1)
+    for i, kws in enumerate(keywords_per_sentence):
+        found = False
 
-        for sub_i, kw in enumerate(keywords):
-            clip = fetch_one_clip(
-                keyword=kw,
-                index=i,
-                sub=sub_i,
-                clip_duration=sub_dur,
-                output_dir=output_dir,
-                tmp_dir=tmp_dir,
-                session_used=session_used,
-            )
-            if clip:
-                clips.append(clip)
+        for sub, kw in enumerate(kws):
+            kw = kw.strip()
+            if not kw:
+                continue
 
-        if not clips:
-            raise RuntimeError(
-                f"No video clips for sentence {i+1}. Keywords: {keywords}. "
-                f"Check PIXABAY_API_KEY and PEXELS_API_KEY."
-            )
+            print(f"  [{i+1}/{n}] \"{kw}\" ...", end=" ", flush=True)
 
-        final = _concat(clips, i, tmp_dir)
-        final_paths.append(final)
-        print(f"  ✅ Sentence {i+1} → {final.name}")
+            path = _search_local(kw, i, sub, output_dir, session_used)
 
-    print(f"\n📊  Videos used globally: {get_used_count()}")
-    return final_paths
+            if path is None:
+                path = _search_pexels(kw, i, sub, output_dir, session_used)
+
+            if path is None:
+                path = _search_pixabay(kw, i, sub, output_dir, session_used)
+
+            if path is not None:
+                results[i] = path
+                found = True
+                print("✓")
+                break
+            else:
+                print("✗ trying next...")
+
+        if not found:
+            fallback = _get_fallback_video(output_dir, i)
+            if fallback:
+                results[i] = fallback
+                print(f"  [{i+1}/{n}] ♻️  Fallback → {fallback.name}")
+            else:
+                print(f"  [{i+1}/{n}] ❌ No video found")
+
+    results = _fill_gaps(results)
+    found_count = sum(1 for r in results if r is not None)
+    print(f"\n  ✅ Videos: {found_count}/{n} fetched")
+    return results
+
+
+def _fill_gaps(results: list[Path | None]) -> list[Path]:
+    n = len(results)
+
+    last = None
+    for i in range(n):
+        if results[i] is not None:
+            last = results[i]
+        elif last is not None:
+            results[i] = last
+
+    last = None
+    for i in range(n - 1, -1, -1):
+        if results[i] is not None:
+            last = results[i]
+        elif last is not None:
+            results[i] = last
+
+    if any(r is None for r in results):
+        raise RuntimeError(
+            "Could not fetch any videos. "
+            "Check PEXELS_API_KEY and PIXABAY_API_KEY."
+        )
+
+    return results  # type: ignore
