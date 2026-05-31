@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
 🎬 Motivational Video Generator
-Reads EN + AR scripts from Excel/CSV → produces synced videos.
+Reads EN + AR scripts from Excel/CSV → produces synced videos → publishes to Facebook.
 
 Features:
   - Resume via SQLite (skips completed renders)
-  - Parallel EN + AR rendering (ThreadPoolExecutor)
+  - Parallel EN + AR rendering
   - SRT subtitles auto-generated
-  - Multiple export formats (9:16 + 1x1 + 16x9)
-  - Sources: Local → Pexels → Pixabay → fallback
+  - Multiple export formats
+  - Sources: Local → Pexels → Pixabay
   - A/B hook variants
-  - Advanced TTS with per-sentence pacing
-  - Optional retention analysis (--analyze)
+  - Auto-publish to Facebook (--publish-fb)
 """
 
 import argparse
@@ -50,34 +49,46 @@ def parse_args() -> argparse.Namespace:
         description="🎬 Motivational Video Generator",
         formatter_class=argparse.RawTextHelpFormatter,
     )
+    # Input / output
     p.add_argument("input_file",       type=str,   help="Excel/CSV with scripts")
+    p.add_argument("--output-dir",     type=str,   default="output")
+    p.add_argument("--video-number",   type=str,   default=None)
+
+    # Voice & tone
     p.add_argument("--voice-en",       type=str,   default="male_smooth",  choices=list(VOICES.keys()))
     p.add_argument("--voice-ar",       type=str,   default="female_warm",  choices=list(VOICES.keys()))
     p.add_argument("--tone",           type=str,   default="energetic",
-                   choices=["energetic", "inspirational", "emotional", "calm"])
+                   choices=["energetic","inspirational","emotional","calm"])
+
+    # Audio
     p.add_argument("--music-volume",   type=float, default=0.12)
-    p.add_argument("--sfx-type",       type=str,   default="swoosh", choices=["swoosh", "whoosh"])
-    p.add_argument("--output-dir",     type=str,   default="output")
-    p.add_argument("--video-number",   type=str,   default=None,
-                   help="Process only this video number")
+    p.add_argument("--sfx-type",       type=str,   default="swoosh", choices=["swoosh","whoosh"])
+
+    # Export
     p.add_argument("--formats",        type=str,   default="1x1,16x9",
                    help="Additional export formats: 1x1,16x9,4x5")
-    p.add_argument("--script-only",    action="store_true",
-                   help="Print scripts + analysis only — no TTS or video")
-    p.add_argument("--no-video",       action="store_true",
-                   help="TTS + audio only — skip video render")
-    p.add_argument("--force",          action="store_true",
-                   help="Re-render even if already done")
-    p.add_argument("--ab-test",        action="store_true",
-                   help="Generate variant B using verbal_hook as opening")
-    p.add_argument("--no-export",      action="store_true",
-                   help="Skip additional format exports (faster)")
-    p.add_argument("--analyze",        action="store_true",
-                   help="Run retention score analysis on each script")
+
+    # Mode flags
+    p.add_argument("--script-only",    action="store_true")
+    p.add_argument("--no-video",       action="store_true")
+    p.add_argument("--force",          action="store_true")
+    p.add_argument("--ab-test",        action="store_true")
+    p.add_argument("--no-export",      action="store_true")
+    p.add_argument("--analyze",        action="store_true")
+
+    # Facebook publishing
+    p.add_argument("--publish-fb",     action="store_true",
+                   help="Auto-publish to Facebook after render")
+    p.add_argument("--fb-lang",        type=str,   default="ar",
+                   choices=["ar","en","both"],
+                   help="Language version to publish on Facebook (default: ar)")
+    p.add_argument("--fb-reel",        action="store_true", default=True,
+                   help="Publish as Facebook Reel (default: True)")
+
     return p.parse_args()
 
 
-# ── Script data builder ────────────────────────────────────────────────────────
+# ── Script builder ────────────────────────────────────────────────────────────
 
 def _estimate(text: str) -> int:
     return max(MIN_S, min(MAX_S, int(len(text.split()) / (WPM / 60))))
@@ -102,7 +113,7 @@ def build_script_data(
 
     kws = (
         keywords[:len(sentences)] +
-        [["person motivational", "success achievement", "goal focus"]] * len(sentences)
+        [["person motivational","success achievement","goal focus"]] * len(sentences)
     )[:len(sentences)]
 
     return {
@@ -138,7 +149,7 @@ def save_manifest(
         "audio":         str(Path(str(audio_path)).resolve()),
         "videos":        [str(Path(str(p)).resolve()) for p in video_paths],
         "duration_s":    real_duration or float(script_data["estimated_seconds"]),
-        "lang":          script_data.get("lang", "en"),
+        "lang":          script_data.get("lang","en"),
         "content_type":  CONTENT_TYPE,
         "word_timeline": timeline or [],
         "aligned":       aligned or [],
@@ -149,15 +160,15 @@ def save_manifest(
 
 
 def _render_node(manifest_path: Path, output_base: str) -> Path:
-    out    = Path(output_base + "_final.mp4").resolve()
-    script = Path("remotion/render.mjs").resolve()
+    out = Path(output_base + "_final.mp4").resolve()
+    render_script = Path("remotion/render.mjs").resolve()
     print(f"  🔧 Rendering → {out.name}")
     r = subprocess.run(
-        ["node", str(script), str(manifest_path), str(out)],
+        ["node", str(render_script), str(manifest_path), str(out)],
         text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
     if r.returncode != 0:
-        raise RuntimeError(f"Node render failed:\n{r.stdout[-600:]}")
+        raise RuntimeError(f"Render failed:\n{r.stdout[-600:]}")
     print(f"  🎉 Done → {out.name}")
     return out
 
@@ -171,23 +182,20 @@ def produce_audio(
     music_volume: float,
     sfx_type: str,
 ) -> tuple[Path, float, list, list]:
-    """TTS → mix → word sync. Returns (audio_path, duration, timeline, aligned)."""
     sentences     = script_data["sentences"]
-    lang_tag      = script_data.get("lang", "en").upper()
+    lang_tag      = script_data.get("lang","en").upper()
     has_open_loop = script_data.get("has_open_loop", False)
 
-    # TTS with advanced prompt
     print(f"\n  🎙️  {lang_tag} TTS  (voice={voice_key}, {len(sentences)} sentences)")
     synthesize_speech(
         script=script_data["full_script"],
         output_path=f"{output_base}_voice",
         voice_key=voice_key,
-        tone=script_data.get("tone", "energetic"),
+        tone=script_data.get("tone","energetic"),
         sentences=sentences,
         has_open_loop=has_open_loop,
     )
 
-    # Find produced WAV
     out_dir = Path(output_base).parent
     prefix  = Path(output_base).name
     wav_candidates = (
@@ -203,10 +211,9 @@ def produce_audio(
             real_dur = measured
             print(f"  📏 Real duration: {real_dur:.3f}s")
 
-    # Mix voice + music + SFX
-    print(f"  🎚️  Mixing  (music={music_volume}, sfx={sfx_type})")
-    clip_dur  = [real_dur / len(sentences)] * len(sentences)
-    mixed_out = f"{output_base}_audio_mixed.aac"
+    print(f"  🎚️  Mixing (music={music_volume}, sfx={sfx_type})")
+    clip_dur   = [real_dur / len(sentences)] * len(sentences)
+    mixed_out  = f"{output_base}_audio_mixed.aac"
 
     try:
         final_audio = mix_voice_music_sfx(
@@ -226,7 +233,6 @@ def produce_audio(
         print(f"  ⚠️  Mix error: {e} — using raw voice")
         audio_path = Path(wav_path or f"{output_base}_voice_0.wav")
 
-    # Word sync
     timeline, aligned = [], []
     try:
         word_ts = get_word_timestamps(wav_path) if wav_path else []
@@ -257,11 +263,6 @@ def produce_version(
     lang: str,
     force: bool = False,
 ) -> dict:
-    """
-    Full pipeline for one language version.
-    Thread-safe — each call uses a unique output_base.
-    Returns dict: {label, final, srt, word_srt, exports}
-    """
     result = {"label": label, "final": None, "srt": None, "word_srt": None, "exports": {}}
 
     # Resume check
@@ -294,12 +295,10 @@ def produce_version(
 
         final_video = _render_node(manifest, output_base)
 
-        # SRT subtitles
         if aligned:
             result["srt"]      = generate_srt(aligned, f"{output_base}.srt")
             result["word_srt"] = generate_word_srt(aligned, f"{output_base}_words.srt")
 
-        # Additional format exports
         if export_formats:
             result["exports"] = export_all(str(final_video), output_base, export_formats)
 
@@ -311,6 +310,53 @@ def produce_version(
         raise
 
     return result
+
+
+# ── Facebook publishing ────────────────────────────────────────────────────────
+
+def _publish_to_facebook(
+    outputs: dict,
+    record: dict,
+    fb_lang: str,
+    fb_reel: bool,
+) -> None:
+    """Publish rendered video(s) to Facebook."""
+    try:
+        from facebook import publish_to_facebook, check_credentials
+    except ImportError:
+        print("  ❌ facebook.py not found — skipping FB publish")
+        return
+
+    # Validate credentials before uploading
+    if not check_credentials():
+        print("  ❌ Invalid Facebook credentials — skipping publish")
+        return
+
+    # Determine which language versions to publish
+    langs = ["ar", "en"] if fb_lang == "both" else [fb_lang]
+
+    for lang in langs:
+        res         = outputs.get(lang, {})
+        final_video = res.get("final")
+
+        if not final_video:
+            print(f"  ⚠️  No {lang.upper()} video found — skipping FB {lang}")
+            continue
+
+        final_path = Path(str(final_video))
+        if not final_path.exists():
+            print(f"  ⚠️  Video file missing: {final_path.name}")
+            continue
+
+        try:
+            publish_to_facebook(
+                video_path=str(final_path),
+                record=record,
+                lang=lang,
+                as_reel=fb_reel,
+            )
+        except Exception as e:
+            print(f"  ❌ Facebook publish ({lang.upper()}): {e}")
 
 
 # ── Process one video ──────────────────────────────────────────────────────────
@@ -326,7 +372,7 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
     out_base       = str(Path(out_dir) / f"video_{num}")
     export_formats = [] if args.no_export else [f.strip() for f in args.formats.split(",") if f.strip()]
 
-    # Validate content
+    # Validate
     if not record["en_content"].strip():
         print(f"  ❌ No English content — skipping")
         return
@@ -335,47 +381,44 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
     ar_sentences = split_into_sentences(record["ar_content"], "ar") if record["ar_content"].strip() else []
 
     if not en_sentences:
-        print(f"  ❌ Could not parse English sentences — skipping")
+        print(f"  ❌ Cannot parse sentences — skipping")
         return
 
-    print(f"  📝 EN: {len(en_sentences)} sentences  |  AR: {len(ar_sentences)} sentences")
+    print(f"  📝 EN: {len(en_sentences)} sent  |  AR: {len(ar_sentences)} sent")
 
     # Show content strategy
-    hooks  = {k: record.get(k, "") for k in ["verbal_hook", "visual_hook", "written_hook", "value"]}
-    funnel = {k: record.get(k, "") for k in ["tofu", "mofu", "bofu"]}
+    hooks  = {k: record.get(k,"") for k in ["verbal_hook","visual_hook","written_hook","value"]}
+    funnel = {k: record.get(k,"") for k in ["tofu","mofu","bofu"]}
     if any(hooks.values()):
-        print(f"\n  📊 Content Strategy:")
+        print(f"\n  📊 Strategy:")
         for k, v in hooks.items():
-            if v:
-                print(f"     {k}: {v[:70]}")
+            if v: print(f"     {k}: {v[:70]}")
     if any(funnel.values()):
         for k, v in funnel.items():
-            if v:
-                print(f"     {k.upper()}: {v[:65]}")
+            if v: print(f"     {k.upper()}: {v[:65]}")
 
     # Keywords via Groq
-    print(f"\n  🔑 Fetching keywords (Groq)...")
+    print(f"\n  🔑 Keywords (Groq)...")
     try:
         keywords = get_keywords_for_sentences(en_sentences, title)
     except Exception as e:
-        print(f"  ⚠️  Keywords error: {e} — using fallback")
-        keywords = [["person motivational", "success achievement", "goal focus"]] * len(en_sentences)
+        print(f"  ⚠️  Keywords error: {e}")
+        keywords = [["person motivational","success achievement","goal focus"]] * len(en_sentences)
 
-    # Retention analysis (optional)
+    # Optional retention analysis
     if args.analyze or args.script_only:
         print(f"\n  📈 Retention analysis...")
         try:
             analysis = analyze_retention_score(en_sentences)
             if analysis:
-                print(f"     Overall score    : {analysis.get('overall_score', '?')}/100")
-                print(f"     Hook strength    : {analysis.get('hook_strength', '?')}/100")
-                print(f"     CTA strength     : {analysis.get('cta_strength', '?')}/100")
-                print(f"     Est. watch rate  : {analysis.get('estimated_watch_rate', '?')}")
-                drops = analysis.get("drop_risk_points", [])
-                if drops:
-                    print(f"     ⚠️  Drop risks    : {', '.join(str(d) for d in drops[:3])}")
+                print(f"     Overall: {analysis.get('overall_score','?')}/100")
+                print(f"     Hook:    {analysis.get('hook_strength','?')}/100")
+                print(f"     CTA:     {analysis.get('cta_strength','?')}/100")
+                print(f"     Watch:   {analysis.get('estimated_watch_rate','?')}")
+                if analysis.get("drop_risk_at"):
+                    print(f"     ⚠️  Drop risk at sentences: {analysis['drop_risk_at'][:3]}")
         except Exception as e:
-            print(f"  ⚠️  Analysis failed: {e}")
+            print(f"  ⚠️  Analysis error: {e}")
 
     # Build script data
     try:
@@ -386,41 +429,40 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
 
     ar_data = None
     if ar_sentences:
-        ar_kws = keywords[:len(ar_sentences)]
         try:
-            ar_data = build_script_data(record, "ar", ar_kws, args.tone)
+            ar_data = build_script_data(record, "ar", keywords[:len(ar_sentences)], args.tone)
         except ValueError as e:
             print(f"  ⚠️  AR: {e}")
 
-    # A/B variant — verbal_hook as opening
+    # A/B hook variant
     ab_data = None
-    if args.ab_test and record.get("verbal_hook", "").strip():
+    if args.ab_test and record.get("verbal_hook","").strip():
         try:
             ab_data = build_script_data(
                 record, "en", keywords, args.tone,
                 hook_prefix=record["verbal_hook"],
             )
-            print(f"  🔀 A/B variant: verbal hook as opener")
+            print(f"  🔀 A/B: verbal hook variant built")
         except Exception as e:
-            print(f"  ⚠️  A/B build failed: {e}")
+            print(f"  ⚠️  A/B: {e}")
 
     save_script_meta(num, title, en_data, ar_data)
 
     # Script-only mode
     if args.script_only:
-        print(f"\n  🇬🇧  English ({len(en_sentences)} sentences):")
+        print(f"\n  🇬🇧  English:")
         for i, s in enumerate(en_sentences, 1):
             kw = " | ".join(keywords[i-1]) if i <= len(keywords) else ""
             print(f"    {i:>2}. {s}")
             print(f"        🔑 {kw}")
         if ar_sentences:
-            print(f"\n  🇸🇦  Arabic ({len(ar_sentences)} sentences):")
+            print(f"\n  🇸🇦  Arabic:")
             for i, s in enumerate(ar_sentences, 1):
                 print(f"    {i:>2}. {s}")
         return
 
-    # Fetch stock videos (shared across all language versions)
-    print(f"\n  📹 Fetching stock videos...")
+    # Fetch stock videos
+    print(f"\n  📹 Fetching videos...")
     clip_dur = [en_data["estimated_seconds"] / len(en_sentences)] * len(en_sentences)
     vid_dir  = str(Path(out_dir) / f"videos_{num}")
 
@@ -449,17 +491,17 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
         return
 
     # Thumbnail
-    hook_for_thumb = (record.get("written_hook") or record.get("verbal_hook") or en_data["hook"])
+    hook_thumb = record.get("written_hook") or record.get("verbal_hook") or en_data["hook"]
     try:
-        html_path = generate_thumbnail_html(
-            title=title, hook=hook_for_thumb,
+        html = generate_thumbnail_html(
+            title=title, hook=hook_thumb,
             tone=args.tone, output_path=f"{out_base}_thumbnail.html",
         )
-        render_thumbnail(html_path=str(html_path), output_png=f"{out_base}_thumbnail.png")
+        render_thumbnail(html_path=str(html), output_png=f"{out_base}_thumbnail.png")
     except Exception as e:
         print(f"  ⚠️  Thumbnail: {e}")
 
-    # Build version list
+    # Build render versions
     versions = [
         dict(script_data=en_data, voice_key=args.voice_en,
              output_base=f"{out_base}_en", label="🇬🇧 English", lang="en"),
@@ -472,7 +514,7 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
     if ab_data:
         versions.append(dict(
             script_data=ab_data, voice_key=args.voice_en,
-            output_base=f"{out_base}_en_b", label="🔀 English B (A/B)", lang="en_b",
+            output_base=f"{out_base}_en_b", label="🔀 English B", lang="en_b",
         ))
 
     shared = dict(
@@ -505,18 +547,26 @@ def process_video(record: dict, args: argparse.Namespace, out_dir: str) -> None:
     # Summary
     print(f"\n  {'─'*50}")
     print(f"  📦  Video #{num} — {title}")
-    for lang_key, res in outputs.items():
+    for lk, res in outputs.items():
         if res.get("final"):
             f  = res["final"]
             mb = f.stat().st_size / 1_048_576 if f.exists() else 0
-            print(f"     ✅ {lang_key.upper():6} → {f.name}  ({mb:.1f} MB)")
+            print(f"     ✅ {lk.upper():6} → {f.name}  ({mb:.1f} MB)")
             if res.get("srt"):
                 print(f"        📄 SRT: {res['srt'].name}")
-            for fmt, fpath in res.get("exports", {}).items():
-                if fpath:
-                    print(f"        📦 {fmt}: {fpath.name}")
+            for fmt, fp in res.get("exports", {}).items():
+                if fp: print(f"        📦 {fmt}: {fp.name}")
         elif res.get("error"):
-            print(f"     ❌ {lang_key.upper():6} → FAILED: {res['error'][:60]}")
+            print(f"     ❌ {lk.upper():6} → {res['error'][:60]}")
+
+    # ── Facebook auto-publish ─────────────────────────────────────────────────
+    if args.publish_fb:
+        _publish_to_facebook(
+            outputs=outputs,
+            record=record,
+            fb_lang=args.fb_lang,
+            fb_reel=args.fb_reel,
+        )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -529,12 +579,12 @@ def main() -> None:
     print(f"  🚀  Motivational Video Generator")
     print(f"{'═'*62}")
     print(f"  Input      : {args.input_file}")
-    print(f"  Voice EN   : {args.voice_en}  |  Voice AR: {args.voice_ar}")
+    print(f"  Voice EN   : {args.voice_en}  |  AR: {args.voice_ar}")
     print(f"  Tone       : {args.tone}")
-    print(f"  Music Vol  : {args.music_volume}  |  SFX: {args.sfx_type}")
-    print(f"  Output Dir : {args.output_dir}")
+    print(f"  Music      : {args.music_volume}  |  SFX: {args.sfx_type}")
+    print(f"  Output     : {args.output_dir}")
     print(f"  Formats    : {args.formats}")
-    print(f"  A/B Test   : {args.ab_test}  |  Force: {args.force}  |  Analyze: {args.analyze}")
+    print(f"  FB Publish : {args.publish_fb}  |  Lang: {args.fb_lang}")
     print()
     print_db_summary()
 
@@ -553,34 +603,53 @@ def main() -> None:
             print(err)
 
     if not valid:
-        print("❌  No valid scripts found")
+        print("❌  No valid scripts")
         sys.exit(1)
 
     print_scripts_summary(valid)
 
-    # Filter by video number
     if args.video_number:
         valid = [s for s in valid if str(s["number"]) == str(args.video_number)]
         if not valid:
             print(f"❌  Video #{args.video_number} not found")
             sys.exit(1)
-        print(f"  🎯 Processing only video #{args.video_number}")
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Check FB credentials upfront if publishing
+    if args.publish_fb:
+        try:
+            from facebook import check_credentials
+            print(f"\n📘 Checking Facebook credentials...")
+            check_credentials()
+        except ImportError:
+            print("⚠️  facebook.py not found — FB publishing disabled")
+            args.publish_fb = False
+        except Exception as e:
+            print(f"⚠️  FB credentials warning: {e}")
 
     success = failed = skipped = 0
 
     for i, record in enumerate(valid, 1):
         print(f"\n[{i}/{len(valid)}]")
 
-        # Quick resume check
         en_done = is_render_done(record["number"], "en") and not args.force
         ar_done = (
             is_render_done(record["number"], "ar") or not record["ar_content"].strip()
         ) and not args.force
 
         if en_done and ar_done and not args.script_only and not args.no_video:
-            print(f"  ⏭️  Video #{record['number']} already complete — skipping")
+            # Even if already rendered, still publish to FB if requested
+            if args.publish_fb:
+                print(f"  ⏭️  Already rendered — publishing to Facebook...")
+                out_base = str(Path(args.output_dir) / f"video_{record['number']}")
+                fake_outputs = {
+                    "en": {"final": Path(f"{out_base}_en_final.mp4")},
+                    "ar": {"final": Path(f"{out_base}_ar_final.mp4")},
+                }
+                _publish_to_facebook(fake_outputs, record, args.fb_lang, args.fb_reel)
+            else:
+                print(f"  ⏭️  Video #{record['number']} already complete — skipping")
             skipped += 1
             continue
 
@@ -591,7 +660,7 @@ def main() -> None:
             print("\n⛔  Interrupted")
             break
         except Exception as e:
-            print(f"  ❌  Unexpected error: {e}")
+            print(f"  ❌  Error: {e}")
             failed += 1
 
     print(f"\n{'═'*62}")
