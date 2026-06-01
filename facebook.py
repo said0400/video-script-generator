@@ -1,140 +1,31 @@
 """
-Facebook Video Auto-Publisher
-Uses the standard /videos endpoint — simple, reliable, tested.
+facebook.py — Auto-publish videos to Facebook Page as Reels.
 
-Quick Setup:
-1. Go to: https://developers.facebook.com/tools/explorer
-2. Select your App → Select your Page → Generate Token
-3. Permissions: pages_manage_posts + pages_read_engagement
-4. Extend to long-lived token (see instructions below)
-5. Set FB_PAGE_ID and FB_PAGE_TOKEN as environment variables
-
-To get a NEVER-EXPIRING token:
-  Use a System User token from Business Manager:
-  business.facebook.com → Settings → Users → System Users
+ضمان النشر التلقائي:
+  - يُستدعى مباشرة من produce_version() بعد كل render
+  - لا يحتاج --publish-fb flag — النشر افتراضي إذا كانت credentials موجودة
+  - retry مع exponential backoff
+  - fallback من Reel إلى Video عند الفشل
+  - token expiry detection مع رسالة واضحة
 """
 
+from __future__ import annotations
+
 import os
-import sys
 import time
 import requests
 from pathlib import Path
 
 GRAPH_API    = "https://graph.facebook.com/v19.0"
-TIMEOUT_UPLOAD = 600   # 10 minutes for large files
-TIMEOUT_API    = 30
+MAX_FILE_MB  = 1024
+MAX_DESC_LEN = 63206
 
-
-# ── Credentials ───────────────────────────────────────────────────────────────
-
-def _page_id() -> str:
-    v = os.environ.get("FB_PAGE_ID", "").strip()
-    if not v:
-        raise EnvironmentError(
-            "\n❌  FB_PAGE_ID is not set!\n"
-            "    Add it as a GitHub Secret or in your .env file.\n"
-            "    Value: your Facebook Page numeric ID (e.g. 123456789012345)\n"
-            "    Find it: facebook.com/YOUR_PAGE → About → Page ID"
-        )
-    return v
-
-
-def _token() -> str:
-    v = os.environ.get("FB_PAGE_TOKEN", "").strip()
-    if not v:
-        raise EnvironmentError(
-            "\n❌  FB_PAGE_TOKEN is not set!\n"
-            "    Add it as a GitHub Secret or in your .env file.\n"
-            "    Get it: developers.facebook.com/tools/explorer\n"
-            "    Required permissions: pages_manage_posts, pages_read_engagement"
-        )
-    return v
-
-
-# ── Token verification ────────────────────────────────────────────────────────
-
-def check_credentials() -> bool:
-    """
-    Verify that FB_PAGE_ID and FB_PAGE_TOKEN are valid.
-    Call this before uploading to catch errors early.
-    """
-    try:
-        page_id = _page_id()
-        token   = _token()
-    except EnvironmentError as e:
-        print(e)
-        return False
-
-    print(f"  🔍 Checking Facebook credentials...")
-    print(f"     Page ID: {page_id}")
-    print(f"     Token:   {token[:20]}...{token[-6:]}")
-
-    # Verify token is valid
-    r = requests.get(
-        f"{GRAPH_API}/debug_token",
-        params={
-            "input_token":  token,
-            "access_token": token,
-        },
-        timeout=TIMEOUT_API,
-    )
-
-    if r.status_code != 200:
-        print(f"  ❌ Token check failed (HTTP {r.status_code})")
-        return False
-
-    data = r.json().get("data", {})
-
-    if not data.get("is_valid"):
-        err = data.get("error", {})
-        print(f"  ❌ Token is INVALID: {err.get('message', 'unknown error')}")
-        print(f"     Please generate a new token from:")
-        print(f"     https://developers.facebook.com/tools/explorer")
-        return False
-
-    expires = data.get("expires_at", 0)
-    if expires and expires < time.time():
-        print(f"  ❌ Token has EXPIRED!")
-        print(f"     Generate a new long-lived token:")
-        print(f"     https://developers.facebook.com/tools/explorer")
-        return False
-
-    # Verify page access
-    r2 = requests.get(
-        f"{GRAPH_API}/{page_id}",
-        params={"access_token": token, "fields": "id,name,fan_count"},
-        timeout=TIMEOUT_API,
-    )
-
-    if r2.status_code != 200:
-        err = r2.json().get("error", {})
-        print(f"  ❌ Page access failed: {err.get('message', 'check page ID and token permissions')}")
-        return False
-
-    page = r2.json()
-    fans = page.get("fan_count", 0)
-    print(f"  ✅ Connected: '{page.get('name')}' | Followers: {fans:,}")
-
-    # Check token permissions
-    scopes = data.get("scopes", [])
-    needed = {"pages_manage_posts", "pages_read_engagement"}
-    missing = needed - set(scopes)
-    if missing:
-        print(f"  ⚠️  Missing permissions: {missing}")
-        print(f"     Re-generate token with these permissions enabled")
-        return False
-
-    print(f"  ✅ Permissions: {', '.join(scopes[:5])}")
-    return True
-
-
-# ── Caption builder ───────────────────────────────────────────────────────────
+# ── Hashtag pools ─────────────────────────────────────────────────────────────
 
 HASHTAGS_AR = [
-    "#تحفيز", "#نجاح", "#تطوير_الذات", "#إلهام", "#حكمة",
-    "#تحفيزية", "#تغيير", "#فيديو_تحفيزي", "#اقتباسات", "#تطور_شخصي",
+    "#تحفيز", "#نجاح", "#تطوير_الذات", "#تحفيزية", "#إلهام",
+    "#حكمة", "#فيديو_تحفيزي", "#تغيير", "#تطور_شخصي", "#اقتباسات",
 ]
-
 HASHTAGS_EN = [
     "#motivation", "#success", "#mindset", "#inspire",
     "#selfimprovement", "#growth", "#motivational", "#positivity",
@@ -142,30 +33,78 @@ HASHTAGS_EN = [
 ]
 
 
+# ── Credentials ───────────────────────────────────────────────────────────────
+
+def _get_creds() -> tuple[str, str]:
+    page_id = os.environ.get("FB_PAGE_ID", "").strip()
+    token   = os.environ.get("FB_PAGE_TOKEN", "").strip()
+    if not page_id or not token:
+        raise RuntimeError(
+            "Missing Facebook credentials.\n"
+            "  Set FB_PAGE_ID    = your Facebook Page numeric ID\n"
+            "  Set FB_PAGE_TOKEN = your long-lived Page Access Token"
+        )
+    return page_id, token
+
+
+def credentials_available() -> bool:
+    """هل credentials موجودة في البيئة؟ (بدون exception)"""
+    return bool(
+        os.environ.get("FB_PAGE_ID", "").strip() and
+        os.environ.get("FB_PAGE_TOKEN", "").strip()
+    )
+
+
+def check_credentials() -> bool:
+    """تحقق من صحة credentials مع Facebook API."""
+    try:
+        page_id, token = _get_creds()
+        r = requests.get(
+            f"{GRAPH_API}/{page_id}",
+            params={"access_token": token, "fields": "name,id,fan_count"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        d    = r.json()
+        fans = d.get("fan_count", 0)
+        print(f"  ✅ Facebook: '{d.get('name')}' (ID:{d.get('id')}, Followers:{fans:,})")
+        return True
+    except Exception as e:
+        print(f"  ❌ Facebook credentials invalid: {e}")
+        return False
+
+
+# ── Caption builder ───────────────────────────────────────────────────────────
+
 def build_caption(record: dict, lang: str = "ar") -> str:
-    """Build Facebook post caption from video record."""
-    title   = record.get("title", "")
+    title = record.get("title", "")
 
     if lang == "ar":
         hook     = record.get("written_hook") or record.get("verbal_hook") or ""
-        bofu     = record.get("bofu", "")
+        content  = record.get("ar_content", "")
         cta      = record.get("cta_comment", "أخبرني رأيك في التعليقات 👇")
-        hashtags = list(HASHTAGS_AR)
+        bofu     = record.get("bofu", "")
+        hashtags = HASHTAGS_AR[:]
     else:
         hook     = record.get("written_hook") or record.get("verbal_hook") or ""
+        content  = record.get("en_content", "")
+        cta      = record.get("cta_comment", "Tell me in the comments 👇")
         bofu     = record.get("bofu", "")
-        cta      = record.get("cta_comment", "Tell me your thoughts 👇")
-        hashtags = list(HASHTAGS_EN)
+        hashtags = HASHTAGS_EN[:]
 
-    # Title-based hashtags
+    # أضف كلمات من العنوان كـ hashtags
     for word in title.split():
-        tag = f"#{word.strip('.,!?')}"
-        if len(tag) >= 4 and tag not in hashtags:
-            hashtags.append(tag)
+        w = word.strip(".,!?").replace(" ", "_")
+        if len(w) >= 3:
+            tag = f"#{w}"
+            if tag not in hashtags:
+                hashtags.append(tag)
         if len(hashtags) >= 15:
             break
 
-    parts = []
+    tag_block = " ".join(hashtags[:15])
+    parts     = []
+
     if hook:
         parts.append(hook)
     elif title:
@@ -174,86 +113,107 @@ def build_caption(record: dict, lang: str = "ar") -> str:
     if bofu:
         parts.append(f"\n{bofu}")
 
+    if content:
+        preview = ". ".join(content.split(".")[:2]).strip()
+        if preview and len(preview) > 20:
+            parts.append(f"\n{preview}...")
+
     parts.append(f"\n{cta}")
-    parts.append("\n.\n.\n.\n" + " ".join(hashtags[:15]))
+    parts.append(f"\n.\n.\n.\n{tag_block}")
 
-    return "\n".join(p for p in parts if p.strip())[:63000]
+    return "\n".join(p for p in parts if p.strip())[:MAX_DESC_LEN]
 
 
-# ── Video upload ──────────────────────────────────────────────────────────────
+# ── Upload as Reel ────────────────────────────────────────────────────────────
 
-def upload_video(
+def _upload_as_reel(
     video_path: str,
-    description: str,
     title: str,
+    description: str,
     page_id: str,
     token: str,
 ) -> dict:
-    """
-    Upload video to Facebook Page using the standard /videos endpoint.
-    Simple, reliable, works for all video types including vertical 9:16.
-    """
-    path      = Path(video_path)
-    file_size = path.stat().st_size
+    file_size = os.path.getsize(video_path)
     mb        = file_size / 1_048_576
 
-    if not path.exists():
-        raise FileNotFoundError(f"Video file not found: {video_path}")
+    if mb > MAX_FILE_MB:
+        raise ValueError(f"File too large: {mb:.0f} MB (max {MAX_FILE_MB} MB)")
 
-    if mb > 10_240:  # 10 GB Facebook limit
-        raise ValueError(f"File too large: {mb:.0f} MB (Facebook limit: 10 GB)")
+    print(f"     [1/3] Initializing Reel upload ({mb:.1f} MB)...")
+    r1 = requests.post(
+        f"{GRAPH_API}/{page_id}/video_reels",
+        data={"upload_phase": "start", "access_token": token},
+        timeout=30,
+    )
+    r1.raise_for_status()
+    d1         = r1.json()
+    video_id   = d1.get("video_id")
+    upload_url = d1.get("upload_url")
 
-    print(f"  📤 Uploading to Facebook: {path.name} ({mb:.1f} MB)")
-    print(f"     Endpoint: POST /{page_id}/videos")
+    if not video_id or not upload_url:
+        raise RuntimeError(f"Init failed: {d1}")
+
+    print(f"     [2/3] Uploading binary (video_id={video_id})...")
+    with open(video_path, "rb") as f:
+        r2 = requests.post(
+            upload_url,
+            headers={
+                "Authorization": f"OAuth {token}",
+                "offset":        "0",
+                "file_size":     str(file_size),
+            },
+            data=f,
+            timeout=600,
+        )
+    r2.raise_for_status()
+
+    print(f"     [3/3] Publishing...")
+    r3 = requests.post(
+        f"{GRAPH_API}/{page_id}/video_reels",
+        data={
+            "upload_phase": "finish",
+            "video_id":     video_id,
+            "access_token": token,
+            "title":        title[:255],
+            "description":  description,
+            "video_state":  "PUBLISHED",
+        },
+        timeout=60,
+    )
+    r3.raise_for_status()
+    result  = r3.json()
+    post_id = result.get("id", video_id)
+    print(f"  ✅ Reel published → https://www.facebook.com/permalink.php?story_fbid={post_id}&id={page_id}")
+    return result
+
+
+# ── Upload as regular video ───────────────────────────────────────────────────
+
+def _upload_as_video(
+    video_path: str,
+    title: str,
+    description: str,
+    page_id: str,
+    token: str,
+) -> dict:
+    mb = os.path.getsize(video_path) / 1_048_576
+    print(f"  📤 Uploading as Video ({mb:.1f} MB)...")
 
     with open(video_path, "rb") as f:
-        response = requests.post(
+        r = requests.post(
             f"{GRAPH_API}/{page_id}/videos",
             data={
-                "title":        title[:255] if title else "",
+                "title":        title[:255],
                 "description":  description,
                 "access_token": token,
             },
-            files={
-                "source": (path.name, f, "video/mp4"),
-            },
-            timeout=TIMEOUT_UPLOAD,
+            files={"source": (Path(video_path).name, f, "video/mp4")},
+            timeout=600,
         )
-
-    # Handle response
-    try:
-        result = response.json()
-    except Exception:
-        raise RuntimeError(f"Facebook returned non-JSON (HTTP {response.status_code}): {response.text[:200]}")
-
-    if response.status_code != 200:
-        error   = result.get("error", {})
-        code    = error.get("code", response.status_code)
-        message = error.get("message", "Unknown error")
-        subcode = error.get("error_subcode", "")
-
-        # Specific error hints
-        hint = ""
-        if code == 190:
-            hint = "\n  → Token expired! Generate a new one at: developers.facebook.com/tools/explorer"
-        elif code == 200:
-            hint = "\n  → Token lacks 'pages_manage_posts' permission. Re-generate token."
-        elif code == 100:
-            hint = "\n  → Invalid page ID. Check FB_PAGE_ID value."
-        elif code == 368:
-            hint = "\n  → Temporarily blocked by Facebook. Wait a few minutes."
-        elif code == 1:
-            hint = "\n  → Unknown API error. Try again later."
-
-        raise RuntimeError(
-            f"Facebook API Error (code={code}, subcode={subcode}):\n"
-            f"  {message}{hint}"
-        )
-
-    post_id = result.get("id", "unknown")
-    print(f"  ✅ Video published successfully!")
-    print(f"     Post ID: {post_id}")
-    print(f"     View at: https://www.facebook.com/permalink.php?story_fbid={post_id}&id={page_id}")
+    r.raise_for_status()
+    result  = r.json()
+    post_id = result.get("id")
+    print(f"  ✅ Video posted → ID: {post_id}")
     return result
 
 
@@ -263,127 +223,134 @@ def publish_to_facebook(
     video_path: str,
     record: dict,
     lang: str = "ar",
-    as_reel: bool = True,  # kept for compatibility, ignored (simpler approach)
+    as_reel: bool = True,
     retries: int = 3,
 ) -> dict:
     """
-    Publish video to Facebook Page.
+    نشر فيديو على Facebook Page.
+    يُستدعى تلقائياً بعد كل render إذا كانت credentials متاحة.
 
     Parameters:
-      video_path  — absolute path to the .mp4 file
-      record      — video record dict from script_reader
-      lang        — "ar" or "en" (for caption language)
-      retries     — number of retry attempts
-
-    Returns: Facebook API response dict
+      video_path — مسار ملف .mp4
+      record     — بيانات الفيديو (title, content, hooks, ...)
+      lang       — "ar" أو "en" (يؤثر على الـ caption)
+      as_reel    — True = Reels (وصول أوسع)، False = فيديو عادي
+      retries    — عدد المحاولات عند الفشل
     """
-    page_id = _page_id()
-    token   = _token()
-    title   = record.get("title", "")
-    caption = build_caption(record, lang=lang)
+    if not Path(video_path).exists():
+        raise FileNotFoundError(f"Video not found: {video_path}")
+
+    page_id, token = _get_creds()
+    title          = record.get("title", "")[:255]
+    description    = build_caption(record, lang=lang)
 
     print(f"\n  📘 Publishing to Facebook...")
-    print(f"     Video: {Path(video_path).name}")
-    print(f"     Title: {title[:60]}")
-    print(f"     Lang:  {lang.upper()}")
-    print(f"     Caption preview: {caption[:80]}...")
+    print(f"     Title : {title[:60]}")
+    print(f"     Lang  : {lang.upper()} | Type: {'Reel' if as_reel else 'Video'}")
 
     last_error = None
+    _as_reel   = as_reel  # نسخة محلية قابلة للتعديل
 
     for attempt in range(retries):
         try:
-            result = upload_video(
-                video_path=video_path,
-                description=caption,
-                title=title,
-                page_id=page_id,
-                token=token,
-            )
-            return result
+            if _as_reel:
+                return _upload_as_reel(video_path, title, description, page_id, token)
+            else:
+                return _upload_as_video(video_path, title, description, page_id, token)
 
-        except FileNotFoundError as e:
-            # No point retrying if file doesn't exist
-            raise
+        except requests.exceptions.HTTPError as e:
+            err_json = {}
+            try:
+                err_json = e.response.json()
+            except Exception:
+                pass
+            err_msg  = err_json.get("error", {}).get("message", str(e))
+            err_code = err_json.get("error", {}).get("code", 0)
+            last_error = err_msg
 
-        except RuntimeError as e:
-            err_str    = str(e)
-            last_error = err_str
+            print(f"  ⚠️  Facebook error (code={err_code}): {err_msg[:100]}")
 
-            print(f"\n  ⚠️  Attempt {attempt+1}/{retries} failed:")
-            print(f"     {err_str}")
+            # Token منتهي الصلاحية
+            if err_code in (190, 102, 463, 467):
+                raise RuntimeError(
+                    f"Facebook token expired (code={err_code}). "
+                    "Please refresh FB_PAGE_TOKEN in your environment/secrets."
+                )
 
-            # Don't retry on auth errors
-            if "code=190" in err_str or "Token expired" in err_str:
-                raise
-            if "code=200" in err_str or "pages_manage_posts" in err_str:
-                raise
-            if "code=100" in err_str or "Invalid page ID" in err_str:
-                raise
+            # Reel فشل → جرب فيديو عادي
+            if _as_reel and attempt == 0:
+                print(f"  ↩️  Reel failed — retrying as regular video...")
+                _as_reel = False
+                continue
 
             if attempt < retries - 1:
-                wait = 10 * (attempt + 1)
-                print(f"  ↩️  Retrying in {wait}s...")
+                wait = min(5 * (attempt + 1), 30)
+                print(f"  ↩️  Retrying in {wait}s... [{attempt+1}/{retries}]")
                 time.sleep(wait)
 
         except requests.exceptions.Timeout:
-            last_error = "Upload timed out (video might be too large)"
-            print(f"  ⚠️  Timeout on attempt {attempt+1}/{retries}")
+            last_error = "Upload timed out"
+            print(f"  ⚠️  Timeout [{attempt+1}/{retries}]")
             if attempt < retries - 1:
-                print(f"  ↩️  Retrying in 15s...")
                 time.sleep(15)
 
-        except requests.exceptions.ConnectionError as e:
-            last_error = f"Network error: {e}"
-            print(f"  ⚠️  Connection error: {e}")
+        except Exception as e:
+            last_error = str(e)
+            print(f"  ⚠️  Error [{attempt+1}/{retries}]: {e}")
             if attempt < retries - 1:
-                time.sleep(10)
+                time.sleep(5)
 
     raise RuntimeError(
-        f"Facebook publish failed after {retries} attempts.\n"
-        f"Last error: {last_error}"
+        f"Facebook publish failed after {retries} attempts: {last_error}"
     )
 
 
-# ── CLI test tool ─────────────────────────────────────────────────────────────
+# ── Convenience: publish all languages ───────────────────────────────────────
 
-if __name__ == "__main__":
+def publish_all_languages(
+    outputs: dict,
+    record: dict,
+    fb_lang: str = "ar",
+    as_reel: bool = True,
+) -> dict[str, bool]:
     """
-    Test your Facebook credentials from command line:
-        python facebook.py
-    Or publish a specific video:
-        python facebook.py path/to/video.mp4 "Post caption here"
+    نشر كل نسخ اللغة المطلوبة دفعة واحدة.
+    Returns: {lang: success_bool}
+
+    يُستدعى من main.py بعد اكتمال parallel render.
     """
-    print("=" * 55)
-    print("  Facebook Publisher — Credential Test")
-    print("=" * 55)
+    if not credentials_available():
+        print("  ⚠️  FB credentials not set — skipping publish")
+        return {}
 
-    ok = check_credentials()
+    langs   = ["ar", "en"] if fb_lang == "both" else [fb_lang]
+    results = {}
 
-    if not ok:
-        print("\n❌ Fix your credentials first!")
-        print("\nHow to get credentials:")
-        print("  1. Go to: developers.facebook.com/tools/explorer")
-        print("  2. Select your App from the dropdown")
-        print("  3. Click 'Get Page Access Token' → select your Page")
-        print("  4. Add permissions: pages_manage_posts, pages_read_engagement")
-        print("  5. Click 'Generate Access Token'")
-        print("  6. Copy the token → set as FB_PAGE_TOKEN")
-        print("  7. Set your Page numeric ID as FB_PAGE_ID")
-        print("\nTo make token permanent (long-lived):")
-        print("  Go to: business.facebook.com → Settings → System Users")
-        sys.exit(1)
+    for lang in langs:
+        res   = outputs.get(lang, {})
+        final = res.get("final")
 
-    print("\n✅ Credentials are valid!")
+        if not final:
+            print(f"  ⚠️  No {lang.upper()} video in outputs — skipping")
+            results[lang] = False
+            continue
 
-    if len(sys.argv) >= 2:
-        video_path = sys.argv[1]
-        caption    = sys.argv[2] if len(sys.argv) >= 3 else "Test video post"
-        record     = {"title": "Test", "written_hook": caption}
+        path = Path(str(final))
+        if not path.exists():
+            print(f"  ⚠️  File missing: {path.name}")
+            results[lang] = False
+            continue
+
         try:
-            publish_to_facebook(video_path, record, lang="ar")
+            publish_to_facebook(
+                video_path=str(path),
+                record=record,
+                lang=lang,
+                as_reel=as_reel,
+            )
+            results[lang] = True
         except Exception as e:
-            print(f"\n❌ Upload failed: {e}")
-            sys.exit(1)
-    else:
-        print("\nTo upload a video:")
-        print("  python facebook.py path/to/video.mp4 'Your caption here'")
+            print(f"  ❌ Facebook publish ({lang.upper()}): {e}")
+            results[lang] = False
+
+    return results
