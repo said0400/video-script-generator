@@ -76,14 +76,12 @@ function isPowerWord(word) {
 // VISUAL CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Viral Color System
 const ACCENT_COLORS = ["#00FFFF","#39FF14","#FF003C","#FFD700","#A020F0","#FF6B00","#00E5FF","#FF1493"];
 const TRANSITIONS   = ["fade","slideleft","slideright","slideup","smoothleft",
                        "smoothright","circleopen","radial","pixelize","dissolve"];
 
 const getTransition = i => TRANSITIONS[i % TRANSITIONS.length];
 
-// Expanded Text Positions (9-Grid System)
 const TEXT_POSITIONS = [
   { name: "top_left",   jc: "flex-start", ai: "flex-start", ta: "left",   pt: "220px", pb: "0" },
   { name: "top_center", jc: "flex-start", ai: "center",     ta: "center", pt: "220px", pb: "0" },
@@ -96,7 +94,6 @@ const TEXT_POSITIONS = [
   { name: "bot_right",  jc: "flex-end",   ai: "flex-end",   ta: "right",  pt: "0",     pb: "260px" },
 ];
 
-// Pattern Interrupt Upgrade
 const PATTERN_INTERRUPTS_AR = [
   "لكن انتظر...","الأمر مهم جداً","99% لا يعرفون هذا","لا تتخط هذه النقطة",
   "الجزء القادم هو الأهم","هنا يرتكب الجميع الخطأ","انتبه جيداً","هذا يغير كل شيء"
@@ -106,7 +103,6 @@ const PATTERN_INTERRUPTS_EN = [
   "The next part matters","Most people fail here","Pay attention","This changes everything"
 ];
 
-// Engagement System Upgrade
 const ENGAGEMENT_QUESTIONS_AR = [
   "هل كنت تعرف هذا؟","كم مرة فعلت هذا؟","هل توافق؟",
   "اكتب نعم إذا فهمت","أخبرني برأيك","وصلت إلى هنا؟ 🔥","هل حدث لك هذا؟"
@@ -226,7 +222,6 @@ function buildEngagementHTML(question, accent) {
 // SENTENCE SCREEN (WITH ULTRA HOOK & SUB-FRAME ANIMATIONS)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Smart Line Breaking Helper
 function chunkText(wordsArray, size) {
   let out = "";
   for (let i = 0; i < wordsArray.length; i++) {
@@ -257,7 +252,6 @@ function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
   const isDone = words.length > 0 && vc >= words.length;
   const [e1, e2] = getEmojis(titleText);
 
-  // Position Mapping
   const pos = TEXT_POSITIONS[posIdx % TEXT_POSITIONS.length];
   let alignObj = pos.ai;
   let textAln  = pos.ta;
@@ -268,9 +262,8 @@ function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
     else if (textAln === "right") textAln = "left";
   }
 
-  // Animation Math (Pop, Shake, Zoom Punch, Flash, Motion Blur)
   const wf = wordFrameIdx || 0;
-  const prog = Math.min(wf / 5.0, 1.0); // 0.0 to 1.0
+  const prog = Math.min(wf / 5.0, 1.0);
   let scale = 1.0;
   let shake = "";
   let flashOpacity = 0;
@@ -280,7 +273,7 @@ function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
   const currIsPower = isPowerWord(curr);
 
   if (currIsPower) {
-    scale = 1.0 + Math.sin(prog * Math.PI) * 0.35; // Peak 1.35
+    scale = 1.0 + Math.sin(prog * Math.PI) * 0.35;
     if (prog > 0 && prog < 1) {
       const shakes = [
         `translate(5px,-5px) rotate(3deg)`,
@@ -290,10 +283,10 @@ function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
       ];
       shake = shakes[wf % 4];
     }
-    flashOpacity = Math.max(0, 0.30 * (1 - prog * 2)); // Quick fade
+    flashOpacity = Math.max(0, 0.30 * (1 - prog * 2));
     blur = Math.sin(prog * Math.PI) * 3;
   } else if (wf < 5 && vc > 0) {
-    scale = 1.0 + Math.sin(prog * Math.PI) * 0.08; // Normal punch 1.08
+    scale = 1.0 + Math.sin(prog * Math.PI) * 0.08;
     blur = Math.sin(prog * Math.PI) * 1.5;
   }
 
@@ -303,7 +296,6 @@ function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
   const nextText = chunkText(words.slice(vc), 4);
 
   const STYLES    = ["word_pop","impact","neon_word","stacked","minimal_cap","karaoke"];
-  // Intelligent style rotation
   const styleName = isHook ? "ultra_hook" : STYLES[styleIdx % STYLES.length];
 
   let mainCSS = "", mainHTML = "";
@@ -429,7 +421,7 @@ function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
       </div>
     </div>`;
   }
-  else { // karaoke fallback
+  else {
     const kWords = words.map((w, i) => {
       const we      = esc(w);
       const isPower = isPowerWord(w);
@@ -571,7 +563,7 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
     screen_type:        SCREEN_TYPE.SENTENCE,
     sentence_idx:       0,
     visible_word_count: 0,
-    word_frame_idx:     0, // Added for sub-frame animation tracking
+    word_frame_idx:     0,
     position_idx:       0,
     style_idx:          0,
     accent_idx:         0,
@@ -600,7 +592,6 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
         if (best.visible_word_count !== last_vc) {
           frames_since_reveal = 0;
           last_vc = best.visible_word_count;
-          // [SFX_TRIGGER: whoosh.mp3 / pop.mp3] -> word reveal detected
         } else {
           frames_since_reveal++;
         }
@@ -610,7 +601,7 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
           screen_type:        SCREEN_TYPE.SENTENCE,
           sentence_idx:       best.sentence_idx,
           visible_word_count: best.visible_word_count,
-          word_frame_idx:     Math.min(frames_since_reveal, 5), // Cap animation at 5 frames
+          word_frame_idx:     Math.min(frames_since_reveal, 5),
           position_idx:       best.sentence_idx,
           style_idx:          best.sentence_idx,
           accent_idx:         best.sentence_idx,
@@ -631,7 +622,6 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
       if (vc !== last_vc) {
         frames_since_reveal = 0;
         last_vc = vc;
-        // [SFX_TRIGGER: whoosh.mp3 / pop.mp3] -> word reveal detected
       } else {
         frames_since_reveal++;
       }
@@ -650,7 +640,6 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
     }
   }
 
-  // [SFX_TRIGGER: glitch.mp3 / hit.mp3] -> Pattern interrupt injection
   let piIdx = 0;
   for (const pf of patternInterruptFrames) {
     for (let f = pf; f < Math.min(pf + 20, nFrames); f++) {
@@ -660,7 +649,6 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
     piIdx++;
   }
 
-  // [SFX_TRIGGER: swipe.mp3] -> Engagement prompt injection
   let eqIdx = 0;
   for (const ef of engagementFrames) {
     for (let f = ef; f < Math.min(ef + 25, nFrames); f++) {
@@ -684,7 +672,6 @@ async function renderAllPNGs(page, frameStateMap) {
     if      (state.screen_type === SCREEN_TYPE.PATTERN)    key = `pi_${state.pi_idx}`;
     else if (state.screen_type === SCREEN_TYPE.ENGAGEMENT) key = `eq_${state.eq_idx}`;
     else {
-      // Key now includes word_frame_idx for sub-frame animation
       key = `s_${state.sentence_idx}_${state.visible_word_count}_${state.word_frame_idx}`;
     }
     if (!uniqueStates.has(key)) uniqueStates.set(key, state);
@@ -769,12 +756,11 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// المرحلة 6: PROCESS BACKGROUND — Cinematic Dynamic Background Movement
+// PROCESS BACKGROUND
 // ─────────────────────────────────────────────────────────────────────────────
 
 function processBackground(videoPath, duration, outPath, idx) {
   const n = Math.ceil(duration * FPS);
-  // Target zoom range 1.12 - 1.20 with slow pan and micro movement
   const ZOOM_PATTERNS = [
     `zoompan=z='min(max(zoom\\,1.12)+0.0005\\,1.20)':x='iw/2-(iw/zoom/2)+on*0.3':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
     `zoompan=z='if(eq(on\\,1)\\,1.20\\,max(zoom-0.0005\\,1.12))':x='iw/2-(iw/zoom/2)-on*0.3':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
@@ -888,71 +874,80 @@ function mergeAudio(videoPath, audioPath, outPath) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MAIN
+// MAIN — ✨ FIX: تغليف الكود في async main() مع error handling صحيح
 // ─────────────────────────────────────────────────────────────────────────────
 
-console.log("\n🚀 Starting Ultimate Retention Renderer (Ultra Hook + Sub-Frame Motion)...\n");
+async function main() {
+  console.log("\n🚀 Starting Ultimate Retention Renderer (Ultra Hook + Sub-Frame Motion)...\n");
 
-const frameStateMap = buildFrameStateMap(word_timeline, totalFrames, effectiveDuration);
+  const frameStateMap = buildFrameStateMap(word_timeline, totalFrames, effectiveDuration);
 
-const browser = await chromium.launch({
-  headless: true,
-  args: ["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage",
-         "--disable-gpu","--no-zygote","--font-render-hinting=none","--lang=ar,en"],
-});
-const context = await browser.newContext({
-  viewport: { width: WIDTH, height: HEIGHT },
-  deviceScaleFactor: 1,
-  locale: "ar-SA",
-});
-const page = await context.newPage();
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage",
+           "--disable-gpu","--no-zygote","--font-render-hinting=none","--lang=ar,en"],
+  });
+  const context = await browser.newContext({
+    viewport: { width: WIDTH, height: HEIGHT },
+    deviceScaleFactor: 1,
+    locale: "ar-SA",
+  });
+  const page = await context.newPage();
 
-console.log("🖼️  Rendering dynamic states...");
-const pngCache = await renderAllPNGs(page, frameStateMap);
-await browser.close();
-console.log(`✅ ${pngCache.size} PNGs done\n`);
+  console.log("🖼️  Rendering dynamic states...");
+  const pngCache = await renderAllPNGs(page, frameStateMap);
+  await browser.close();
+  console.log(`✅ ${pngCache.size} PNGs done\n`);
 
-const sentenceData = (aligned && aligned.length > 0)
-  ? aligned
-  : sentences.map((s,i) => ({
-      sentence: s,
-      start:    (effectiveDuration / sentences.length) * i,
-      end:      (effectiveDuration / sentences.length) * (i + 1),
-    }));
+  const sentenceData = (aligned && aligned.length > 0)
+    ? aligned
+    : sentences.map((s,i) => ({
+        sentence: s,
+        start:    (effectiveDuration / sentences.length) * i,
+        end:      (effectiveDuration / sentences.length) * (i + 1),
+      }));
 
-const finalClips = [], clipDurations = [];
+  const finalClips = [], clipDurations = [];
 
-console.log("🎬 Processing clips...");
-for (let i = 0; i < sentences.length; i++) {
-  const info      = sentenceData[i] || {};
-  const clipStart = info.start ?? (effectiveDuration / sentences.length) * i;
-  const clipEnd   = info.end   ?? (effectiveDuration / sentences.length) * (i + 1);
-  const clipDur   = Math.max(clipEnd - clipStart, 0.5);
-  const nFrames   = Math.ceil(clipDur * FPS);
-  const startF    = Math.floor(clipStart * FPS);
-  const clipMap   = frameStateMap.slice(startF, startF + nFrames);
+  console.log("🎬 Processing clips...");
+  for (let i = 0; i < sentences.length; i++) {
+    const info      = sentenceData[i] || {};
+    const clipStart = info.start ?? (effectiveDuration / sentences.length) * i;
+    const clipEnd   = info.end   ?? (effectiveDuration / sentences.length) * (i + 1);
+    const clipDur   = Math.max(clipEnd - clipStart, 0.5);
+    const nFrames   = Math.ceil(clipDur * FPS);
+    const startF    = Math.floor(clipStart * FPS);
+    const clipMap   = frameStateMap.slice(startF, startF + nFrames);
 
-  process.stdout.write(`  [${i+1}/${sentences.length}] ${clipDur.toFixed(2)}s "${(sentences[i]||"").slice(0,30)}"... `);
+    process.stdout.write(`  [${i+1}/${sentences.length}] ${clipDur.toFixed(2)}s "${(sentences[i]||"").slice(0,30)}"... `);
 
-  const frameDir   = buildFrameDir(clipMap, pngCache, i);
-  const captionMov = `${TMP}/caption_${i}.mov`;
-  framesToMov(frameDir, captionMov);
+    const frameDir   = buildFrameDir(clipMap, pngCache, i);
+    const captionMov = `${TMP}/caption_${i}.mov`;
+    framesToMov(frameDir, captionMov);
 
-  const videoSrc = videos[i] || videos[videos.length - 1];
-  const bgMp4    = `${TMP}/bg_${String(i).padStart(3,"0")}.mp4`;
-  processBackground(videoSrc, clipDur, bgMp4, i);
+    const videoSrc = videos[i] || videos[videos.length - 1];
+    const bgMp4    = `${TMP}/bg_${String(i).padStart(3,"0")}.mp4`;
+    processBackground(videoSrc, clipDur, bgMp4, i);
 
-  const finalClip = `${TMP}/final_${String(i).padStart(3,"0")}.mp4`;
-  overlayOnBackground(bgMp4, captionMov, finalClip);
-  finalClips.push(finalClip);
-  clipDurations.push(clipDur);
-  process.stdout.write("✓\n");
+    const finalClip = `${TMP}/final_${String(i).padStart(3,"0")}.mp4`;
+    overlayOnBackground(bgMp4, captionMov, finalClip);
+    finalClips.push(finalClip);
+    clipDurations.push(clipDur);
+    process.stdout.write("✓\n");
+  }
+
+  const transNames = finalClips.slice(0,-1).map((_,i) => getTransition(i));
+  console.log(`\n✨ Transitions: ${transNames.join(" → ")}`);
+  const dissolved = xfadeConcat(finalClips, clipDurations);
+
+  console.log("🎵 Merging voiceover & SFX prep...");
+  mergeAudio(dissolved, audio, outputPath);
+  console.log(`\n🎉 Final video → ${outputPath}`);
 }
 
-const transNames = finalClips.slice(0,-1).map((_,i) => getTransition(i));
-console.log(`\n✨ Transitions: ${transNames.join(" → ")}`);
-const dissolved = xfadeConcat(finalClips, clipDurations);
-
-console.log("🎵 Merging voiceover & SFX prep...");
-mergeAudio(dissolved, audio, outputPath);
-console.log(`\n🎉 Final video → ${outputPath}`);
+// ✨ FIX: error handling عند مستوى الـ process
+main().catch((err) => {
+  console.error("\n❌ Fatal error in render.mjs:");
+  console.error(err);
+  process.exit(1);
+});
