@@ -8,9 +8,11 @@ Directory structure:
   sfx/whoosh/               ← Whoosh*.mp3 / *.wav
 """
 
+import os
 import random
-import shutil  # FIX: كان مكرراً داخل الدوال — الآن في الأعلى
+import shutil
 import subprocess
+import tempfile  # ✨ FIX: استخدام tempfile بدلاً من /tmp ثابت
 from pathlib import Path
 
 # ── Asset paths ───────────────────────────────────────────────────────────────
@@ -45,6 +47,13 @@ def _probe_duration(path: str) -> float:
         return float(r.stdout.strip())
     except ValueError:
         return 0.0
+
+
+def _make_temp_path(prefix: str, suffix: str = ".wav") -> str:
+    """✨ FIX: إنشاء مسار مؤقت آمن متعدد المنصات."""
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    os.close(fd)
+    return path
 
 
 # ── Music selection ────────────────────────────────────────────────────────────
@@ -136,7 +145,7 @@ def build_sfx_track(
     n_clips: int,
     clip_durations: list[float],
     sfx_type: str = "swoosh",
-    output_path: str = "/tmp/sfx_track.wav",
+    output_path: str = None,  # ✨ FIX: لم يعد ثابتاً
 ) -> Path | None:
     """Build a SFX track with swoosh/whoosh at each clip transition."""
     if n_clips <= 1:
@@ -150,11 +159,15 @@ def build_sfx_track(
     if not all_sfx:
         return None
 
+    # ✨ FIX: إنشاء مسار مؤقت آمن إذا لم يُمرّر
+    if output_path is None:
+        output_path = _make_temp_path("sfx_track_", ".wav")
+
     # Calculate transition timestamps from real clip durations
     transition_times: list[float] = []
     t = 0.0
     for dur in clip_durations[:-1]:
-        t += max(dur, 0.1)  # FIX: guard against zero-duration clips
+        t += max(dur, 0.1)
         transition_times.append(t)
 
     if not transition_times:
@@ -220,9 +233,9 @@ def mix_voice_music_sfx(
         print("  ⚠️  No music found — voice only")
         return Path(voice_path)
 
-    # FIX: use a distinct temp path to avoid ffmpeg read/write collision
-    p          = Path(output_path)
-    mixed_path = str(p.parent / f".tmp_{p.stem}_vm.aac")
+    # ✨ FIX: استخدام tempfile للملف المؤقت
+    p = Path(output_path)
+    mixed_path = _make_temp_path(f"{p.stem}_vm_", ".aac")
 
     mixed = mix_audio(
         voice_path=voice_path,
@@ -233,19 +246,25 @@ def mix_voice_music_sfx(
 
     # If mix failed, mixed == voice_path (fallback)
     if str(mixed) == str(voice_path):
+        # ✨ FIX: نظّف الملف المؤقت إن لم يُستخدم
+        Path(mixed_path).unlink(missing_ok=True)
         return Path(voice_path)
 
     # ── Add SFX at transitions ────────────────────────────────────────────────
+    sfx_tmp_path = None
     if clip_durations and len(clip_durations) > 1:
+        # ✨ FIX: مسار مؤقت آمن للـ SFX track
+        sfx_tmp_path = _make_temp_path("sfx_track_", ".wav")
+
         sfx_track = build_sfx_track(
             n_clips=len(clip_durations),
             clip_durations=clip_durations,
             sfx_type=sfx_type,
-            output_path="/tmp/sfx_track.wav",
+            output_path=sfx_tmp_path,
         )
 
         if sfx_track:
-            dur = _probe_duration(str(mixed))  # FIX: reuse helper, no duplicate probe block
+            dur = _probe_duration(str(mixed))
             if dur <= 0:
                 dur = 60.0
 
@@ -265,17 +284,23 @@ def mix_voice_music_sfx(
                 capture_output=True, text=True,
             )
 
+            # ✨ FIX: تنظيف كل الملفات المؤقتة
             Path(mixed_path).unlink(missing_ok=True)
+            Path(sfx_tmp_path).unlink(missing_ok=True)
 
             if result.returncode == 0:
                 print(f"  ✅ Final audio with SFX → {Path(output_path).name}")
                 return Path(output_path)
             else:
                 print(f"  ⚠️  SFX mix failed: {result.stderr[-150:]}")
-                # FIX: mixed_path already deleted above — move from voice fallback
                 shutil.copy(voice_path, output_path)
                 return Path(output_path)
 
     # No SFX — rename temp to final output
     shutil.move(mixed_path, output_path)
+
+    # ✨ FIX: تنظيف نهائي
+    if sfx_tmp_path:
+        Path(sfx_tmp_path).unlink(missing_ok=True)
+
     return Path(output_path)
