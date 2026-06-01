@@ -1,6 +1,10 @@
 """
 video_sources.py — Unified stock video fetcher
 Sources (in priority order): Local → Pexels → Pixabay
+
+✨ FIX (Critical):
+  - _fill_gaps() الآن يستخدم فيديوهات متنوعة عشوائياً
+    بدل تكرار نفس الفيديو في كل الفجوات
 """
 
 from __future__ import annotations
@@ -344,26 +348,42 @@ def fetch_videos_for_script(
 
 
 def _fill_gaps(results: list[Path | None]) -> list[Path]:
-    n = len(results)
+    """
+    ✨ FIX: ملء الفجوات بفيديوهات متنوعة عشوائياً
+    بدلاً من تكرار نفس الفيديو في كل الجمل التالية.
 
-    last = None
-    for i in range(n):
-        if results[i] is not None:
-            last = results[i]
-        elif last is not None:
-            results[i] = last
+    قبل الإصلاح:
+      [A, None, None, B, None]  →  [A, A, A, B, B]   ❌ ممل
+    
+    بعد الإصلاح:
+      [A, None, None, B, None]  →  [A, B, A, B, A]   ✅ متنوع
+    """
+    n         = len(results)
+    available = [r for r in results if r is not None]
 
-    last = None
-    for i in range(n - 1, -1, -1):
-        if results[i] is not None:
-            last = results[i]
-        elif last is not None:
-            results[i] = last
-
-    if any(r is None for r in results):
+    if not available:
         raise RuntimeError(
             "Could not fetch any videos. "
             "Check PEXELS_API_KEY and PIXABAY_API_KEY."
         )
+
+    # ✨ FIX: استخدم Random instance منفصل لضمان توزيع جيد
+    rng = random.Random()
+
+    # تتبّع آخر فيديو مُستخدم لتجنب التكرار المتتالي
+    last_used = None
+
+    for i in range(n):
+        if results[i] is None:
+            # اختر فيديو من المتاحة، مع تفضيل اختلافه عن السابق
+            candidates = [v for v in available if v != last_used]
+            if not candidates:
+                candidates = available  # كلهم نفس الفيديو
+            
+            picked     = rng.choice(candidates)
+            results[i] = picked
+            last_used  = picked
+        else:
+            last_used = results[i]
 
     return results  # type: ignore
