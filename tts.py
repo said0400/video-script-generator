@@ -1,9 +1,17 @@
 """
 Text-to-Speech via Google Gemini 2.5 Flash TTS.
-Features: dramatic voice prompts, power-word emphasis, API rotation, retry.
+✨ NEW: يفهم الـ Emotional Tags ويُغيّر النبرة لكل جملة
+        مثال: [intrigue] → صوت غامض | [shock] → صوت قوي
+
+Features:
+  - Tags-aware voice modulation
+  - Multi-key rotation (4 keys)
+  - Retry logic
+  - Power word emphasis
 """
 import mimetypes
 import os
+import re
 import struct
 import subprocess
 import threading
@@ -12,6 +20,12 @@ from pathlib import Path
 
 from google import genai
 from google.genai import types
+
+from tags_parser import VALID_TAGS, DEFAULT_TAG
+
+# ═════════════════════════════════════════════════════════════════════════════
+# VOICES
+# ═════════════════════════════════════════════════════════════════════════════
 
 VOICES = {
     "male_smooth":  "Orus",
@@ -22,73 +36,106 @@ VOICES = {
 }
 
 TTS_MODEL = "gemini-2.5-flash-preview-tts"
-
-# Dramatically specific tone descriptions — Gemini TTS responds to action verbs
-TONE_STYLES = {
-    "energetic": (
-        "You are a high-impact motivational narrator. "
-        "Hit the FIRST word like a physical punch — maximum urgency. "
-        "Each sentence builds intensity. Short sentences: sharp and fast. "
-        "Long sentences: build then LAND the last word hard. "
-        "End with absolute conviction — never trail off."
-    ),
-    "inspirational": (
-        "You are a warm, uplifting narrator. "
-        "Start gently, like sharing a meaningful secret. "
-        "Build warmth sentence by sentence — like a sunrise. "
-        "The final sentence: speak it slowly, with deep conviction, "
-        "as if it is the most important thing the listener will hear today."
-    ),
-    "emotional": (
-        "You are a vulnerable, honest narrator — like confiding in your closest friend. "
-        "Speak slowly and deliberately. Pause briefly before important words. "
-        "Your voice carries weight, not speed. "
-        "Let silences breathe. End with quiet but unshakeable truth."
-    ),
-    "calm": (
-        "You are a measured, authoritative narrator. "
-        "Each word is chosen. Each pause is intentional. "
-        "No rushing. No fading. Consistent, grounded energy throughout. "
-        "The final sentence lands with quiet, permanent certainty."
-    ),
-    "suspenseful": (
-        "You are a suspense narrator. Build dread slowly. "
-        "Speak the first sentence as if revealing something forbidden. "
-        "Slow down before reveals — let tension accumulate. "
-        "Never raise your voice — the power is in the quiet."
-    ),
-    "educational": (
-        "You are a clear, confident educator. "
-        "Crisp pronunciation. Natural pace. "
-        "Emphasize key terms slightly. End each point with clarity."
-    ),
-    "humorous": (
-        "Playful, light delivery. Unexpected pauses for comic effect. "
-        "Don't try to be funny — let the timing do the work."
-    ),
-    "provocative": (
-        "Bold and slightly confrontational. Challenge the listener. "
-        "Speak as if you know something they don't. "
-        "Strategic pauses to let provocative statements land."
-    ),
-}
-
-# Words that should receive extra emphasis via capitalization
-POWER_WORDS_EN = {
-    "never","always","stop","start","now","today","secret","truth","lie",
-    "wrong","right","real","fake","fail","win","powerful","weak","dead",
-    "alive","free","trapped","lost","found","broken","fixed","empty","full",
-    "fear","courage","pain","joy","alone","together","everything","nothing",
-}
-POWER_WORDS_AR = {
-    "الآن","اليوم","أبدا","دائما","حقيقة","كذبة","خطأ","صح","قوة","ضعف",
-    "خوف","شجاعة","حرية","وحيد","معا","كل","لا","نعم","سر","حقيقي",
-}
-
 MIN_DURATION_S = 2.0
 
+# ═════════════════════════════════════════════════════════════════════════════
+# 🎭 TAG-BASED VOICE INSTRUCTIONS
+# ═════════════════════════════════════════════════════════════════════════════
 
-# ── Thread-safe API Key Rotation ──────────────────────────────────────────────
+TAG_VOICE_INSTRUCTIONS = {
+    "intrigue": """🔮 MYSTERIOUS & INTRIGUING
+- Speak slowly, like sharing a forbidden secret
+- Lower your volume slightly, almost whispering
+- Add tiny pauses before important words
+- Build curiosity with vocal tension
+- Make the listener LEAN IN to hear you
+- End sentences with subtle rising tone (suggesting more to come)""",
+
+    "desire": """💛 WARM & DESIRABLE
+- Speak with genuine warmth and passion
+- Use a soft, inviting tone
+- Slightly slower than normal, savoring each word
+- Add gentle emphasis on aspirational words
+- Sound like you BELIEVE deeply in what you're saying
+- Make the listener WANT what you're describing""",
+
+    "information": """📘 CLEAR & EDUCATIONAL
+- Speak with crystal clarity
+- Natural, conversational pace
+- Slight emphasis on key terms
+- Confident but not aggressive
+- Like explaining to a curious friend
+- Pause briefly between concepts""",
+
+    "inspiration": """⚡ UPLIFTING & INSPIRING
+- Speak with elevated energy
+- Build momentum throughout the sentence
+- Slightly faster pace, full of conviction
+- Strong, motivating tone
+- Lift the listener's spirit with your voice
+- End with powerful, uplifting emphasis""",
+
+    "confident": """💪 BOLD & ASSERTIVE
+- Speak with absolute certainty
+- Strong, grounded voice
+- No hesitation, no doubt
+- Slightly slower for impact
+- Each word lands with weight
+- Make declarations, not suggestions""",
+
+    "shock": """💥 INTENSE & SHOCKING
+- Sudden, sharp delivery
+- Strong emphasis on the shocking element
+- Slight acceleration for urgency
+- Higher pitch on key words
+- Make the listener STOP and pay attention
+- Brief pause AFTER the shocking word""",
+
+    "wisdom": """🧠 DEEP & REFLECTIVE
+- Speak slowly and deliberately
+- Lower, contemplative tone
+- Long pauses between thoughts
+- Sound ancient, wise, timeless
+- Each word carries deep meaning
+- Make the listener think before responding""",
+
+    "urgency": """🚨 URGENT & CRITICAL
+- Faster pace with controlled energy
+- Slightly higher pitch
+- Strong emphasis on action words
+- Sound like there's NO TIME to waste
+- Build pressure with each sentence
+- End with imperative force""",
+
+    "calm": """🌊 PEACEFUL & SOOTHING
+- Speak softly and gently
+- Slow, relaxed pace
+- Lower volume, lower pitch
+- Reassuring and warm
+- Like calming a frightened child
+- Smooth transitions, no sudden changes""",
+
+    "emotional": """💔 TENDER & TOUCHING
+- Speak with genuine emotion in your voice
+- Slightly slower, with feeling
+- Subtle voice cracks on emotional words
+- Pause when emotion overwhelms
+- Make the listener FEEL what you feel
+- Vulnerable, authentic delivery""",
+}
+
+# Voice settings افتراضية إذا فشلت
+DEFAULT_VOICE_INSTRUCTION = """🎙️ NATURAL & ENGAGING
+- Clear, natural narration
+- Confident but warm
+- Appropriate emphasis on key words
+- Natural human breathing
+- Engage the listener"""
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# THREAD-SAFE API KEY ROTATION
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _load_keys() -> list[str]:
     keys = [
@@ -128,116 +175,95 @@ def _rotate_key() -> None:
 
 def _is_rate_limit(e: Exception) -> bool:
     msg = str(e).lower()
-    return any(s in msg for s in ["429","resource_exhausted","quota","rate limit","ratequota"])
+    return any(s in msg for s in [
+        "429", "resource_exhausted", "quota", "rate limit", "ratequota"
+    ])
 
 
-# ── TTS Style Injection ────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# 🎯 TAGS-AWARE PROMPT BUILDER
+# ═════════════════════════════════════════════════════════════════════════════
 
-def _inject_style(sentences: list[str], tone: str) -> list[str]:
-    """
-    Add emphasis markers to sentences for more dramatic, engaging delivery.
-    Gemini TTS responds to: ALL CAPS (emphasis), ... (pause), ! (energy), ? (rising)
-    """
-    styled = []
-    n      = len(sentences)
-
-    for i, raw in enumerate(sentences):
-        s     = raw.strip()
-        words = s.split()
-
-        if i == 0:
-            # HOOK: capitalize whole sentence if short; capitalize power words if long
-            if len(words) <= 7:
-                s = s.upper()
-            else:
-                s = " ".join(
-                    w.upper() if w.lower().rstrip(".,!?;:") in POWER_WORDS_EN
-                              or w.rstrip(".,!?؟،") in POWER_WORDS_AR
-                    else w
-                    for w in words
-                )
-
-        elif i == n - 2 and n > 2:
-            # Penultimate: dramatic pause creates anticipation
-            s = s.rstrip(".!?") + "..."
-
-        elif i == n - 1:
-            # Last: ensure strong, clear ending
-            if not s.endswith((".", "!", "?")):
-                s += "."
-            # Capitalize power words in final sentence for emphasis
-            words = s.split()
-            s = " ".join(
-                w.upper() if w.lower().rstrip(".,!?;:") in POWER_WORDS_EN else w
-                for w in words
-            )
-
-        elif "?" not in s and any(
-            kw in s.lower()
-            for kw in ["why","how","what","when","لماذا","كيف","ماذا","متى","هل"]
-        ):
-            # Implicit questions → make them explicit for rising intonation
-            s = s.rstrip(".") + "?"
-
-        styled.append(s)
-
-    return styled
-
-
-def _build_basic_prompt(script: str, tone: str) -> str:
-    style = TONE_STYLES.get(tone.lower(), TONE_STYLES["energetic"])
-    return (
-        f"Read the following script:\n\n"
-        f"# NARRATOR PROFILE\n{style}\n\n"
-        f"## CRITICAL:\n"
-        f"- Read EVERY word from start to LAST word — never stop early\n"
-        f"- The final sentence must be fully and clearly spoken\n\n"
-        f"## Script:\n{script}"
-    )
-
-
-def _build_advanced_prompt(
-    sentences: list[str],
-    tone: str,
-    has_open_loop: bool = False,
+def _build_tagged_prompt(
+    tagged_sentences: list[dict],
+    voice_name: str,
+    lang: str,
 ) -> str:
-    styled    = _inject_style(sentences, tone)
-    full_text = " ".join(styled)
-    n         = len(sentences)
+    """
+    بناء prompt يحتوي على tags واضحة لكل جملة.
+    Gemini TTS سيقرأ كل جملة بالنبرة المناسبة للـ tag.
+    """
+    if not tagged_sentences:
+        raise ValueError("No tagged sentences provided")
+    
+    # عدّ الـ tags المستخدمة
+    used_tags = {}
+    for sent in tagged_sentences:
+        tag = sent.get("final_tag", DEFAULT_TAG)
+        used_tags[tag] = used_tags.get(tag, 0) + 1
+    
+    # بناء وصف الـ tags المستخدمة فقط
+    tags_legend = []
+    for tag, count in sorted(used_tags.items(), key=lambda x: -x[1]):
+        if tag in TAG_VOICE_INSTRUCTIONS:
+            tags_legend.append(
+                f"\n## [{tag}] - Used {count} time(s):\n{TAG_VOICE_INSTRUCTIONS[tag]}"
+            )
+    
+    legend_text = "\n".join(tags_legend)
+    
+    # بناء النص مع الـ tags
+    script_lines = []
+    for i, sent in enumerate(tagged_sentences, 1):
+        tag = sent.get("final_tag", DEFAULT_TAG)
+        text = sent["text"]
+        script_lines.append(f"[{tag}] {text}")
+    
+    script_text = "\n\n".join(script_lines)
+    
+    # Language-specific note
+    lang_note = ""
+    if lang == "ar":
+        lang_note = "Text is in ARABIC. Read with native Arabic pronunciation."
+    else:
+        lang_note = "Text is in ENGLISH. Read with native English pronunciation."
+    
+    prompt = f"""You are a world-class voice narrator for viral short-form videos.
 
-    style = TONE_STYLES.get(tone.lower(), TONE_STYLES["energetic"])
+# CRITICAL INSTRUCTIONS:
+{lang_note}
 
-    open_loop_note = (
-        "\n⚡ OPEN LOOP: This script raises a question early and resolves it at the end. "
-        "Raise vocal tension when introducing the question. "
-        "Deliver the resolution with absolute conviction."
-    ) if has_open_loop else ""
+# YOUR TASK:
+Read the script below. Each sentence is prefixed with an emotional tag in [brackets].
+The tag tells you HOW to speak that specific sentence.
 
-    return f"""You are a world-class narrator for viral motivational short-form video.
+CRUCIAL RULES:
+1. DO NOT speak the tag itself (the [tag] text is for YOU only)
+2. Read ONLY the text after the tag
+3. CHANGE your voice style for each different tag
+4. Read EVERY word from start to finish - never cut off
+5. Make each tag transition feel natural and smooth
+6. End the final sentence with strong, complete delivery
 
-# YOUR VOICE PROFILE
-{style}
+# TAG MEANINGS:
+{legend_text}
 
-# PACING GUIDE ({n} sentences)
-- Sentence 1 (HOOK): MAXIMUM energy — this is your first impression
-- Sentences 2–{max(2, n//3)}: Draw them in — build curiosity
-- Sentences {max(2, n//3)}–{max(2, n-2)}: Peak intensity — information + emotion
-- Sentence {n-1 if n > 1 else 1}: Pause, create anticipation
-- Sentence {n} (CLOSE): Deliver with complete conviction — this is what they remember
-{open_loop_note}
+# SCRIPT TO READ:
+{script_text}
 
-# ABSOLUTE RULES
-1. Read EVERY single word — from the first to the LAST
-2. Never trail off, never fade, never stop early
-3. ALL CAPS words = stronger emphasis and volume
-4. "..." = deliberate pause for effect
-5. Natural human breathing — not robotic
-
-# SCRIPT ({n} sentences | {len(full_text.split())} words):
-{full_text}"""
+# REMEMBER:
+- Tags are HIDDEN instructions for you
+- Different tags = DIFFERENT voice styles
+- Make the transitions feel like a real human storyteller
+- Stay in character for each tag
+- The variety of tones is what makes this engaging"""
+    
+    return prompt
 
 
-# ── Audio duration ─────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# AUDIO DURATION
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _get_duration(path: str) -> float:
     r = subprocess.run(
@@ -251,101 +277,141 @@ def _get_duration(path: str) -> float:
         return 0.0
 
 
-# ── Main synthesize function ───────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# 🎙️ MAIN SYNTHESIZE FUNCTION
+# ═════════════════════════════════════════════════════════════════════════════
 
 def synthesize_speech(
-    script: str,
+    tagged_sentences: list[dict],
     output_path: str = "output",
     voice_key: str = "male_smooth",
-    tone: str = "energetic",
-    sentences: list[str] = None,
-    has_open_loop: bool = False,
+    lang: str = "ar",
     retries: int = 3,
 ) -> Path:
+    """
+    تحويل tagged sentences إلى صوت.
+    
+    Args:
+      tagged_sentences: قائمة من dicts:
+        [
+          {"final_tag": "intrigue", "text": "..."},
+          {"final_tag": "desire",   "text": "..."},
+        ]
+      output_path: المسار الأساسي للحفظ
+      voice_key: المفتاح من VOICES dict
+      lang: "ar" أو "en"
+    
+    Returns: Path للملف الصوتي
+    """
+    if not tagged_sentences:
+        raise ValueError("No tagged sentences to synthesize")
+    
     voice_name     = VOICES.get(voice_key, "Orus")
-    expected_words = len(script.split())
-
-    prompt = (
-        _build_advanced_prompt(sentences, tone, has_open_loop)
-        if sentences and len(sentences) > 1
-        else _build_basic_prompt(script, tone)
-    )
-
+    total_words    = sum(len(s.get("text", "").split()) for s in tagged_sentences)
+    unique_tags    = set(s.get("final_tag", DEFAULT_TAG) for s in tagged_sentences)
+    
+    # بناء الـ prompt مع tags
+    prompt = _build_tagged_prompt(tagged_sentences, voice_name, lang)
+    
     max_attempts = max(retries, len(_API_KEYS) * 2) if _API_KEYS else retries
-
+    
+    print(f"\n  🎙️  TTS Configuration:")
+    print(f"     Voice    : {voice_name} ({voice_key})")
+    print(f"     Lang     : {lang.upper()}")
+    print(f"     Words    : {total_words}")
+    print(f"     Tags     : {', '.join(sorted(unique_tags))}")
+    print(f"     Sentences: {len(tagged_sentences)}")
+    
     for attempt in range(max_attempts):
         with _key_lock:
             cur_idx = _key_index
-        print(f"  🎙️  TTS [{attempt+1}/{max_attempts}] voice={voice_name} key=#{cur_idx} | {expected_words} words")
-
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=prompt)])]
-        config   = types.GenerateContentConfig(
+        
+        print(f"\n  🎙️  TTS attempt [{attempt+1}/{max_attempts}] | key #{cur_idx}")
+        
+        contents = [types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=prompt)]
+        )]
+        
+        config = types.GenerateContentConfig(
             temperature=1.0,
             response_modalities=["audio"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice_name)
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=voice_name
+                    )
                 )
             ),
         )
-
+        
         try:
-            client       = _get_client()
-            audio_chunks: list[tuple[bytes, str]] = []
-
+            client = _get_client()
+            audio_chunks = []
+            
             for chunk in client.models.generate_content_stream(
                 model=TTS_MODEL, contents=contents, config=config,
             ):
                 if chunk.parts:
                     part = chunk.parts[0]
                     if part.inline_data and part.inline_data.data:
-                        audio_chunks.append((part.inline_data.data, part.inline_data.mime_type))
-
+                        audio_chunks.append(
+                            (part.inline_data.data, part.inline_data.mime_type)
+                        )
+            
             if not audio_chunks:
                 raise RuntimeError("No audio data returned")
-
+            
             data, mime = audio_chunks[0]
             ext = mimetypes.guess_extension(mime)
             if not ext:
                 ext  = ".wav"
                 data = _to_wav(data, mime)
-
+            
             file_name = f"{output_path}_0{ext}"
             Path(file_name).write_bytes(data)
             saved    = Path(file_name)
             duration = _get_duration(str(saved))
-            print(f"  ✅ Audio: {saved.name} ({duration:.1f}s)")
-
+            
+            print(f"  ✅ Audio saved: {saved.name} ({duration:.1f}s)")
+            
+            # Validation
             if duration < MIN_DURATION_S:
                 print(f"  ⚠️  Too short ({duration:.1f}s) — retrying")
                 saved.unlink(missing_ok=True)
                 time.sleep(1)
                 continue
-
-            if expected_words > 20:
-                min_exp = (expected_words / 200) * 60
-                if duration < min_exp * 0.5:
-                    print(f"  ⚠️  Likely truncated (expected≥{min_exp:.0f}s, got {duration:.1f}s)")
+            
+            # تحقق إذا كان الصوت طبيعي مقارنة بعدد الكلمات
+            if total_words > 20:
+                # ~150 كلمة/دقيقة = ~2.5 كلمة/ثانية
+                expected_min = (total_words / 200) * 60
+                if duration < expected_min * 0.5:
+                    print(f"  ⚠️  Likely truncated (expected≥{expected_min:.0f}s, got {duration:.1f}s)")
                     if attempt < max_attempts - 1:
                         saved.unlink(missing_ok=True)
                         time.sleep(1)
                         continue
-
+            
             return saved
-
+            
         except Exception as e:
             if _is_rate_limit(e):
                 print(f"  🛑 Rate limit on key #{cur_idx}: {str(e)[:80]}")
                 _rotate_key()
             else:
-                print(f"  ⚠️  TTS [{type(e).__name__}]: {str(e)[:100]}")
+                print(f"  ⚠️  TTS error [{type(e).__name__}]: {str(e)[:120]}")
+            
             if attempt < max_attempts - 1:
-                time.sleep(min(2 ** attempt, 8))
-
+                wait = min(2 ** attempt, 8)
+                time.sleep(wait)
+    
     raise RuntimeError(f"TTS failed after {max_attempts} attempts")
 
 
-# ── WAV helpers ────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# WAV HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _to_wav(audio_data: bytes, mime_type: str) -> bytes:
     p           = _parse_mime(mime_type)
