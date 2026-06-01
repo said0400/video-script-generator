@@ -6,13 +6,18 @@ Directory structure:
   assets/music/cinematic/   ← *.mp3 / *.wav
   sfx/swoosh/               ← Swoosh*.mp3 / *.wav
   sfx/whoosh/               ← Whoosh*.mp3 / *.wav
+
+✨ FIX (Critical):
+  - استبدال /tmp/sfx_track.wav الثابت بـ tempfile.mkstemp()
+  - يعمل على Windows/Linux/Mac
+  - تنظيف الملفات المؤقتة دائماً (حتى عند الفشل)
 """
 
 import os
 import random
 import shutil
 import subprocess
-import tempfile  # ✨ FIX: استخدام tempfile بدلاً من /tmp ثابت
+import tempfile  # ✨ FIX
 from pathlib import Path
 
 # ── Asset paths ───────────────────────────────────────────────────────────────
@@ -50,7 +55,10 @@ def _probe_duration(path: str) -> float:
 
 
 def _make_temp_path(prefix: str, suffix: str = ".wav") -> str:
-    """✨ FIX: إنشاء مسار مؤقت آمن متعدد المنصات."""
+    """
+    ✨ FIX: إنشاء مسار مؤقت آمن متعدد المنصات.
+    يعمل على Windows/Linux/Mac بدون افتراض وجود /tmp.
+    """
     fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
     os.close(fd)
     return path
@@ -234,7 +242,7 @@ def mix_voice_music_sfx(
         return Path(voice_path)
 
     # ✨ FIX: استخدام tempfile للملف المؤقت
-    p = Path(output_path)
+    p          = Path(output_path)
     mixed_path = _make_temp_path(f"{p.stem}_vm_", ".aac")
 
     mixed = mix_audio(
