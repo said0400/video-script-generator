@@ -36,12 +36,12 @@ HASHTAGS_EN = [
 # ── Credentials ───────────────────────────────────────────────────────────────
 
 def _get_creds() -> tuple[str, str]:
-    page_id = os.environ.get("FB_PAGE_ID", "").strip()
+    page_id = os.environ.get("FB_PAGE_ID1", "").strip()
     token   = os.environ.get("FB_PAGE_TOKEN", "").strip()
     if not page_id or not token:
         raise RuntimeError(
             "Missing Facebook credentials.\n"
-            "  Set FB_PAGE_ID    = your Facebook Page numeric ID\n"
+            "  Set FB_PAGE_ID1    = your Facebook Page numeric ID\n"
             "  Set FB_PAGE_TOKEN = your long-lived Page Access Token"
         )
     return page_id, token
@@ -50,7 +50,7 @@ def _get_creds() -> tuple[str, str]:
 def credentials_available() -> bool:
     """هل credentials موجودة في البيئة؟ (بدون exception)"""
     return bool(
-        os.environ.get("FB_PAGE_ID", "").strip() and
+        os.environ.get("FB_PAGE_ID1", "").strip() and
         os.environ.get("FB_PAGE_TOKEN", "").strip()
     )
 
