@@ -166,7 +166,7 @@ jobs:
           PIXABAY_API_KEY:  ${{ secrets.PIXABAY_API_KEY }}
           PEXELS_API_KEY:   ${{ secrets.PEXELS_API_KEY }}
           GROQ_API_KEY:     ${{ secrets.GROQ_API_KEY }}
-          FB_PAGE_ID:       ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_ID1:       ${{ secrets.FB_PAGE_ID1 }}
           FB_PAGE_TOKEN:    ${{ secrets.FB_PAGE_TOKEN }}
         run: |
           FLAGS=""
