@@ -1,28 +1,27 @@
 """
 Read video scripts from Excel (.xlsx) or CSV.
-Supports: hooks, funnel stages (TOFU/MOFU/BOFU), open_loop column.
+✨ NEW: مبسّط جداً — 4 أعمدة فقط (number, title, ar_content, en_content)
+✨ يدعم Emotional Tags في المحتوى
 """
 import csv
 import re
 from pathlib import Path
 
+from tags_parser import (split_into_tagged_sentences, strip_tags_from_text,
+                          auto_correct_tag, is_valid_tag, DEFAULT_TAG,
+                          VALID_TAGS)
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 📋 ONLY 4 COLUMNS REQUIRED
+# ═════════════════════════════════════════════════════════════════════════════
+
 COLUMN_ALIASES: dict[str, list[str]] = {
-    "number":       ["number","num","no","id","video_number","رقم","رقم_الفيديو","#"],
-    "title":        ["title","name","video_title","subject","عنوان","عنوان_الفيديو"],
-    "ar_content":   ["ar_content","arabic","ar","arabic_content","arabic_script",
-                     "عربي","محتوى_عربي","المحتوى_العربي","النص_العربي"],
-    "en_content":   ["en_content","english","en","english_content","english_script",
-                     "انجليزي","محتوى_انجليزي","المحتوى_الانجليزي","النص_الانجليزي"],
-    "verbal_hook":  ["verbal_hook","verbal","hook_verbal","هوك_لفظي","الهوك_اللفظي"],
-    "visual_hook":  ["visual_hook","visual","hook_visual","هوك_بصري","الهوك_البصري"],
-    "written_hook": ["written_hook","written","hook_written","هوك_كتابي","الهوك_الكتابي"],
-    "value":        ["value","قيمة","القيمة","core_value"],
-    "meat":         ["meat","جوهر","المحتوى_الرئيسي","core_content"],
-    "tofu":         ["tofu","top_of_funnel","top","توفو"],
-    "mofu":         ["mofu","middle_of_funnel","middle","موفو"],
-    "bofu":         ["bofu","bottom_of_funnel","bottom","بوفو"],
-    "open_loop":    ["open_loop","loop","open_loop_hint","حلقة_مفتوحة","الحلقة_المفتوحة"],
-    "cta_comment":  ["cta_comment","cta","call_to_action","نداء_إجراء","cta_ar"],
+    "number":     ["number", "num", "no", "id", "video_number", "رقم", "#"],
+    "title":      ["title", "name", "video_title", "subject", "عنوان"],
+    "ar_content": ["ar_content", "arabic", "ar", "arabic_content", 
+                   "عربي", "محتوى_عربي", "النص_العربي"],
+    "en_content": ["en_content", "english", "en", "english_content",
+                   "انجليزي", "محتوى_انجليزي", "النص_الانجليزي"],
 }
 
 
@@ -41,15 +40,16 @@ def _detect_columns(headers: list[str]) -> dict[str, int]:
                 col_map[field] = i
                 break
 
-    # Positional fallback for required fields
-    for field, idx in {"number": 0, "title": 1, "ar_content": 2, "en_content": 3}.items():
+    # Positional fallback
+    positions = {"number": 0, "title": 1, "ar_content": 2, "en_content": 3}
+    for field, idx in positions.items():
         if field not in col_map and len(headers) > idx:
             col_map[field] = idx
 
     return col_map
 
 
-def _safe(row: list | tuple, idx: int) -> str:
+def _safe(row, idx: int) -> str:
     try:
         v = row[idx]
         return str(v).strip() if v is not None else ""
@@ -57,7 +57,7 @@ def _safe(row: list | tuple, idx: int) -> str:
         return ""
 
 
-def _row_to_dict(row: list | tuple, col_map: dict[str, int]) -> dict:
+def _row_to_dict(row, col_map: dict[str, int]) -> dict:
     return {
         field: _safe(row, col_map[field]) if field in col_map else ""
         for field in COLUMN_ALIASES
@@ -71,6 +71,104 @@ def _is_valid(record: dict) -> bool:
         and _normalize(record["number"]) not in ("number", "num", "رقم", "#", "id", "")
     )
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 🏷️ TAGGED SENTENCES PROCESSING
+# ═════════════════════════════════════════════════════════════════════════════
+
+def process_tagged_content(content: str, lang: str = "ar") -> list[dict]:
+    """
+    معالجة محتوى يحتوي على tags.
+    
+    Returns: list of dicts:
+      [
+        {
+          "raw_tag":    "intrigue",       # الـ tag الأصلي من Excel
+          "final_tag":  "intrigue",       # بعد التصحيح
+          "tag_source": "exact_match",    # كيف تم الحصول عليه
+          "text":       "النص بدون tag",
+          "text_with_tag": "[intrigue] النص...",  # للـ TTS
+          "line":       1,
+        },
+        ...
+      ]
+    """
+    if not content or not content.strip():
+        return []
+    
+    tagged = split_into_tagged_sentences(content)
+    
+    processed = []
+    
+    for sent in tagged:
+        raw_tag = sent["raw_tag"]
+        text    = sent["text"]
+        line    = sent["line"]
+        
+        # تصحيح tag
+        if raw_tag:
+            corrected, reason = auto_correct_tag(raw_tag)
+            
+            if corrected:
+                final_tag = corrected
+                tag_source = reason  # exact_match / case_fixed / spelling_fixed
+            else:
+                # Tag غير معروف نهائياً - سيُعالج بـ AI
+                final_tag = None  # سيُملأ من Groq
+                tag_source = "needs_ai"
+        else:
+            # لا يوجد tag - سيُعالج بـ AI
+            final_tag = None
+            tag_source = "needs_ai"
+        
+        clean_text = strip_tags_from_text(text)
+        
+        # إذا كان لدينا final_tag، اصنع text_with_tag
+        if final_tag:
+            text_with_tag = f"[{final_tag}] {clean_text}"
+        else:
+            text_with_tag = clean_text  # سيُحدّث لاحقاً بعد Groq
+        
+        processed.append({
+            "raw_tag":       raw_tag,
+            "final_tag":     final_tag,
+            "tag_source":    tag_source,
+            "text":          clean_text,
+            "text_with_tag": text_with_tag,
+            "line":          line,
+        })
+    
+    return processed
+
+
+def split_into_sentences(text: str, lang: str = "en") -> list[str]:
+    """
+    تقسيم نص إلى جمل (للاستخدام مع نصوص نظيفة بدون tags).
+    يُستخدم للـ render حيث نريد جمل قصيرة.
+    """
+    if not text or not text.strip():
+        return []
+
+    if lang == "ar":
+        parts = re.split(r"(?<=[.!?؟\u06D4])\s+|\n+", text.strip())
+    else:
+        parts = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
+
+    cleaned = []
+    for p in parts:
+        p = p.strip()
+        if len(p) < 4:
+            continue
+        if cleaned and len(p.split()) < 3:
+            cleaned[-1] = cleaned[-1] + " " + p
+        else:
+            cleaned.append(p)
+    return cleaned
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 📖 READ FILES
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _read_excel(path: Path) -> list[dict]:
     try:
@@ -86,7 +184,7 @@ def _read_excel(path: Path) -> list[dict]:
 
     headers = [str(c) if c is not None else "" for c in rows[0]]
     col_map = _detect_columns(headers)
-    print(f"  📊 Detected columns: {[f for f in col_map]}")
+    print(f"  📊 Detected columns: {list(col_map.keys())}")
 
     scripts = []
     for idx, row in enumerate(rows[1:], start=2):
@@ -108,7 +206,7 @@ def _read_csv(path: Path) -> list[dict]:
         if not headers:
             return []
         col_map = _detect_columns(headers)
-        print(f"  📊 Detected columns: {[f for f in col_map]}")
+        print(f"  📊 Detected columns: {list(col_map.keys())}")
         for idx, row in enumerate(reader, start=2):
             if not any(c.strip() for c in row):
                 continue
@@ -136,59 +234,61 @@ def read_scripts(file_path: str) -> list[dict]:
 
 
 def validate_scripts(scripts: list[dict]) -> tuple[list[dict], list[str]]:
-    """Pre-flight validation. Returns (valid_records, error_messages)."""
+    """التحقق من صحة السكريبتات."""
     valid, errors = [], []
     for s in scripts:
         errs = []
-        if not s["en_content"].strip() and not s["ar_content"].strip():
-            errs.append(f"  #{s['number']} '{s['title']}': no content")
-        elif len(s["en_content"].split()) < 15:
-            errs.append(f"  #{s['number']}: EN too short ({len(s['en_content'].split())} words)")
-        if errs:
+        
+        has_ar = bool(s["ar_content"].strip())
+        has_en = bool(s["en_content"].strip())
+        
+        if not has_ar and not has_en:
+            errs.append(f"  #{s['number']} '{s['title']}': no content (AR or EN required)")
+        else:
+            # تحقق من وجود tags
+            for lang_key, lang_name in [("ar_content", "AR"), ("en_content", "EN")]:
+                content = s.get(lang_key, "")
+                if content.strip():
+                    # عدد الـ tags
+                    tags_found = re.findall(r'\[([a-zA-Z_]+)\]', content)
+                    if not tags_found:
+                        errs.append(
+                            f"  ⚠️  #{s['number']} ({lang_name}): "
+                            f"no [tags] found - AI will add them"
+                        )
+        
+        if errs and not has_ar and not has_en:
             errors.extend(errs)
         else:
+            if errs:
+                errors.extend(errs)  # warnings only
             valid.append(s)
+    
     return valid, errors
-
-
-def split_into_sentences(text: str, lang: str = "en") -> list[str]:
-    if not text or not text.strip():
-        return []
-
-    # Split on sentence-ending punctuation + newlines
-    if lang == "ar":
-        parts = re.split(r"(?<=[.!?؟\u06D4])\s+|\n+", text.strip())
-    else:
-        parts = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
-
-    cleaned = []
-    for p in parts:
-        p = p.strip()
-        if len(p) < 4:
-            continue
-        # Merge ultra-short fragments into previous sentence
-        if cleaned and len(p.split()) < 3:
-            cleaned[-1] = cleaned[-1] + " " + p
-        else:
-            cleaned.append(p)
-    return cleaned
 
 
 def print_scripts_summary(scripts: list[dict]) -> None:
     print("\n" + "═" * 65)
     print(f"  📋  {len(scripts)} videos loaded")
     print("═" * 65)
+    
     for s in scripts:
-        prev = (s["en_content"] or "")[:58].replace("\n", " ")
-        has_hooks  = any(s.get(h) for h in ["verbal_hook", "visual_hook", "written_hook"])
-        has_funnel = any(s.get(f) for f in ["tofu", "mofu", "bofu"])
-        has_loop   = bool(s.get("open_loop"))
-        print(f"  #{s['number']:>3}  {s['title'][:42]}")
+        prev = (s["ar_content"] or s["en_content"] or "")[:60].replace("\n", " ")
+        
+        has_ar  = bool(s["ar_content"].strip())
+        has_en  = bool(s["en_content"].strip())
+        
+        # عد الـ tags
+        ar_tags = len(re.findall(r'\[[a-zA-Z_]+\]', s.get("ar_content", "")))
+        en_tags = len(re.findall(r'\[[a-zA-Z_]+\]', s.get("en_content", "")))
+        
+        print(f"  #{s['number']:>3}  {s['title'][:50]}")
         print(f"       {prev}...")
+        
         flags = []
-        if has_hooks:  flags.append("🎣 Hooks")
-        if has_funnel: flags.append("📊 Funnel")
-        if has_loop:   flags.append("🔄 Loop")
+        if has_ar: flags.append(f"🇸🇦 AR ({ar_tags} tags)")
+        if has_en: flags.append(f"🇬🇧 EN ({en_tags} tags)")
         if flags:
             print(f"       {' | '.join(flags)}")
+    
     print("═" * 65 + "\n")
