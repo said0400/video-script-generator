@@ -1,17 +1,16 @@
-name: 🎬 Motivational Video Generator
+name: 🎬 Video Generator (VAS + AI)
 
 on:
   workflow_dispatch:
     inputs:
-
       scripts_file:
-        description: "📄 Path to scripts file (e.g. scripts/videos.xlsx)"
+        description: "📄 Path to scripts file"
         required: true
         default: "scripts/videos.xlsx"
         type: string
 
       video_number:
-        description: "🎬 Video number to process (empty = all)"
+        description: "🎬 Video number (empty = all)"
         required: false
         default: ""
         type: string
@@ -30,13 +29,6 @@ on:
         type: choice
         options: [male_smooth, male_warm, female_clear, female_warm, neutral]
 
-      tone:
-        description: "🎨 Narration tone"
-        required: true
-        default: "energetic"
-        type: choice
-        options: [energetic, inspirational, emotional, calm]
-
       sfx_type:
         description: "🔊 Transition SFX"
         required: true
@@ -45,49 +37,37 @@ on:
         options: [swoosh, whoosh]
 
       music_volume:
-        description: "🎵 Music volume (0.08=quiet | 0.12=medium | 0.18=loud)"
+        description: "🎵 Music volume"
         required: true
         default: "0.12"
         type: string
 
       formats:
-        description: "📐 Export formats (comma-separated: 1x1,16x9,4x5)"
+        description: "📐 Export formats"
         required: true
         default: "1x1,16x9"
         type: string
 
       script_only:
-        description: "📝 Script only? (no audio/video)"
-        required: true
-        default: "false"
-        type: choice
-        options: ["false", "true"]
-
-      no_video:
-        description: "🎵 Audio only? (skip video render)"
-        required: true
-        default: "false"
-        type: choice
-        options: ["false", "true"]
-
-      ab_test:
-        description: "🔀 A/B test? (verbal_hook variant)"
-        required: true
+        description: "📝 Script only?"
         default: "false"
         type: choice
         options: ["false", "true"]
 
       force:
-        description: "⚡ Force re-render? (ignore resume)"
-        required: true
+        description: "⚡ Force re-render?"
         default: "false"
         type: choice
         options: ["false", "true"]
 
-      # ── Facebook Publishing ─────────────────────────────────────────────────
-      publish_fb:
-        description: "📘 Auto-publish to Facebook after render?"
-        required: true
+      force_ai:
+        description: "🤖 Force re-run AI?"
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+      no_publish:
+        description: "🚫 Disable Facebook publish?"
         default: "false"
         type: choice
         options: ["false", "true"]
@@ -101,37 +81,36 @@ on:
 
 jobs:
   generate:
-    name: 🎬 Generate + Publish
+    name: 🎬 Generate Videos
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
-
-      - name: 📥 Checkout repository
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: 🐍 Setup Python 3.11
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: 📦 Install Python dependencies
+      - name: 📦 Install Python deps
         run: |
           pip install -r requirements.txt
           python -m playwright install chromium
 
-      - name: 🟢 Setup Node.js 20
+      - name: 🟢 Setup Node.js
         if: ${{ inputs.script_only == 'false' }}
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: 📦 Install Node dependencies
+      - name: 📦 Install Node deps
         if: ${{ inputs.script_only == 'false' }}
         working-directory: remotion
         run: npm install
 
-      - name: 🔧 Install system dependencies
+      - name: 🔧 Install system deps
         if: ${{ inputs.script_only == 'false' }}
         run: |
           sudo apt-get update -q
@@ -141,23 +120,23 @@ jobs:
             libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 \
             libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
             libxfixes3 libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
-            fonts-noto fonts-noto-core fonts-hosny-amiri fonts-sil-scheherazade
+            fonts-noto fonts-noto-core fonts-hosny-amiri
           sudo fc-cache -fv
-          ffmpeg -version | head -1
 
-      - name: 🌐 Install Playwright Chromium (Node)
+      - name: 🌐 Install Playwright Chromium
         if: ${{ inputs.script_only == 'false' }}
         working-directory: remotion
         run: npx playwright install chromium
 
-      - name: 📥 Restore SQLite database (resume)
-        uses: dawidd6/action-download-artifact@v6
+      - name: 📥 Restore DB cache
+        uses: actions/cache@v4
         with:
-          name: vsg-database
-          if_no_artifact_found: ignore
-          search_artifacts: true
+          path: vsg.db
+          key: vsg-db-${{ github.ref_name }}
+          restore-keys: |
+            vsg-db-
 
-      - name: 🎬 Run generator + publish
+      - name: 🎬 Run generator
         env:
           GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
@@ -166,40 +145,38 @@ jobs:
           PIXABAY_API_KEY:  ${{ secrets.PIXABAY_API_KEY }}
           PEXELS_API_KEY:   ${{ secrets.PEXELS_API_KEY }}
           GROQ_API_KEY:     ${{ secrets.GROQ_API_KEY }}
-          FB_PAGE_ID1:       ${{ secrets.FB_PAGE_ID1 }}
+          FB_PAGE_ID1:      ${{ secrets.FB_PAGE_ID1 }}
           FB_PAGE_TOKEN:    ${{ secrets.FB_PAGE_TOKEN }}
         run: |
           FLAGS=""
-
           [ "${{ inputs.script_only }}" = "true" ] && FLAGS="$FLAGS --script-only"
-          [ "${{ inputs.no_video }}"    = "true" ] && FLAGS="$FLAGS --no-video"
-          [ "${{ inputs.ab_test }}"     = "true" ] && FLAGS="$FLAGS --ab-test"
           [ "${{ inputs.force }}"       = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ inputs.publish_fb }}"  = "true" ] && FLAGS="$FLAGS --publish-fb --fb-lang ${{ inputs.fb_language }}"
+          [ "${{ inputs.force_ai }}"    = "true" ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ inputs.no_publish }}"  = "true" ] && FLAGS="$FLAGS --no-publish"
 
           [ -n "${{ inputs.video_number }}" ] && \
             FLAGS="$FLAGS --video-number ${{ inputs.video_number }}"
 
           python main.py "${{ inputs.scripts_file }}" \
-            --voice-en     "${{ inputs.voice_en }}"    \
-            --voice-ar     "${{ inputs.voice_ar }}"    \
-            --tone         "${{ inputs.tone }}"        \
+            --voice-en     "${{ inputs.voice_en }}"     \
+            --voice-ar     "${{ inputs.voice_ar }}"     \
             --music-volume "${{ inputs.music_volume }}" \
-            --sfx-type     "${{ inputs.sfx_type }}"    \
-            --formats      "${{ inputs.formats }}"     \
-            --output-dir   output                      \
+            --sfx-type     "${{ inputs.sfx_type }}"     \
+            --formats      "${{ inputs.formats }}"      \
+            --fb-lang      "${{ inputs.fb_language }}"  \
+            --output-dir   output                       \
             $FLAGS
 
-      - name: 📤 Upload final videos (9:16)
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+      - name: 📤 Upload videos (9:16)
+        if: ${{ inputs.script_only == 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: videos-9x16-${{ github.run_number }}
           path: output/**/*_final.mp4
           retention-days: 7
 
-      - name: 📤 Upload additional formats
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+      - name: 📤 Upload formats
+        if: ${{ inputs.script_only == 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: videos-formats-${{ github.run_number }}
@@ -209,35 +186,17 @@ jobs:
             output/**/*_4_5.mp4
           retention-days: 7
 
-      - name: 📤 Upload SRT subtitles
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+      - name: 📤 Upload subtitles
+        if: ${{ inputs.script_only == 'false' }}
         uses: actions/upload-artifact@v4
         with:
           name: subtitles-${{ github.run_number }}
           path: output/**/*.srt
           retention-days: 30
 
-      - name: 📤 Upload thumbnails
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: thumbnails-${{ github.run_number }}
-          path: output/**/*_thumbnail.png
-          retention-days: 30
-
-      - name: 📤 Upload audio
-        if: ${{ inputs.no_video == 'true' && inputs.script_only == 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: audio-${{ github.run_number }}
-          path: output/**/*_audio_mixed.aac
-          retention-days: 7
-
-      - name: 📤 Save SQLite database (resume)
+      - name: 💾 Save DB cache
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/cache/save@v4
         with:
-          name: vsg-database
           path: vsg.db
-          retention-days: 90
-          overwrite: true
+          key: vsg-db-${{ github.ref_name }}-${{ github.run_number }}
