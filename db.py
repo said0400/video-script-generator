@@ -8,6 +8,8 @@ Changes vs original:
   - دالة get_pending_publish() جديدة — تُرجع الفيديوهات المنتهية التي لم تُنشر
   - mark_published() و is_published() لتتبع النشر على فيسبوك
   - print_db_summary() أكثر تفصيلاً
+  - ✨ FIX: write_lock لمنع race conditions في multi-threading
+  - ✨ FIX: is_published() يدعم en_b وأي lang آخر
 """
 
 from __future__ import annotations
@@ -21,7 +23,8 @@ DB_PATH = Path("vsg.db")
 # ── Thread-local connection pool ──────────────────────────────────────────────
 # كل thread لها connection خاصة — آمن مع ThreadPoolExecutor
 
-_local = threading.local()
+_local       = threading.local()
+_write_lock  = threading.Lock()  # ✨ FIX: lock للكتابة فقط
 
 
 def _conn() -> sqlite3.Connection:
@@ -30,11 +33,12 @@ def _conn() -> sqlite3.Connection:
     تُنشأ مرة واحدة لكل thread وتُعاد استخدامها.
     """
     if not hasattr(_local, "conn") or _local.conn is None:
-        c = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+        c = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=30.0)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA synchronous=NORMAL")
-        c.execute("PRAGMA cache_size=-8000")   # 8MB cache
+        c.execute("PRAGMA cache_size=-8000")
+        c.execute("PRAGMA busy_timeout=30000")  # ✨ FIX: 30s timeout
         _local.conn = c
     return _local.conn
 
@@ -49,59 +53,72 @@ def close_thread_conn() -> None:
         _local.conn = None
 
 
+def _normalize_lang_col(lang: str) -> str:
+    """
+    ✨ FIX: تحويل lang إلى اسم العمود الصحيح.
+    en_b → published_en
+    ar   → published_ar
+    en   → published_en
+    """
+    base_lang = lang.split("_")[0]  # en_b → en
+    if base_lang not in ("ar", "en"):
+        base_lang = "en"  # fallback
+    return f"published_{base_lang}"
+
+
 # ── Schema ────────────────────────────────────────────────────────────────────
 
 def init_db() -> None:
-    with _conn() as c:
-        c.executescript("""
-            CREATE TABLE IF NOT EXISTS used_videos (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_id  TEXT NOT NULL,
-                source     TEXT NOT NULL DEFAULT 'pixabay',
-                keyword    TEXT,
-                used_at    TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(source_id, source)
-            );
+    with _write_lock:
+        with _conn() as c:
+            c.executescript("""
+                CREATE TABLE IF NOT EXISTS used_videos (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id  TEXT NOT NULL,
+                    source     TEXT NOT NULL DEFAULT 'pixabay',
+                    keyword    TEXT,
+                    used_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source_id, source)
+                );
 
-            CREATE TABLE IF NOT EXISTS renders (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                video_number TEXT NOT NULL,
-                lang         TEXT NOT NULL,
-                status       TEXT NOT NULL DEFAULT 'pending',
-                output_path  TEXT,
-                duration_s   REAL,
-                error        TEXT,
-                published_ar INTEGER DEFAULT 0,
-                published_en INTEGER DEFAULT 0,
-                created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at   TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(video_number, lang)
-            );
+                CREATE TABLE IF NOT EXISTS renders (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_number TEXT NOT NULL,
+                    lang         TEXT NOT NULL,
+                    status       TEXT NOT NULL DEFAULT 'pending',
+                    output_path  TEXT,
+                    duration_s   REAL,
+                    error        TEXT,
+                    published_ar INTEGER DEFAULT 0,
+                    published_en INTEGER DEFAULT 0,
+                    created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(video_number, lang)
+                );
 
-            CREATE TABLE IF NOT EXISTS scripts (
-                video_number TEXT PRIMARY KEY,
-                title        TEXT,
-                en_sentences INTEGER DEFAULT 0,
-                ar_sentences INTEGER DEFAULT 0,
-                en_words     INTEGER DEFAULT 0,
-                ar_words     INTEGER DEFAULT 0,
-                saved_at     TEXT DEFAULT CURRENT_TIMESTAMP
-            );
+                CREATE TABLE IF NOT EXISTS scripts (
+                    video_number TEXT PRIMARY KEY,
+                    title        TEXT,
+                    en_sentences INTEGER DEFAULT 0,
+                    ar_sentences INTEGER DEFAULT 0,
+                    en_words     INTEGER DEFAULT 0,
+                    ar_words     INTEGER DEFAULT 0,
+                    saved_at     TEXT DEFAULT CURRENT_TIMESTAMP
+                );
 
-            CREATE INDEX IF NOT EXISTS idx_used    ON used_videos(source_id, source);
-            CREATE INDEX IF NOT EXISTS idx_renders ON renders(video_number, lang);
-            CREATE INDEX IF NOT EXISTS idx_status  ON renders(status);
-        """)
+                CREATE INDEX IF NOT EXISTS idx_used    ON used_videos(source_id, source);
+                CREATE INDEX IF NOT EXISTS idx_renders ON renders(video_number, lang);
+                CREATE INDEX IF NOT EXISTS idx_status  ON renders(status);
+            """)
 
-        # Migration: أضف عمود published إذا لم يكن موجوداً (للـ dbs القديمة)
-        try:
-            c.execute("ALTER TABLE renders ADD COLUMN published_ar INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            c.execute("ALTER TABLE renders ADD COLUMN published_en INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
+            try:
+                c.execute("ALTER TABLE renders ADD COLUMN published_ar INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                c.execute("ALTER TABLE renders ADD COLUMN published_en INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
 
 
 # ── Used videos ───────────────────────────────────────────────────────────────
@@ -114,11 +131,12 @@ def is_video_used(source_id: str, source: str = "pixabay") -> bool:
 
 
 def mark_video_used(source_id: str, keyword: str, source: str = "pixabay") -> None:
-    with _conn() as c:
-        c.execute(
-            "INSERT OR IGNORE INTO used_videos (source_id, source, keyword) VALUES (?,?,?)",
-            (str(source_id), source, keyword),
-        )
+    with _write_lock:  # ✨ FIX
+        with _conn() as c:
+            c.execute(
+                "INSERT OR IGNORE INTO used_videos (source_id, source, keyword) VALUES (?,?,?)",
+                (str(source_id), source, keyword),
+            )
 
 
 def get_used_count() -> int:
@@ -147,14 +165,15 @@ def get_render_output(video_number: str, lang: str) -> str | None:
 
 
 def mark_render_start(video_number: str, lang: str) -> None:
-    with _conn() as c:
-        c.execute(
-            """INSERT INTO renders (video_number, lang, status, updated_at)
-               VALUES (?,?,'running',CURRENT_TIMESTAMP)
-               ON CONFLICT(video_number, lang) DO UPDATE SET
-               status='running', error=NULL, updated_at=CURRENT_TIMESTAMP""",
-            (str(video_number), lang),
-        )
+    with _write_lock:  # ✨ FIX
+        with _conn() as c:
+            c.execute(
+                """INSERT INTO renders (video_number, lang, status, updated_at)
+                   VALUES (?,?,'running',CURRENT_TIMESTAMP)
+                   ON CONFLICT(video_number, lang) DO UPDATE SET
+                   status='running', error=NULL, updated_at=CURRENT_TIMESTAMP""",
+                (str(video_number), lang),
+            )
 
 
 def mark_render_done(
@@ -163,33 +182,38 @@ def mark_render_done(
     output_path: str,
     duration: float,
 ) -> None:
-    with _conn() as c:
-        c.execute(
-            """INSERT INTO renders (video_number, lang, status, output_path, duration_s, updated_at)
-               VALUES (?,?,'done',?,?,CURRENT_TIMESTAMP)
-               ON CONFLICT(video_number, lang) DO UPDATE SET
-               status='done', output_path=excluded.output_path,
-               duration_s=excluded.duration_s, updated_at=CURRENT_TIMESTAMP""",
-            (str(video_number), lang, output_path, duration),
-        )
+    with _write_lock:  # ✨ FIX
+        with _conn() as c:
+            c.execute(
+                """INSERT INTO renders (video_number, lang, status, output_path, duration_s, updated_at)
+                   VALUES (?,?,'done',?,?,CURRENT_TIMESTAMP)
+                   ON CONFLICT(video_number, lang) DO UPDATE SET
+                   status='done', output_path=excluded.output_path,
+                   duration_s=excluded.duration_s, updated_at=CURRENT_TIMESTAMP""",
+                (str(video_number), lang, output_path, duration),
+            )
 
 
 def mark_render_failed(video_number: str, lang: str, error: str) -> None:
-    with _conn() as c:
-        c.execute(
-            """INSERT INTO renders (video_number, lang, status, error, updated_at)
-               VALUES (?,?,'failed',?,CURRENT_TIMESTAMP)
-               ON CONFLICT(video_number, lang) DO UPDATE SET
-               status='failed', error=excluded.error, updated_at=CURRENT_TIMESTAMP""",
-            (str(video_number), lang, error[:500]),
-        )
+    with _write_lock:  # ✨ FIX
+        with _conn() as c:
+            c.execute(
+                """INSERT INTO renders (video_number, lang, status, error, updated_at)
+                   VALUES (?,?,'failed',?,CURRENT_TIMESTAMP)
+                   ON CONFLICT(video_number, lang) DO UPDATE SET
+                   status='failed', error=excluded.error, updated_at=CURRENT_TIMESTAMP""",
+                (str(video_number), lang, error[:500]),
+            )
 
 
 # ── Publishing tracking ───────────────────────────────────────────────────────
 
 def is_published(video_number: str, lang: str) -> bool:
-    """هل هذا الفيديو نُشر بالفعل على فيسبوك؟"""
-    col = f"published_{lang}" if lang in ("ar", "en") else "published_en"
+    """
+    هل هذا الفيديو نُشر بالفعل على فيسبوك؟
+    ✨ FIX: يدعم en_b وأي lang آخر بشكل صحيح.
+    """
+    col = _normalize_lang_col(lang)  # ✨ FIX: normalize
     row = _conn().execute(
         f"SELECT {col} FROM renders WHERE video_number=? AND lang=?",
         (str(video_number), lang),
@@ -199,13 +223,14 @@ def is_published(video_number: str, lang: str) -> bool:
 
 def mark_published(video_number: str, lang: str) -> None:
     """سجّل أن هذا الفيديو نُشر على فيسبوك."""
-    col = f"published_{lang}" if lang in ("ar", "en") else "published_en"
-    with _conn() as c:
-        c.execute(
-            f"""UPDATE renders SET {col}=1, updated_at=CURRENT_TIMESTAMP
-                WHERE video_number=? AND lang=?""",
-            (str(video_number), lang),
-        )
+    col = _normalize_lang_col(lang)  # ✨ FIX: normalize
+    with _write_lock:  # ✨ FIX
+        with _conn() as c:
+            c.execute(
+                f"""UPDATE renders SET {col}=1, updated_at=CURRENT_TIMESTAMP
+                    WHERE video_number=? AND lang=?""",
+                (str(video_number), lang),
+            )
 
 
 def get_pending_publish(lang: str | None = None) -> list[dict]:
@@ -247,24 +272,25 @@ def save_script_meta(
     en_data: dict,
     ar_data: dict | None = None,
 ) -> None:
-    with _conn() as c:
-        c.execute(
-            """INSERT INTO scripts (video_number, title, en_sentences, ar_sentences, en_words, ar_words)
-               VALUES (?,?,?,?,?,?)
-               ON CONFLICT(video_number) DO UPDATE SET
-               title=excluded.title,
-               en_sentences=excluded.en_sentences,
-               ar_sentences=excluded.ar_sentences,
-               en_words=excluded.en_words,
-               ar_words=excluded.ar_words""",
-            (
-                str(video_number), title,
-                len(en_data.get("sentences", [])),
-                len(ar_data.get("sentences", [])) if ar_data else 0,
-                en_data.get("word_count", 0),
-                ar_data.get("word_count", 0) if ar_data else 0,
-            ),
-        )
+    with _write_lock:  # ✨ FIX
+        with _conn() as c:
+            c.execute(
+                """INSERT INTO scripts (video_number, title, en_sentences, ar_sentences, en_words, ar_words)
+                   VALUES (?,?,?,?,?,?)
+                   ON CONFLICT(video_number) DO UPDATE SET
+                   title=excluded.title,
+                   en_sentences=excluded.en_sentences,
+                   ar_sentences=excluded.ar_sentences,
+                   en_words=excluded.en_words,
+                   ar_words=excluded.ar_words""",
+                (
+                    str(video_number), title,
+                    len(en_data.get("sentences", [])),
+                    len(ar_data.get("sentences", [])) if ar_data else 0,
+                    en_data.get("word_count", 0),
+                    ar_data.get("word_count", 0) if ar_data else 0,
+                ),
+            )
 
 
 # ── Summary ───────────────────────────────────────────────────────────────────
