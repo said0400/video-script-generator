@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-🎬 Motivational Video Generator
+🎬 Motivational Video Generator 
+Reads EN + AR scripts from Excel/CSV → produces synced videos → publishes to Facebook.
+
+النشر التلقائي:
+  - إذا كانت FB_PAGE_ID و FB_PAGE_TOKEN موجودتين في البيئة
+    يُنشر كل فيديو تلقائياً فور اكتماله — بدون أي flag إضافي
+  - --publish-fb لا يزال مدعوماً للتوافق مع الـ workflow القديم
+  - --no-publish لإيقاف النشر صراحةً عند الحاجة
 """
 
 from __future__ import annotations
@@ -15,7 +22,8 @@ from pathlib import Path
 from db            import (init_db, is_render_done, get_render_output,
                             mark_render_start, mark_render_done,
                             mark_render_failed, save_script_meta,
-                            print_db_summary)
+                            print_db_summary, is_published, mark_published,
+                            get_pending_publish, close_thread_conn)
 from script_reader import (read_scripts, validate_scripts,
                             split_into_sentences, print_scripts_summary)
 from keywords      import get_keywords_for_sentences, analyze_retention_score
@@ -28,6 +36,8 @@ from thumbnail     import render_thumbnails_batch
 from sync          import (get_audio_duration, get_word_timestamps,
                             build_word_timeline, _duration_sync)
 from audio_manager import mix_voice_music_sfx
+from facebook      import (publish_to_facebook, publish_all_languages,
+                            credentials_available, check_credentials)
 
 CONTENT_TYPE  = "motivational"
 WPM           = 150.0
@@ -41,26 +51,43 @@ RENDER_SCRIPT = Path("remotion/render.mjs")
 # ─────────────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="🎬 Motivational Video Generator ")
+    p = argparse.ArgumentParser(
+        description="🎬 Motivational Video Generator ",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     p.add_argument("input_file",      type=str)
     p.add_argument("--output-dir",    type=str,   default="output")
     p.add_argument("--video-number",  type=str,   default=None)
+
     p.add_argument("--voice-en",      type=str,   default="male_smooth",  choices=list(VOICES.keys()))
     p.add_argument("--voice-ar",      type=str,   default="female_warm",  choices=list(VOICES.keys()))
     p.add_argument("--tone",          type=str,   default="energetic",
                    choices=["energetic","inspirational","emotional","calm"])
+
     p.add_argument("--music-volume",  type=float, default=0.12)
     p.add_argument("--sfx-type",      type=str,   default="swoosh", choices=["swoosh","whoosh"])
     p.add_argument("--formats",       type=str,   default="1x1,16x9")
+
     p.add_argument("--script-only",   action="store_true")
     p.add_argument("--no-video",      action="store_true")
     p.add_argument("--force",         action="store_true")
     p.add_argument("--ab-test",       action="store_true")
     p.add_argument("--no-export",     action="store_true")
     p.add_argument("--analyze",       action="store_true")
-    p.add_argument("--publish-fb",    action="store_true")
-    p.add_argument("--fb-lang",       type=str,   default="ar", choices=["ar","en","both"])
+
+    # النشر — افتراضي تلقائي إذا credentials موجودة
+    p.add_argument("--publish-fb",    action="store_true",
+                   help="Force FB publish even if credentials check fails")
+    p.add_argument("--no-publish",    action="store_true",
+                   help="Disable auto-publish to Facebook")
+    p.add_argument("--fb-lang",       type=str,   default="ar",
+                   choices=["ar","en","both"])
     p.add_argument("--fb-reel",       action="store_true", default=True)
+
+    # نشر الفيديوهات القديمة غير المنشورة
+    p.add_argument("--publish-pending", action="store_true",
+                   help="Publish all completed but unpublished videos")
+
     return p.parse_args()
 
 
@@ -78,16 +105,28 @@ def _clip_durations_from_aligned(
     n_sentences: int,
 ) -> list[float]:
     if aligned and len(aligned) >= n_sentences:
-        durations = []
-        for item in aligned[:n_sentences]:
-            start = float(item.get("start", 0.0))
-            end   = float(item.get("end",   0.0))
-            dur   = max(end - start, 0.1)
-            durations.append(dur)
+        durations = [
+            max(float(item.get("end", 0)) - float(item.get("start", 0)), 0.1)
+            for item in aligned[:n_sentences]
+        ]
         if sum(durations) > 0.5:
             return durations
     per = real_dur / max(n_sentences, 1)
     return [per] * n_sentences
+
+
+def _should_publish(args: argparse.Namespace) -> bool:
+    """
+    هل يجب النشر على فيسبوك؟
+    نعم إذا:
+      - لم يُضبط --no-publish
+      - و (credentials متاحة أو --publish-fb مضبوط)
+    """
+    if args.no_publish:
+        return False
+    if args.script_only or args.no_video:
+        return False
+    return credentials_available() or args.publish_fb
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -141,7 +180,7 @@ def save_manifest(
     audio_path,
     out: str,
     timeline: list = None,
-    aligned: list = None,
+    aligned:  list = None,
     real_duration: float = None,
 ) -> Path:
     manifest = {
@@ -154,7 +193,7 @@ def save_manifest(
         "lang":          script_data.get("lang", "en"),
         "content_type":  CONTENT_TYPE,
         "word_timeline": timeline or [],
-        "aligned":       aligned or [],
+        "aligned":       aligned  or [],
     }
     path = Path(f"{out}_manifest.json").resolve()
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -232,8 +271,8 @@ def produce_audio(
 
     clip_dur  = _clip_durations_from_aligned(aligned, real_dur, len(sentences))
     mixed_out = f"{output_base}_audio_mixed.aac"
-
     print(f"  🎚️  Mixing (music={music_volume}, sfx={sfx_type})")
+
     try:
         final_audio = mix_voice_music_sfx(
             voice_path=wav_path or f"{output_base}_voice_0.wav",
@@ -256,7 +295,7 @@ def produce_audio(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# VERSION PIPELINE
+# VERSION PIPELINE — يشمل النشر التلقائي
 # ─────────────────────────────────────────────────────────────────────────────
 
 def produce_version(
@@ -272,13 +311,31 @@ def produce_version(
     video_number: str,
     lang: str,
     force: bool = False,
+    record: dict = None,        # ← مطلوب للنشر
+    should_publish: bool = True, # ← نشر تلقائي
+    fb_lang: str = "ar",
+    fb_reel: bool = True,
 ) -> dict:
-    result = {"label": label, "final": None, "srt": None, "word_srt": None, "exports": {}}
+    result = {
+        "label":    label,
+        "final":    None,
+        "srt":      None,
+        "word_srt": None,
+        "exports":  {},
+        "published": False,
+    }
 
+    # Resume check
     if not force and is_render_done(video_number, lang):
         existing = get_render_output(video_number, lang)
-        print(f"  ⏭️  {label} already done → {Path(existing).name}")
+        print(f"  ⏭️  {label} already rendered → {Path(existing).name}")
         result["final"] = Path(existing)
+
+        # نشر إذا لم يُنشر بعد
+        if should_publish and record and not is_published(video_number, lang):
+            _do_publish(existing, record, lang, fb_reel, video_number)
+            result["published"] = True
+
         return result
 
     mark_render_start(video_number, lang)
@@ -312,40 +369,49 @@ def produce_version(
         mark_render_done(video_number, lang, str(final_video), real_dur)
         result["final"] = final_video
 
+        # ── النشر التلقائي فور اكتمال الـ render ────────────────────────────
+        if should_publish and record:
+            published = _do_publish(str(final_video), record, lang, fb_reel, video_number)
+            result["published"] = published
+
     except Exception as e:
         mark_render_failed(video_number, lang, str(e))
         raise
 
+    finally:
+        # أغلق الـ DB connection الخاصة بهذه الـ thread
+        close_thread_conn()
+
     return result
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FACEBOOK
-# ─────────────────────────────────────────────────────────────────────────────
+def _do_publish(
+    video_path: str,
+    record: dict,
+    lang: str,
+    as_reel: bool,
+    video_number: str,
+) -> bool:
+    """
+    نشر فيديو واحد على فيسبوك وتسجيله في الـ DB.
+    يُرجع True عند النجاح.
+    """
+    # تجاهل اللغات غير المطابقة
+    # (مثلاً: لا تنشر EN_B كـ "en_b" — فقط ar و en)
+    fb_lang_key = lang if lang in ("ar", "en") else "ar"
 
-def _publish_to_facebook(outputs, record, fb_lang, fb_reel):
     try:
-        from facebook import publish_to_facebook, check_credentials
-    except ImportError:
-        print("  ❌ facebook.py not found")
-        return
-
-    if not check_credentials():
-        print("  ❌ Invalid credentials")
-        return
-
-    langs = ["ar", "en"] if fb_lang == "both" else [fb_lang]
-    for lang in langs:
-        res  = outputs.get(lang, {})
-        path = res.get("final")
-        if not path or not Path(str(path)).exists():
-            print(f"  ⚠️  No {lang.upper()} video — skipping")
-            continue
-        try:
-            publish_to_facebook(video_path=str(path), record=record,
-                                lang=lang, as_reel=fb_reel)
-        except Exception as e:
-            print(f"  ❌ Facebook ({lang.upper()}): {e}")
+        publish_to_facebook(
+            video_path=video_path,
+            record=record,
+            lang=fb_lang_key,
+            as_reel=as_reel,
+        )
+        mark_published(video_number, lang)
+        return True
+    except Exception as e:
+        print(f"  ❌ Publish ({lang.upper()}) failed: {e}")
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -357,6 +423,7 @@ def process_video(
     args: argparse.Namespace,
     out_dir: str,
     thumbnail_queue: list,
+    should_publish: bool,
 ) -> None:
     num   = record["number"]
     title = record["title"]
@@ -383,7 +450,10 @@ def process_video(
         return
 
     print(f"  📝 EN: {len(en_sentences)} sent  |  AR: {len(ar_sentences)} sent")
+    if should_publish:
+        print(f"  📘 Auto-publish: ON (lang={args.fb_lang})")
 
+    # Content strategy preview
     hooks  = {k: record.get(k,"") for k in ["verbal_hook","visual_hook","written_hook","value"]}
     funnel = {k: record.get(k,"") for k in ["tofu","mofu","bofu"]}
     if any(hooks.values()):
@@ -394,6 +464,7 @@ def process_video(
         for k, v in funnel.items():
             if v: print(f"     {k.upper()}: {v[:65]}")
 
+    # Keywords
     print(f"\n  🔑 Keywords (Groq)...")
     try:
         keywords = get_keywords_for_sentences(en_sentences, title)
@@ -401,6 +472,7 @@ def process_video(
         print(f"  ⚠️  Keywords error: {e}")
         keywords = [["person motivational","success achievement","goal focus"]] * len(en_sentences)
 
+    # Retention analysis
     if args.analyze or args.script_only:
         print(f"\n  📈 Retention analysis...")
         try:
@@ -415,6 +487,7 @@ def process_video(
         except Exception as e:
             print(f"  ⚠️  Analysis error: {e}")
 
+    # Script data
     try:
         en_data = build_script_data(record, "en", keywords, args.tone)
     except ValueError as e:
@@ -439,6 +512,7 @@ def process_video(
 
     save_script_meta(num, title, en_data, ar_data)
 
+    # Script-only
     if args.script_only:
         print(f"\n  🇬🇧  English:")
         for i, s in enumerate(en_sentences, 1):
@@ -451,6 +525,7 @@ def process_video(
                 print(f"    {i:>2}. {s}")
         return
 
+    # Fetch videos
     print(f"\n  📹 Fetching videos...")
     clip_dur = [en_data["estimated_seconds"] / len(en_sentences)] * len(en_sentences)
     vid_dir  = str(Path(out_dir) / f"videos_{num}")
@@ -465,6 +540,7 @@ def process_video(
         print(f"  ❌ Video fetch failed: {e}")
         return
 
+    # Audio-only
     if args.no_video:
         for ld, voice, suffix in [
             (en_data, args.voice_en, "en"),
@@ -478,7 +554,7 @@ def process_video(
                 print(f"  ❌ {suffix} audio: {e}")
         return
 
-    # Thumbnail — أضف للـ batch queue
+    # Thumbnail queue
     hook_thumb = record.get("written_hook") or record.get("verbal_hook") or en_data["hook"]
     try:
         html_path = generate_thumbnail_html(
@@ -490,6 +566,12 @@ def process_video(
     except Exception as e:
         print(f"  ⚠️  Thumbnail HTML: {e}")
 
+    # حدد اللغات التي ستُنشر
+    publish_langs = {"both": {"ar", "en"}, "ar": {"ar"}, "en": {"en"}}.get(
+        args.fb_lang, {"ar"}
+    )
+
+    # Build versions
     versions = [
         dict(script_data=en_data, voice_key=args.voice_en,
              output_base=f"{out_base}_en", label="🇬🇧 English", lang="en"),
@@ -512,6 +594,8 @@ def process_video(
         export_formats=export_formats,
         video_number=num,
         force=args.force,
+        record=record,
+        fb_reel=args.fb_reel,
     )
 
     print(f"\n  📽️  Rendering {len(versions)} version(s) in parallel...")
@@ -519,7 +603,12 @@ def process_video(
 
     with ThreadPoolExecutor(max_workers=len(versions)) as pool:
         future_map = {
-            pool.submit(produce_version, **v, **shared): v["lang"]
+            pool.submit(
+                produce_version,
+                **v,
+                **shared,
+                should_publish=(should_publish and v["lang"] in publish_langs),
+            ): v["lang"]
             for v in versions
         }
         for future in as_completed(future_map):
@@ -530,13 +619,15 @@ def process_video(
                 print(f"\n  ❌ {lang_key.upper()} render failed: {e}")
                 outputs[lang_key] = {"error": str(e)}
 
+    # Summary
     print(f"\n  {'─'*50}")
     print(f"  📦  Video #{num} — {title}")
     for lk, res in outputs.items():
         if res.get("final"):
-            f  = res["final"]
-            mb = f.stat().st_size / 1_048_576 if f.exists() else 0
-            print(f"     ✅ {lk.upper():6} → {f.name}  ({mb:.1f} MB)")
+            f   = res["final"]
+            mb  = f.stat().st_size / 1_048_576 if f.exists() else 0
+            pub = "📘 Published" if res.get("published") else ""
+            print(f"     ✅ {lk.upper():6} → {f.name}  ({mb:.1f} MB) {pub}")
             if res.get("srt"):
                 print(f"        📄 SRT: {res['srt'].name}")
             for fmt, fp in res.get("exports", {}).items():
@@ -544,8 +635,39 @@ def process_video(
         elif res.get("error"):
             print(f"     ❌ {lk.upper():6} → {res['error'][:60]}")
 
-    if args.publish_fb:
-        _publish_to_facebook(outputs, record, args.fb_lang, args.fb_reel)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PUBLISH PENDING — نشر الفيديوهات القديمة
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _publish_pending(args: argparse.Namespace, all_scripts: list) -> None:
+    """نشر كل الفيديوهات المنتهية التي لم تُنشر بعد."""
+    pending = get_pending_publish(
+        lang=None if args.fb_lang == "both" else args.fb_lang
+    )
+
+    if not pending:
+        print("  ✅ No pending videos to publish")
+        return
+
+    print(f"\n  📘 Publishing {len(pending)} pending video(s)...")
+
+    # بناء قاموس لإيجاد record بسرعة
+    scripts_map = {str(s["number"]): s for s in all_scripts}
+
+    for item in pending:
+        vnum   = str(item["video_number"])
+        lang   = item["lang"]
+        path   = item["output_path"]
+        record = scripts_map.get(vnum, {"title": f"Video #{vnum}",
+                                        "en_content": "", "ar_content": ""})
+
+        print(f"\n  [{vnum}] {record.get('title','?')} ({lang.upper()}) → {Path(path).name}")
+        success = _do_publish(path, record, lang, args.fb_reel, vnum)
+        if success:
+            print(f"  ✅ Published")
+        else:
+            print(f"  ❌ Failed")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -556,6 +678,9 @@ def main() -> None:
     args = parse_args()
     init_db()
 
+    # تحديد ما إذا كان النشر مفعّلاً
+    will_publish = _should_publish(args)
+
     print(f"\n{'═'*62}")
     print(f"  🚀  Motivational Video Generator ")
     print(f"{'═'*62}")
@@ -565,10 +690,21 @@ def main() -> None:
     print(f"  Music      : {args.music_volume}  |  SFX: {args.sfx_type}")
     print(f"  Output     : {args.output_dir}")
     print(f"  Renderer   : {RENDER_SCRIPT.name}")
-    print(f"  FB Publish : {args.publish_fb}  |  Lang: {args.fb_lang}")
+    print(f"  FB Publish : {'✅ AUTO' if will_publish else '❌ OFF'}  |  Lang: {args.fb_lang}")
     print()
     print_db_summary()
 
+    # تحقق من credentials إذا كان النشر مفعّلاً
+    if will_publish:
+        print(f"\n📘 Checking Facebook credentials...")
+        if not check_credentials():
+            if args.publish_fb:
+                print("  ⚠️  Credentials invalid — publish will fail at upload time")
+            else:
+                print("  ⚠️  Credentials invalid — auto-publish disabled")
+                will_publish = False
+
+    # Read + validate
     print(f"\n📖  Reading scripts...")
     try:
         all_scripts = read_scripts(args.input_file)
@@ -579,14 +715,18 @@ def main() -> None:
     valid, errors = validate_scripts(all_scripts)
     if errors:
         print(f"\n⚠️  Validation warnings:")
-        for err in errors:
-            print(err)
+        for err in errors: print(err)
 
     if not valid:
         print("❌  No valid scripts")
         sys.exit(1)
 
     print_scripts_summary(valid)
+
+    # وضع نشر الفيديوهات القديمة
+    if args.publish_pending:
+        _publish_pending(args, all_scripts)
+        return
 
     if args.video_number:
         valid = [s for s in valid if str(s["number"]) == str(args.video_number)]
@@ -595,17 +735,6 @@ def main() -> None:
             sys.exit(1)
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-
-    if args.publish_fb:
-        try:
-            from facebook import check_credentials
-            print(f"\n📘 Checking Facebook credentials...")
-            check_credentials()
-        except ImportError:
-            print("⚠️  facebook.py not found — FB publishing disabled")
-            args.publish_fb = False
-        except Exception as e:
-            print(f"⚠️  FB credentials warning: {e}")
 
     success = failed = skipped = 0
     thumbnail_queue: list[tuple[str, str]] = []
@@ -620,20 +749,30 @@ def main() -> None:
         ) and not args.force
 
         if en_done and ar_done and not args.script_only and not args.no_video:
-            if args.publish_fb:
+            print(f"  ⏭️  Video #{record['number']} already rendered")
+
+            # حتى لو مكتمل — انشر إذا لم يُنشر
+            if will_publish:
                 out_base = str(Path(args.output_dir) / f"video_{record['number']}")
-                _publish_to_facebook(
-                    {"en": {"final": Path(f"{out_base}_en_final.mp4")},
-                     "ar": {"final": Path(f"{out_base}_ar_final.mp4")}},
-                    record, args.fb_lang, args.fb_reel,
-                )
-            else:
-                print(f"  ⏭️  Video #{record['number']} already complete — skipping")
+                for lang in (["ar","en"] if args.fb_lang=="both" else [args.fb_lang]):
+                    if not is_published(record["number"], lang):
+                        path = f"{out_base}_{lang}_final.mp4"
+                        if Path(path).exists():
+                            print(f"  📘 Publishing unpublished {lang.upper()}...")
+                            _do_publish(path, record, lang, args.fb_reel, record["number"])
+                        else:
+                            print(f"  ⚠️  File not found: {Path(path).name}")
+                    else:
+                        print(f"  ✅ {lang.upper()} already published — skipping")
             skipped += 1
             continue
 
         try:
-            process_video(record, args, args.output_dir, thumbnail_queue)
+            process_video(
+                record, args, args.output_dir,
+                thumbnail_queue,
+                should_publish=will_publish,
+            )
             success += 1
         except KeyboardInterrupt:
             print("\n⛔  Interrupted")
@@ -642,12 +781,11 @@ def main() -> None:
             print(f"  ❌  Error: {e}")
             failed += 1
 
-    # Batch render thumbnails دفعة واحدة في نهاية كل شيء
+    # Batch thumbnails
     if thumbnail_queue and not args.script_only and not args.no_video:
         print(f"\n🖼️  Rendering {len(thumbnail_queue)} thumbnail(s)...")
         try:
             render_thumbnails_batch(thumbnail_queue)
-            print(f"  ✅ Thumbnails done")
         except Exception as e:
             print(f"  ⚠️  Thumbnail error: {e}")
 
