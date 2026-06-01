@@ -7,18 +7,30 @@ facebook.py — Auto-publish videos to Facebook Page as Reels.
   - retry مع exponential backoff
   - fallback من Reel إلى Video عند الفشل
   - token expiry detection مع رسالة واضحة
+
+✨ FIX (Critical):
+  - تحقق من حجم الفيديو الأدنى (يمنع رفع ملفات تالفة)
+  - تحقق من مدة الفيديو (Reels: 3s-90s)
+  - رسائل خطأ واضحة قبل محاولة الرفع
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 import requests
 from pathlib import Path
 
 GRAPH_API    = "https://graph.facebook.com/v19.0"
-MAX_FILE_MB  = 1024
-MAX_DESC_LEN = 63206
+
+# ── Video constraints ─────────────────────────────────────────────────────────
+# ✨ FIX: حدود واضحة للفيديو
+MAX_FILE_MB    = 1024     # 1 GB maximum
+MIN_FILE_MB    = 0.5      # 500 KB minimum (يمنع الملفات التالفة)
+MIN_DURATION_S = 3.0      # 3 ثوانٍ — حد Reels الأدنى
+MAX_DURATION_S = 90.0     # 90 ثانية — حد Reels الأقصى
+MAX_DESC_LEN   = 63206
 
 # ── Hashtag pools ─────────────────────────────────────────────────────────────
 
@@ -72,6 +84,63 @@ def check_credentials() -> bool:
     except Exception as e:
         print(f"  ❌ Facebook credentials invalid: {e}")
         return False
+
+
+# ── Video validation helpers ──────────────────────────────────────────────────
+
+def _probe_video_duration(path: str) -> float:
+    """
+    ✨ FIX: احصل على مدة الفيديو بالثواني عبر ffprobe.
+    Returns 0.0 عند الفشل.
+    """
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error",
+             "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=10,
+        )
+        return float(r.stdout.strip())
+    except (ValueError, subprocess.TimeoutExpired, FileNotFoundError):
+        return 0.0
+
+
+def _validate_video(video_path: str, as_reel: bool = True) -> tuple[float, float]:
+    """
+    ✨ FIX: تحقق شامل من الفيديو قبل الرفع.
+    Returns: (size_mb, duration_s)
+    Raises: ValueError إذا فشل التحقق.
+    """
+    if not Path(video_path).exists():
+        raise FileNotFoundError(f"Video not found: {video_path}")
+
+    file_size = os.path.getsize(video_path)
+    mb        = file_size / 1_048_576
+
+    # تحقق من الحجم الأقصى
+    if mb > MAX_FILE_MB:
+        raise ValueError(f"File too large: {mb:.0f} MB (max {MAX_FILE_MB} MB)")
+
+    # تحقق من الحجم الأدنى (يمنع الملفات الفارغة/التالفة)
+    if mb < MIN_FILE_MB:
+        raise ValueError(f"File too small: {mb:.2f} MB (min {MIN_FILE_MB} MB)")
+
+    # تحقق من المدة (مهم لـ Reels)
+    duration = _probe_video_duration(video_path)
+    if duration <= 0:
+        raise ValueError("Could not determine video duration (corrupt file?)")
+
+    if as_reel:
+        if duration < MIN_DURATION_S:
+            raise ValueError(
+                f"Video too short: {duration:.1f}s (min {MIN_DURATION_S}s for Reels)"
+            )
+        if duration > MAX_DURATION_S:
+            raise ValueError(
+                f"Video too long: {duration:.1f}s (max {MAX_DURATION_S}s for Reels)"
+            )
+
+    return mb, duration
 
 
 # ── Caption builder ───────────────────────────────────────────────────────────
@@ -133,13 +202,11 @@ def _upload_as_reel(
     page_id: str,
     token: str,
 ) -> dict:
-    file_size = os.path.getsize(video_path)
-    mb        = file_size / 1_048_576
+    # ✨ FIX: تحقق شامل قبل البدء
+    mb, duration = _validate_video(video_path, as_reel=True)
+    file_size    = os.path.getsize(video_path)
 
-    if mb > MAX_FILE_MB:
-        raise ValueError(f"File too large: {mb:.0f} MB (max {MAX_FILE_MB} MB)")
-
-    print(f"     [1/3] Initializing Reel upload ({mb:.1f} MB)...")
+    print(f"     [1/3] Initializing Reel upload ({mb:.1f} MB, {duration:.1f}s)...")
     r1 = requests.post(
         f"{GRAPH_API}/{page_id}/video_reels",
         data={"upload_phase": "start", "access_token": token},
@@ -196,8 +263,10 @@ def _upload_as_video(
     page_id: str,
     token: str,
 ) -> dict:
-    mb = os.path.getsize(video_path) / 1_048_576
-    print(f"  📤 Uploading as Video ({mb:.1f} MB)...")
+    # ✨ FIX: تحقق من الحجم (مدة الفيديوهات العادية أكثر مرونة)
+    mb, duration = _validate_video(video_path, as_reel=False)
+
+    print(f"  📤 Uploading as Video ({mb:.1f} MB, {duration:.1f}s)...")
 
     with open(video_path, "rb") as f:
         r = requests.post(
@@ -248,6 +317,22 @@ def publish_to_facebook(
     print(f"     Title : {title[:60]}")
     print(f"     Lang  : {lang.upper()} | Type: {'Reel' if as_reel else 'Video'}")
 
+    # ✨ FIX: تحقق سريع قبل المحاولات (يوفر وقت الـ retries عند فشل validation)
+    try:
+        _validate_video(video_path, as_reel=as_reel)
+    except (ValueError, FileNotFoundError) as e:
+        # إذا فشل validation لـ Reel، جرّب فيديو عادي مباشرة
+        if as_reel:
+            print(f"  ⚠️  Reel validation failed: {e}")
+            try:
+                _validate_video(video_path, as_reel=False)
+                print(f"  ↩️  Falling back to regular video...")
+                as_reel = False
+            except (ValueError, FileNotFoundError) as e2:
+                raise RuntimeError(f"Video validation failed: {e2}")
+        else:
+            raise RuntimeError(f"Video validation failed: {e}")
+
     last_error = None
     _as_reel   = as_reel  # نسخة محلية قابلة للتعديل
 
@@ -293,6 +378,10 @@ def publish_to_facebook(
             print(f"  ⚠️  Timeout [{attempt+1}/{retries}]")
             if attempt < retries - 1:
                 time.sleep(15)
+
+        except ValueError as e:
+            # ✨ FIX: لا تعيد المحاولة على أخطاء validation
+            raise RuntimeError(f"Video validation failed: {e}")
 
         except Exception as e:
             last_error = str(e)
