@@ -55,14 +55,15 @@ const esc      = s => (s||"").toString()
 // ─────────────────────────────────────────────────────────────────────────────
 
 const POWER_WORDS_AR = [
-  "سر","أسرار","نجاح","خطأ","خطر","مال","قوة","مستقبل","ذكاء","عادة","فرصة",
-  "حقيقة","كارثة","مذهل","خطير","صدمة","مهم","حرام","تحذير","انتبه","ثروة",
-  "فشل","تغيير","معجزة","سحر","إدمان","علاج","دموع","ألم","فرح","حب",
+  "سر","أسرار","صدمة","كارثة","خطر","تحذير","انتبه","نجاح",
+  "فشل","ثروة","مال","قوة","مهم","فرصة","خطأ","علاج","مذهل",
+  "حقيقة","إدمان","دموع","ألم","فرح","حب"
 ];
 const POWER_WORDS_EN = [
-  "secret","success","mistake","danger","money","power","future","intelligence",
-  "habit","opportunity","truth","disaster","amazing","critical","warning",
-  "wealth","failure","change","miracle","addiction","cure","important","urgent",
+  "secret","warning","danger","shock","success","failure",
+  "money","wealth","power","critical","important","mistake",
+  "future","intelligence","habit","opportunity","truth","disaster",
+  "amazing","urgent","change","miracle","addiction","cure"
 ];
 
 function isPowerWord(word) {
@@ -75,50 +76,44 @@ function isPowerWord(word) {
 // VISUAL CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ACCENT_COLORS = ["#FFE600","#FF3366","#00F5FF","#FF6B35","#7FFF00","#FF1493"];
+// Viral Color System
+const ACCENT_COLORS = ["#00FFFF","#39FF14","#FF003C","#FFD700","#A020F0","#FF6B00","#00E5FF","#FF1493"];
 const TRANSITIONS   = ["fade","slideleft","slideright","slideup","smoothleft",
                        "smoothright","circleopen","radial","pixelize","dissolve"];
 
 const getTransition = i => TRANSITIONS[i % TRANSITIONS.length];
 
-// المرحلة 3: مواضع النص المتناوبة
+// Expanded Text Positions (9-Grid System)
 const TEXT_POSITIONS = [
-  { name: "bottom", top: null,      bottom: "120px" },
-  { name: "mid",    top: "680px",   bottom: null    },
-  { name: "top",    top: "200px",   bottom: null    },
-  { name: "mid",    top: "680px",   bottom: null    },
+  { name: "top_left",   jc: "flex-start", ai: "flex-start", ta: "left",   pt: "220px", pb: "0" },
+  { name: "top_center", jc: "flex-start", ai: "center",     ta: "center", pt: "220px", pb: "0" },
+  { name: "top_right",  jc: "flex-start", ai: "flex-end",   ta: "right",  pt: "220px", pb: "0" },
+  { name: "mid_left",   jc: "center",     ai: "flex-start", ta: "left",   pt: "0",     pb: "0" },
+  { name: "mid_center", jc: "center",     ai: "center",     ta: "center", pt: "0",     pb: "0" },
+  { name: "mid_right",  jc: "center",     ai: "flex-end",   ta: "right",  pt: "0",     pb: "0" },
+  { name: "bot_left",   jc: "flex-end",   ai: "flex-start", ta: "left",   pt: "0",     pb: "260px" },
+  { name: "bot_center", jc: "flex-end",   ai: "center",     ta: "center", pt: "0",     pb: "260px" },
+  { name: "bot_right",  jc: "flex-end",   ai: "flex-end",   ta: "right",  pt: "0",     pb: "260px" },
 ];
 
-// المرحلة 5: Pattern Interrupts
+// Pattern Interrupt Upgrade
 const PATTERN_INTERRUPTS_AR = [
-  "⚡ انتبه لهذا",
-  "🧠 معلومة مهمة",
-  "🚨 لا تتجاهل هذا",
-  "🔥 أكمل للنهاية",
-  "⏳ ما سيأتي أهم",
+  "لكن انتظر...","الأمر مهم جداً","99% لا يعرفون هذا","لا تتخط هذه النقطة",
+  "الجزء القادم هو الأهم","هنا يرتكب الجميع الخطأ","انتبه جيداً","هذا يغير كل شيء"
 ];
 const PATTERN_INTERRUPTS_EN = [
-  "⚡ Pay attention",
-  "🧠 Important info",
-  "🚨 Don't ignore this",
-  "🔥 Keep watching",
-  "⏳ Best part coming",
+  "Wait...","This is important","99% miss this","Don't skip this",
+  "The next part matters","Most people fail here","Pay attention","This changes everything"
 ];
 
-// المرحلة 9: أسئلة التفاعل
+// Engagement System Upgrade
 const ENGAGEMENT_QUESTIONS_AR = [
-  "هل توافق؟ 👇",
-  "هل حدث معك هذا؟",
-  "اكتب نعم إذا فهمت ✅",
-  "أخبرني برأيك 💬",
-  "انتظر النهاية 🔥",
+  "هل كنت تعرف هذا؟","كم مرة فعلت هذا؟","هل توافق؟",
+  "اكتب نعم إذا فهمت","أخبرني برأيك","وصلت إلى هنا؟ 🔥","هل حدث لك هذا؟"
 ];
 const ENGAGEMENT_QUESTIONS_EN = [
-  "Do you agree? 👇",
-  "Has this happened to you?",
-  "Comment YES if you get it ✅",
-  "Tell me your thoughts 💬",
-  "Wait for the end 🔥",
+  "Did you know this?","How many times have you done this?","Do you agree?",
+  "Comment YES if you understand","Tell me your opinion","Still watching? 🔥","Has this happened to you?"
 ];
 
 function getEmojis(t) {
@@ -134,80 +129,7 @@ function getEmojis(t) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// المرحلة 1: HOOK SCREEN
-// ─────────────────────────────────────────────────────────────────────────────
-
-function buildHookHTML(hookText, accent) {
-  const isAr  = isArabic(hookText);
-  const dir   = isAr ? "rtl" : "ltr";
-  const lang  = isAr ? "ar" : "en";
-  const bFont = isAr
-    ? `"Noto Naskh Arabic","Amiri",serif`
-    : `"Inter","Helvetica Neue",Arial,sans-serif`;
-
-  const words      = hookText.trim().split(/\s+/);
-  const splitAt    = Math.min(2, Math.floor(words.length / 2));
-  const highlighted = words.slice(0, splitAt).join(" ");
-  const rest        = words.slice(splitAt).join(" ");
-
-  return `<!DOCTYPE html>
-<html lang="${lang}">
-<head>
-  <meta charset="UTF-8"/>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700;800&family=Amiri:wght@700&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
-  <style>
-    *{margin:0;padding:0;box-sizing:border-box;}
-    html,body{width:${WIDTH}px;height:${HEIGHT}px;overflow:hidden;background:transparent;}
-    .hook-wrap{
-      position:absolute;inset:0;
-      display:flex;flex-direction:column;
-      justify-content:center;align-items:center;
-      padding:0 60px;direction:${dir};gap:20px;
-    }
-    .hook-text{
-      font-family:${bFont};font-size:${isAr?"110px":"102px"};font-weight:900;
-      text-align:center;line-height:1.1;max-width:960px;word-break:break-word;
-    }
-    .hook-hi{
-      color:${accent};
-      text-shadow:0 0 60px ${accent}cc,0 0 120px ${accent}44,
-                  0 6px 30px rgba(0,0,0,1),4px 4px 0 rgba(0,0,0,0.9);
-    }
-    .hook-rest{
-      color:#fff;
-      text-shadow:0 6px 30px rgba(0,0,0,1),4px 4px 0 rgba(0,0,0,0.9);
-    }
-    .hook-bar{
-      width:120px;height:6px;border-radius:3px;
-      background:${accent};box-shadow:0 0 20px ${accent};
-    }
-    .overlay-t{position:absolute;top:0;left:0;right:0;height:35%;
-      background:linear-gradient(to bottom,rgba(0,0,0,0.7),transparent);}
-    .overlay-b{position:absolute;bottom:0;left:0;right:0;height:35%;
-      background:linear-gradient(to top,rgba(0,0,0,0.7),transparent);}
-    .flash{position:absolute;inset:0;background:${accent};opacity:0.22;
-      mix-blend-mode:overlay;pointer-events:none;}
-  </style>
-</head>
-<body>
-  <div class="overlay-t"></div>
-  <div class="overlay-b"></div>
-  <div class="flash"></div>
-  <div class="hook-wrap">
-    <div class="hook-text">
-      ${isAr
-        ? `<span class="hook-rest">${esc(rest)} </span><span class="hook-hi">${esc(highlighted)}</span>`
-        : `<span class="hook-hi">${esc(highlighted)} </span><span class="hook-rest">${esc(rest)}</span>`
-      }
-    </div>
-    <div class="hook-bar"></div>
-  </div>
-</body>
-</html>`;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// المرحلة 5: PATTERN INTERRUPT SCREEN
+// PATTERN INTERRUPT SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildPatternInterruptHTML(message, accent) {
@@ -221,7 +143,7 @@ function buildPatternInterruptHTML(message, accent) {
 <html lang="${isAr?"ar":"en"}">
 <head>
   <meta charset="UTF-8"/>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700;800&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700;800;900&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
     html,body{width:${WIDTH}px;height:${HEIGHT}px;overflow:hidden;background:transparent;}
@@ -230,16 +152,18 @@ function buildPatternInterruptHTML(message, accent) {
       display:flex;justify-content:center;align-items:center;
     }
     .pi-box{
-      background:${accent};border-radius:24px;
-      padding:36px 64px;max-width:900px;
+      background:${accent};border-radius:30px;
+      padding:44px 72px;max-width:920px;
       display:flex;align-items:center;gap:20px;direction:${dir};
-      box-shadow:0 0 80px ${accent}88,0 20px 60px rgba(0,0,0,0.8);
+      box-shadow:0 0 100px ${accent}aa,0 20px 80px rgba(0,0,0,0.9);
+      transform: scale(1.05); filter: drop-shadow(0 0 20px ${accent});
     }
     .pi-text{
-      font-family:${bFont};font-size:${isAr?"72px":"68px"};font-weight:900;
-      color:#000;text-align:center;line-height:1.15;word-break:break-word;
+      font-family:${bFont};font-size:${isAr?"78px":"74px"};font-weight:900;
+      color:#000;text-align:center;line-height:1.2;word-break:break-word;
+      text-transform:uppercase;
     }
-    .overlay{position:absolute;inset:0;background:rgba(0,0,0,0.45);pointer-events:none;}
+    .overlay{position:absolute;inset:0;background:rgba(0,0,0,0.65);pointer-events:none;}
   </style>
 </head>
 <body>
@@ -254,7 +178,7 @@ function buildPatternInterruptHTML(message, accent) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// المرحلة 9: ENGAGEMENT QUESTION SCREEN
+// ENGAGEMENT QUESTION SCREEN
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildEngagementHTML(question, accent) {
@@ -268,22 +192,23 @@ function buildEngagementHTML(question, accent) {
 <html lang="${isAr?"ar":"en"}">
 <head>
   <meta charset="UTF-8"/>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700;800&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700;800;900&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
     html,body{width:${WIDTH}px;height:${HEIGHT}px;overflow:hidden;background:transparent;}
     .eq-wrap{
-      position:absolute;bottom:180px;left:0;right:0;
+      position:absolute;bottom:220px;left:0;right:0;
       display:flex;justify-content:center;padding:0 60px;
     }
     .eq-box{
-      background:rgba(0,0,0,0.80);border:3px solid ${accent};
-      border-radius:20px;padding:28px 52px;max-width:920px;direction:${dir};
+      background:rgba(0,0,0,0.90);border:4px solid ${accent};
+      border-radius:24px;padding:32px 60px;max-width:960px;direction:${dir};
+      box-shadow: 0 0 50px ${accent}66;
     }
     .eq-text{
-      font-family:${bFont};font-size:${isAr?"58px":"54px"};font-weight:800;
+      font-family:${bFont};font-size:${isAr?"62px":"58px"};font-weight:900;
       color:#fff;text-align:center;line-height:1.3;
-      text-shadow:0 2px 12px rgba(0,0,0,0.9);
+      text-shadow:0 4px 16px rgba(0,0,0,0.9);
     }
   </style>
 </head>
@@ -298,11 +223,21 @@ function buildEngagementHTML(question, accent) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// المرحلتان 2+3+4: SENTENCE SCREEN
+// SENTENCE SCREEN (WITH ULTRA HOOK & SUB-FRAME ANIMATIONS)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Smart Line Breaking Helper
+function chunkText(wordsArray, size) {
+  let out = "";
+  for (let i = 0; i < wordsArray.length; i++) {
+    out += esc(wordsArray[i]) + " ";
+    if ((i + 1) % size === 0 && i !== wordsArray.length - 1) out += "<br/>";
+  }
+  return out.trim();
+}
+
 function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
-                           totalSentences, posIdx, accent, styleIdx) {
+                           totalSentences, posIdx, accent, styleIdx, wordFrameIdx, isHook) {
   sentence = (sentence||" ").trim() || " ";
   const words  = sentence.split(" ").filter(Boolean);
   const isAr   = isArabic(sentence);
@@ -322,199 +257,230 @@ function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
   const isDone = words.length > 0 && vc >= words.length;
   const [e1, e2] = getEmojis(titleText);
 
-  const pos    = TEXT_POSITIONS[posIdx % TEXT_POSITIONS.length];
-  const topVal = pos.top || "auto";
-  const botVal = pos.bottom || "auto";
-
-  const STYLES    = ["word_pop","impact","neon_word","stacked","minimal_cap","karaoke"];
-  const styleName = STYLES[styleIdx % STYLES.length];
-
-  const prev = esc(words.slice(0, vc-1).join(" "));
-  const curr = vc > 0 ? (words[vc-1]||"") : "";
-  const next = esc(words.slice(vc).join(" "));
-  const currIsPower = isPowerWord(curr);
-
-  function buildWordSpans(wordList, visibleN) {
-    return wordList.map((w, i) => {
-      const we      = esc(w);
-      const isPower = isPowerWord(w);
-      const isCurr  = i === visibleN - 1;
-      const isPrev  = i < visibleN - 1;
-      const powerStyle = isPower ? `font-size:${isAr?"70px":"66px"};` : "";
-      if (isCurr)
-        return `<span style="background:${accent};color:#000;padding:3px 14px;border-radius:10px;display:inline-block;line-height:1.2;margin:0 3px;${powerStyle}">${we}</span>`;
-      if (isPrev)
-        return `<span style="color:rgba(255,255,255,0.52);margin:0 3px;${powerStyle}">${we}</span>`;
-      return `<span style="color:rgba(255,255,255,0.16);margin:0 3px;">${we}</span>`;
-    }).join("");
+  // Position Mapping
+  const pos = TEXT_POSITIONS[posIdx % TEXT_POSITIONS.length];
+  let alignObj = pos.ai;
+  let textAln  = pos.ta;
+  if (isAr) {
+    if (alignObj === "flex-start") alignObj = "flex-end";
+    else if (alignObj === "flex-end") alignObj = "flex-start";
+    if (textAln === "left") textAln = "right";
+    else if (textAln === "right") textAln = "left";
   }
 
-  let mainCSS = "", mainHTML = "";
+  // Animation Math (Pop, Shake, Zoom Punch, Flash, Motion Blur)
+  const wf = wordFrameIdx || 0;
+  const prog = Math.min(wf / 5.0, 1.0); // 0.0 to 1.0
+  let scale = 1.0;
+  let shake = "";
+  let flashOpacity = 0;
+  let blur = 0;
+  
+  const curr = vc > 0 ? (words[vc-1]||"") : "";
+  const currIsPower = isPowerWord(curr);
 
-  if (styleName === "word_pop") {
+  if (currIsPower) {
+    scale = 1.0 + Math.sin(prog * Math.PI) * 0.35; // Peak 1.35
+    if (prog > 0 && prog < 1) {
+      const shakes = [
+        `translate(5px,-5px) rotate(3deg)`,
+        `translate(-5px,5px) rotate(-3deg)`,
+        `translate(3px,-3px) rotate(2deg)`,
+        `translate(-3px,3px) rotate(-2deg)`,
+      ];
+      shake = shakes[wf % 4];
+    }
+    flashOpacity = Math.max(0, 0.30 * (1 - prog * 2)); // Quick fade
+    blur = Math.sin(prog * Math.PI) * 3;
+  } else if (wf < 5 && vc > 0) {
+    scale = 1.0 + Math.sin(prog * Math.PI) * 0.08; // Normal punch 1.08
+    blur = Math.sin(prog * Math.PI) * 1.5;
+  }
+
+  const transformStr = `scale(${scale}) ${shake}`.trim();
+
+  const prevText = chunkText(words.slice(0, Math.max(0, vc-1)), 4);
+  const nextText = chunkText(words.slice(vc), 4);
+
+  const STYLES    = ["word_pop","impact","neon_word","stacked","minimal_cap","karaoke"];
+  // Intelligent style rotation
+  const styleName = isHook ? "ultra_hook" : STYLES[styleIdx % STYLES.length];
+
+  let mainCSS = "", mainHTML = "";
+  const containerClass = `
+      .wrap{position:absolute;inset:0;display:flex;flex-direction:column;
+            justify-content:${pos.jc};align-items:${alignObj};text-align:${textAln};
+            padding:${pos.pt} 56px ${pos.pb};direction:${dir};gap:6px;}`;
+
+  if (styleName === "ultra_hook") {
     mainCSS = `
-      .wp{position:absolute;top:${topVal};bottom:${botVal};left:0;right:0;
-          display:flex;flex-direction:column;align-items:center;padding:0 56px;
-          direction:${dir};gap:6px;justify-content:center;}
-      .wp-p{font-family:${bFont};font-size:${isAr?"44px":"40px"};font-weight:700;
-            color:rgba(255,255,255,0.35);text-align:center;line-height:1.3;
-            text-shadow:0 2px 12px rgba(0,0,0,0.95);max-width:960px;
-            min-height:52px;word-break:break-word;}
-      .wp-c{font-family:${bFont};
-            font-size:${currIsPower?(isAr?"130px":"122px"):(isAr?"112px":"106px")};
-            font-weight:900;color:${currIsPower?accent:"#fff"};text-align:center;
-            line-height:1.0;letter-spacing:${isAr?"0.01em":"-0.03em"};
+      .uh{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+          justify-content:center;padding:0 40px;direction:${dir};}
+      .uh-c{font-family:${bFont};font-size:${isAr?"170px":"160px"};font-weight:900;
+            color:${accent};text-align:center;line-height:1.0;text-transform:uppercase;
+            transform:${transformStr}; filter:blur(${blur}px); display:inline-block;
+            -webkit-text-stroke: 4px #000; paint-order: stroke fill;
+            text-shadow:0 0 80px ${accent}cc, 0 10px 50px rgba(0,0,0,1), 8px 8px 0px #000;
+            word-break:break-word; z-index:10;}`;
+    mainHTML = `<div class="uh">
+      ${flashOpacity>0 ? `<div style="position:absolute;inset:0;background:#fff;opacity:${flashOpacity};z-index:99;"></div>` : ''}
+      ${curr ? `<div class="uh-c">${esc(curr)}</div>` : ''}
+    </div>`;
+  }
+  else if (styleName === "word_pop") {
+    mainCSS = containerClass + `
+      .wp-p{font-family:${bFont};font-size:${isAr?"48px":"44px"};font-weight:700;
+            color:rgba(255,255,255,0.45);line-height:1.3;text-shadow:0 2px 12px rgba(0,0,0,0.95);
+            max-width:960px;min-height:52px;}
+      .wp-c{font-family:${bFont};font-size:${currIsPower?(isAr?"130px":"122px"):(isAr?"112px":"106px")};
+            font-weight:900;color:${currIsPower?accent:"#fff"};line-height:1.0;
+            letter-spacing:${isAr?"0.01em":"-0.03em"};display:inline-block;
+            transform:${transformStr}; filter:blur(${blur}px);
             text-shadow:${currIsPower
               ?`0 0 60px ${accent}cc,0 0 100px ${accent}44,0 6px 32px rgba(0,0,0,1),5px 5px 0 rgba(0,0,0,0.85)`
               :`0 6px 32px rgba(0,0,0,1),5px 5px 0 rgba(0,0,0,0.85),-3px -3px 0 rgba(0,0,0,0.7)`};
-            min-height:116px;word-break:break-word;}
-      .wp-n{font-family:${bFont};font-size:${isAr?"36px":"32px"};font-weight:600;
-            color:rgba(255,255,255,0.16);text-align:center;line-height:1.3;
-            max-width:960px;word-break:break-word;}`;
-    mainHTML = `<div class="wp">
-      <div class="wp-p">${prev}&nbsp;</div>
+            min-height:116px;z-index:5;}
+      .wp-n{font-family:${bFont};font-size:${isAr?"40px":"36px"};font-weight:600;
+            color:rgba(255,255,255,0.20);line-height:1.3;max-width:960px;}`;
+    mainHTML = `<div class="wrap">
+      ${flashOpacity>0 ? `<div style="position:absolute;inset:0;background:#fff;opacity:${flashOpacity};z-index:99;pointer-events:none;"></div>` : ''}
+      <div class="wp-p">${prevText}&nbsp;</div>
       <div class="wp-c">${esc(curr)}</div>
-      <div class="wp-n">&nbsp;${next}</div>
+      <div class="wp-n">&nbsp;${nextText}</div>
     </div>`;
   }
   else if (styleName === "impact") {
-    mainCSS = `
-      .im{position:absolute;top:${topVal};bottom:${botVal};left:0;right:0;
-          display:flex;flex-direction:column;align-items:center;padding:0 36px;
-          justify-content:center;}
-      .im-p{font-family:${bFont};font-size:${isAr?"34px":"30px"};font-weight:700;
-            color:rgba(255,255,255,0.28);text-align:center;margin-bottom:10px;
-            text-shadow:0 2px 8px rgba(0,0,0,0.9);}
-      .im-c{font-family:${bFont};
-            font-size:${currIsPower?(isAr?"134px":"126px"):(isAr?"124px":"116px")};
-            font-weight:900;color:#fff;text-align:center;line-height:0.95;
-            letter-spacing:${isAr?"0.01em":"-0.04em"};
-            -webkit-text-stroke:${isAr?"5px":"6px"} rgba(0,0,0,0.95);
-            paint-order:stroke fill;
-            text-shadow:${currIsPower?`0 0 50px ${accent}aa,`:""}0 6px 30px rgba(0,0,0,0.95);
-            word-break:break-word;max-width:980px;}
-      .im-n{font-family:${bFont};font-size:${isAr?"32px":"28px"};font-weight:600;
-            color:rgba(255,255,255,0.14);text-align:center;margin-top:10px;}`;
-    mainHTML = `<div class="im">
-      <div class="im-p">${prev}</div>
+    mainCSS = containerClass + `
+      .im-p{font-family:${bFont};font-size:${isAr?"40px":"36px"};font-weight:700;
+            color:rgba(255,255,255,0.35);margin-bottom:10px;text-shadow:0 2px 8px rgba(0,0,0,0.9);}
+      .im-c{font-family:${bFont};font-size:${currIsPower?(isAr?"134px":"126px"):(isAr?"124px":"116px")};
+            font-weight:900;color:#fff;line-height:0.95;letter-spacing:${isAr?"0.01em":"-0.04em"};
+            -webkit-text-stroke:${isAr?"5px":"6px"} rgba(0,0,0,0.95);paint-order:stroke fill;
+            text-shadow:${currIsPower?`0 0 60px ${accent}cc,`:""}0 6px 30px rgba(0,0,0,0.95);
+            display:inline-block; transform:${transformStr}; filter:blur(${blur}px); max-width:980px;}
+      .im-n{font-family:${bFont};font-size:${isAr?"36px":"32px"};font-weight:600;
+            color:rgba(255,255,255,0.20);margin-top:10px;}`;
+    mainHTML = `<div class="wrap">
+      ${flashOpacity>0 ? `<div style="position:absolute;inset:0;background:#fff;opacity:${flashOpacity};z-index:99;pointer-events:none;"></div>` : ''}
+      <div class="im-p">${prevText}</div>
       <div class="im-c">${currIsPower?`<span style="color:${accent};-webkit-text-stroke:0">${esc(curr)}</span>`:esc(curr)}</div>
-      <div class="im-n">${next}</div>
+      <div class="im-n">${nextText}</div>
     </div>`;
   }
   else if (styleName === "neon_word") {
-    mainCSS = `
-      .nw{position:absolute;top:${topVal};bottom:${botVal};left:0;right:0;
-          display:flex;flex-direction:column;align-items:center;padding:0 56px;
-          direction:${dir};gap:8px;justify-content:center;}
-      .nw-p{font-family:${bFont};font-size:${isAr?"38px":"34px"};font-weight:700;
-            color:rgba(255,255,255,0.24);text-align:center;line-height:1.3;
-            max-width:960px;min-height:46px;word-break:break-word;}
-      .nw-c{font-family:${bFont};
-            font-size:${currIsPower?(isAr?"124px":"118px"):(isAr?"110px":"104px")};
-            font-weight:900;color:#fff;text-align:center;line-height:1.0;
-            letter-spacing:${isAr?"0.01em":"-0.03em"};
-            text-shadow:0 0 25px ${accent},0 0 50px ${accent}aa,
-                        0 0 90px ${accent}44,0 4px 22px rgba(0,0,0,1),
-                        4px 4px 0 rgba(0,0,0,0.9);
-            min-height:114px;word-break:break-word;}
-      .nw-n{font-family:${bFont};font-size:${isAr?"34px":"30px"};font-weight:600;
-            color:rgba(255,255,255,0.10);text-align:center;line-height:1.3;
-            max-width:960px;word-break:break-word;}`;
-    mainHTML = `<div class="nw">
-      <div class="nw-p">${prev}&nbsp;</div>
+    mainCSS = containerClass + `
+      .nw-p{font-family:${bFont};font-size:${isAr?"42px":"38px"};font-weight:700;
+            color:rgba(255,255,255,0.30);line-height:1.3;max-width:960px;min-height:46px;}
+      .nw-c{font-family:${bFont};font-size:${currIsPower?(isAr?"124px":"118px"):(isAr?"110px":"104px")};
+            font-weight:900;color:#fff;line-height:1.0;letter-spacing:${isAr?"0.01em":"-0.03em"};
+            text-shadow:0 0 25px ${accent},0 0 60px ${accent}aa,0 0 100px ${accent}55,0 4px 22px rgba(0,0,0,1);
+            display:inline-block; transform:${transformStr}; filter:blur(${blur}px); min-height:114px;}
+      .nw-n{font-family:${bFont};font-size:${isAr?"38px":"34px"};font-weight:600;
+            color:rgba(255,255,255,0.15);line-height:1.3;max-width:960px;}`;
+    mainHTML = `<div class="wrap">
+      ${flashOpacity>0 ? `<div style="position:absolute;inset:0;background:#fff;opacity:${flashOpacity};z-index:99;pointer-events:none;"></div>` : ''}
+      <div class="nw-p">${prevText}&nbsp;</div>
       <div class="nw-c">${esc(curr)}</div>
-      <div class="nw-n">&nbsp;${next}</div>
+      <div class="nw-n">&nbsp;${nextText}</div>
     </div>`;
   }
   else if (styleName === "stacked") {
-    mainCSS = `
-      .st{position:absolute;top:${topVal};bottom:${botVal};left:0;right:0;
-          display:flex;flex-direction:column;align-items:center;padding:0 52px;
-          direction:${dir};gap:4px;justify-content:center;}
-      .st-p{font-family:${bFont};font-size:${isAr?"40px":"36px"};font-weight:700;
-            color:rgba(255,255,255,0.30);text-align:center;line-height:1.35;
-            text-shadow:0 2px 10px rgba(0,0,0,0.95);min-height:48px;
-            max-width:960px;word-break:break-word;}
-      .st-c{font-family:${bFont};
-            font-size:${currIsPower?(isAr?"118px":"112px"):(isAr?"104px":"98px")};
-            font-weight:900;color:${currIsPower?accent:"#fff"};text-align:center;
-            line-height:1.05;
-            text-shadow:0 0 40px ${accent}bb,0 0 80px ${accent}44,
-                        0 4px 24px rgba(0,0,0,1),4px 4px 0 rgba(0,0,0,0.85);
-            min-height:108px;max-width:980px;word-break:break-word;}
-      .st-n{font-family:${bFont};font-size:${isAr?"36px":"32px"};font-weight:600;
-            color:rgba(255,255,255,0.14);text-align:center;line-height:1.35;
-            min-height:44px;max-width:960px;word-break:break-word;}`;
-    mainHTML = `<div class="st">
-      <div class="st-p">${prev}&nbsp;</div>
+    mainCSS = containerClass + `
+      .st-p{font-family:${bFont};font-size:${isAr?"46px":"42px"};font-weight:700;
+            color:rgba(255,255,255,0.40);line-height:1.35;text-shadow:0 2px 10px rgba(0,0,0,0.95);
+            min-height:48px;max-width:960px;}
+      .st-c{font-family:${bFont};font-size:${currIsPower?(isAr?"118px":"112px"):(isAr?"104px":"98px")};
+            font-weight:900;color:${currIsPower?accent:"#fff"};line-height:1.05;
+            text-shadow:0 0 50px ${accent}bb,0 0 90px ${accent}55,0 4px 24px rgba(0,0,0,1),4px 4px 0 rgba(0,0,0,0.85);
+            display:inline-block; transform:${transformStr}; filter:blur(${blur}px); min-height:108px;max-width:980px;}
+      .st-n{font-family:${bFont};font-size:${isAr?"40px":"36px"};font-weight:600;
+            color:rgba(255,255,255,0.20);line-height:1.35;min-height:44px;max-width:960px;}`;
+    mainHTML = `<div class="wrap">
+      ${flashOpacity>0 ? `<div style="position:absolute;inset:0;background:#fff;opacity:${flashOpacity};z-index:99;pointer-events:none;"></div>` : ''}
+      <div class="st-p">${prevText}&nbsp;</div>
       <div class="st-c">${esc(curr)}</div>
-      <div class="st-n">&nbsp;${next}</div>
+      <div class="st-n">&nbsp;${nextText}</div>
     </div>`;
   }
   else if (styleName === "minimal_cap") {
-    mainCSS = `
-      .mc{position:absolute;top:${topVal};bottom:${botVal==="auto"?"120px":botVal};
-          left:0;right:0;direction:${dir};}
-      .mc-p{font-family:${bFont};font-size:${isAr?"34px":"30px"};font-weight:600;
-            color:rgba(255,255,255,0.34);text-align:center;padding:0 60px;
-            margin-bottom:10px;text-shadow:0 2px 8px rgba(0,0,0,0.9);}
-      .mc-bar{background:rgba(0,0,0,0.78);padding:20px 52px;
-              border-${isAr?"right":"left"}:6px solid ${accent};
+    mainCSS = containerClass + `
+      .mc-p{font-family:${bFont};font-size:${isAr?"40px":"36px"};font-weight:600;
+            color:rgba(255,255,255,0.45);margin-bottom:10px;text-shadow:0 2px 8px rgba(0,0,0,0.9);}
+      .mc-bar{background:rgba(0,0,0,0.85);padding:24px 56px;
+              border-${isAr?"right":"left"}:8px solid ${accent};
               display:flex;align-items:baseline;flex-wrap:wrap;gap:0;
-              ${isAr?"justify-content:flex-end;direction:rtl;":""}}
-      .mc-c{font-family:${bFont};
-            font-size:${currIsPower?(isAr?"72px":"68px"):(isAr?"60px":"56px")};
+              ${isAr?"justify-content:flex-end;direction:rtl;":""}
+              box-shadow:0 10px 30px rgba(0,0,0,0.5);}
+      .mc-c{font-family:${bFont};font-size:${currIsPower?(isAr?"78px":"74px"):(isAr?"66px":"62px")};
             font-weight:900;color:${accent};line-height:1.2;
-            text-shadow:0 0 20px ${accent}55,0 2px 8px rgba(0,0,0,0.8);}
-      .mc-r{font-family:${bFont};font-size:${isAr?"46px":"42px"};font-weight:700;
-            color:rgba(255,255,255,0.26);line-height:1.2;
+            display:inline-block; transform:${transformStr}; filter:blur(${blur}px);
+            text-shadow:0 0 30px ${accent}66,0 2px 8px rgba(0,0,0,0.8);}
+      .mc-r{font-family:${bFont};font-size:${isAr?"52px":"48px"};font-weight:700;
+            color:rgba(255,255,255,0.35);line-height:1.2;
             ${isAr?"margin-right:10px":"margin-left:10px"};}`;
-    mainHTML = `<div class="mc">
-      ${prev?`<div class="mc-p">${prev}</div>`:""}
+    mainHTML = `<div class="wrap" style="justify-content:flex-end; padding-bottom:180px;">
+      ${flashOpacity>0 ? `<div style="position:absolute;inset:0;background:#fff;opacity:${flashOpacity};z-index:99;pointer-events:none;"></div>` : ''}
+      ${prevText?`<div class="mc-p">${prevText.replace(/<br\/>/g," ")}</div>`:""}
       <div class="mc-bar">
         ${isAr
-          ?`<span class="mc-r">${next}</span><span class="mc-c"> ${esc(curr)}</span>`
-          :`<span class="mc-c">${esc(curr)}</span><span class="mc-r"> ${next}</span>`
+          ?`<span class="mc-r">${nextText.replace(/<br\/>/g," ")}</span><span class="mc-c"> ${esc(curr)}</span>`
+          :`<span class="mc-c">${esc(curr)}</span><span class="mc-r"> ${nextText.replace(/<br\/>/g," ")}</span>`
         }
       </div>
     </div>`;
   }
-  else {
-    const kWords = buildWordSpans(words, vc);
-    mainCSS  = `
-      .kk{position:absolute;top:${topVal};bottom:${botVal==="auto"?"140px":botVal};
-          left:0;right:0;padding:0 48px;direction:${dir};}
-      .kk-t{font-family:${bFont};font-size:${isAr?"50px":"46px"};font-weight:800;
-            text-align:center;line-height:1.6;
-            text-shadow:0 2px 12px rgba(0,0,0,0.95);word-break:break-word;}`;
-    mainHTML = `<div class="kk"><div class="kk-t">${kWords}</div></div>`;
+  else { // karaoke fallback
+    const kWords = words.map((w, i) => {
+      const we      = esc(w);
+      const isPower = isPowerWord(w);
+      const isCurr  = i === Math.max(0, vc - 1);
+      const isPrev  = i < Math.max(0, vc - 1);
+      const powerStyle = isPower ? `font-size:${isAr?"76px":"72px"};` : "";
+      if (isCurr)
+        return `<span style="background:${accent};color:#000;padding:4px 18px;border-radius:12px;display:inline-block;transform:${transformStr};filter:blur(${blur}px);line-height:1.2;margin:0 4px;${powerStyle}box-shadow:0 0 20px ${accent}88;">${we}</span>`;
+      if (isPrev)
+        return `<span style="color:rgba(255,255,255,0.65);margin:0 4px;${powerStyle}">${we}</span>`;
+      return `<span style="color:rgba(255,255,255,0.25);margin:0 4px;">${we}</span>`;
+    }).join("");
+    
+    mainCSS  = containerClass + `
+      .kk-t{font-family:${bFont};font-size:${isAr?"56px":"52px"};font-weight:800;
+            line-height:1.6;text-shadow:0 2px 12px rgba(0,0,0,0.95);word-break:break-word;}`;
+    mainHTML = `<div class="wrap" style="justify-content:center; align-items:center; text-align:center;">
+      ${flashOpacity>0 ? `<div style="position:absolute;inset:0;background:#fff;opacity:${flashOpacity};z-index:99;pointer-events:none;"></div>` : ''}
+      <div class="kk-t">${kWords}</div>
+    </div>`;
   }
 
   const titleBarHTML = `
     <div style="position:absolute;top:60px;left:0;right:0;
                 display:flex;justify-content:center;padding:0 50px;z-index:10;">
       <div style="display:inline-flex;align-items:center;gap:10px;
-                  background:rgba(0,0,0,0.65);border-radius:40px;
-                  padding:10px 22px;border:1.5px solid rgba(255,255,255,0.20);
-                  max-width:880px;">
-        <span style="font-size:28px;line-height:1;">${e1}</span>
-        <span style="font-family:${tFont};font-size:${isTAr?"25px":"23px"};font-weight:800;
-                     color:rgba(255,255,255,0.92);line-height:1.2;
+                  background:rgba(0,0,0,0.75);border-radius:40px;
+                  padding:12px 26px;border:2px solid rgba(255,255,255,0.25);
+                  max-width:880px;box-shadow:0 5px 20px rgba(0,0,0,0.5);">
+        <span style="font-size:32px;line-height:1;">${e1}</span>
+        <span style="font-family:${tFont};font-size:${isTAr?"28px":"26px"};font-weight:800;
+                     color:rgba(255,255,255,0.95);line-height:1.2;
                      direction:${isTAr?"rtl":"ltr"};
-                     text-shadow:0 1px 6px rgba(0,0,0,0.8);">${esc(titleText)}</span>
-        <span style="font-size:28px;line-height:1;">${e2}</span>
+                     text-shadow:0 2px 8px rgba(0,0,0,0.9);">${esc(titleText)}</span>
+        <span style="font-size:32px;line-height:1;">${e2}</span>
       </div>
     </div>`;
 
-  const saveLabel = isTAr ? "احفظ الفيديو 🔖" : "Save This 🔖";
-  const engDiv    = (isLast && isDone) ? `
+  const endLabel = isTAr 
+    ? "احفظ الفيديو 🔖<br><span style='font-size:36px;color:#333;font-weight:800;'>ستحتاجه لاحقاً</span>"
+    : "SAVE THIS 🔖<br><span style='font-size:36px;color:#333;font-weight:800;'>You will need this later</span>";
+
+  const engDiv = (isLast && isDone) ? `
     <div style="position:absolute;inset:0;display:flex;justify-content:center;
-                align-items:center;pointer-events:none;z-index:20;">
-      <div style="background:${accent};border-radius:60px;padding:22px 52px;
-                  display:flex;align-items:center;
-                  box-shadow:0 0 60px ${accent}aa,0 10px 40px rgba(0,0,0,0.7);">
-        <span style="font-family:${tFont};font-size:48px;font-weight:900;
-                     color:#000;white-space:nowrap;">${saveLabel}</span>
+                align-items:center;pointer-events:none;z-index:20;background:rgba(0,0,0,0.4);">
+      <div style="background:${accent};border-radius:40px;padding:36px 64px;
+                  display:flex;flex-direction:column;align-items:center;text-align:center;
+                  box-shadow:0 0 80px ${accent}cc,0 15px 50px rgba(0,0,0,0.8);
+                  transform: scale(1.1); animation: pulse 2s infinite;">
+        <span style="font-family:${tFont};font-size:64px;font-weight:900;
+                     color:#000;line-height:1.2;">${endLabel}</span>
       </div>
     </div>` : "";
 
@@ -525,34 +491,39 @@ function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
   const dEnd   = Math.min(totalSentences, dStart + MAX_D);
   const dotsDiv = `
     <div style="position:absolute;bottom:68px;left:0;right:0;
-                display:flex;justify-content:center;align-items:center;gap:9px;z-index:10;">
+                display:flex;justify-content:center;align-items:center;gap:10px;z-index:10;">
       ${Array.from({length: dEnd - dStart}, (_,k) => {
         const i = dStart + k;
         return i === sentenceIdx
-          ? `<div style="width:22px;height:7px;border-radius:4px;background:${accent};"></div>`
-          : `<div style="width:7px;height:7px;border-radius:50%;background:rgba(255,255,255,0.18);"></div>`;
+          ? `<div style="width:26px;height:8px;border-radius:4px;background:${accent};box-shadow:0 0 10px ${accent};"></div>`
+          : `<div style="width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.25);"></div>`;
       }).join("")}
     </div>`;
 
   const progDiv = `
     <div style="position:absolute;bottom:44px;left:56px;right:56px;
-                height:4px;background:rgba(255,255,255,0.10);border-radius:2px;overflow:hidden;z-index:10;">
+                height:6px;background:rgba(255,255,255,0.15);border-radius:3px;overflow:hidden;z-index:10;">
       <div style="height:100%;width:${pct}%;
-                  background:linear-gradient(90deg,${accent},${accent}66);border-radius:2px;"></div>
+                  background:linear-gradient(90deg,${accent},${accent}88);border-radius:3px;
+                  box-shadow:0 0 10px ${accent}aa;"></div>
     </div>`;
 
   const overlayDiv = `
     <div style="position:absolute;bottom:0;left:0;right:0;height:75%;
                 background:linear-gradient(to top,
-                  rgba(0,0,0,0.96) 0%,rgba(0,0,0,0.78) 20%,
-                  rgba(0,0,0,0.45) 38%,rgba(0,0,0,0.18) 55%,transparent 72%
+                  rgba(0,0,0,0.98) 0%,rgba(0,0,0,0.85) 20%,
+                  rgba(0,0,0,0.50) 38%,rgba(0,0,0,0.20) 55%,transparent 75%
+                );pointer-events:none;"></div>
+    <div style="position:absolute;top:0;left:0;right:0;height:25%;
+                background:linear-gradient(to bottom,
+                  rgba(0,0,0,0.8) 0%, transparent 100%
                 );pointer-events:none;"></div>`;
 
   return `<!DOCTYPE html>
 <html lang="${lang}">
 <head>
   <meta charset="UTF-8"/>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700;800&family=Amiri:wght@700&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700;800;900&family=Amiri:wght@700&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
     html,body{width:${WIDTH}px;height:${HEIGHT}px;overflow:hidden;background:transparent;}
@@ -571,11 +542,10 @@ function buildSentenceHTML(sentence, visibleCount, titleText, sentenceIdx,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FRAME STATE MAP
+// FRAME STATE MAP (Now tracking sub-frames for animation)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const SCREEN_TYPE = {
-  HOOK:       "hook",
   SENTENCE:   "sentence",
   PATTERN:    "pattern",
   ENGAGEMENT: "engagement",
@@ -583,7 +553,7 @@ const SCREEN_TYPE = {
 
 function buildFrameStateMap(timeline, nFrames, realDur) {
   const sentenceCount    = sentences.length;
-  const HOOK_FRAMES      = Math.round(2 * FPS);
+  const ULTRA_HOOK_FRAMES= Math.round(3.0 * FPS);
   const PI_INTERVAL      = Math.round(6 * FPS);
   const EQ_INTERVAL      = Math.round(10 * FPS);
 
@@ -601,6 +571,7 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
     screen_type:        SCREEN_TYPE.SENTENCE,
     sentence_idx:       0,
     visible_word_count: 0,
+    word_frame_idx:     0, // Added for sub-frame animation tracking
     position_idx:       0,
     style_idx:          0,
     accent_idx:         0,
@@ -609,16 +580,15 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
     is_hook:            false,
   }));
 
-  for (let f = 0; f < Math.min(HOOK_FRAMES, nFrames); f++) {
-    map[f] = { ...map[f], screen_type: SCREEN_TYPE.HOOK, is_hook: true };
-  }
+  let last_vc = -1;
+  let frames_since_reveal = 0;
 
   if (timeline && timeline.length > 0) {
     const timelineMax = timeline[timeline.length - 1].time;
     const scale       = timelineMax > 0.1 ? (realDur / timelineMax) : 1.0;
     const scaled      = timeline.map(ev => ({ ...ev, time: ev.time * scale }));
 
-    for (let f = HOOK_FRAMES; f < nFrames; f++) {
+    for (let f = 0; f < nFrames; f++) {
       const t = f / FPS;
       let lo = 0, hi = scaled.length - 1, best = null;
       while (lo <= hi) {
@@ -627,37 +597,60 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
         else hi = mid - 1;
       }
       if (best) {
+        if (best.visible_word_count !== last_vc) {
+          frames_since_reveal = 0;
+          last_vc = best.visible_word_count;
+          // [SFX_TRIGGER: whoosh.mp3 / pop.mp3] -> word reveal detected
+        } else {
+          frames_since_reveal++;
+        }
+
         map[f] = {
           ...map[f],
           screen_type:        SCREEN_TYPE.SENTENCE,
           sentence_idx:       best.sentence_idx,
           visible_word_count: best.visible_word_count,
+          word_frame_idx:     Math.min(frames_since_reveal, 5), // Cap animation at 5 frames
           position_idx:       best.sentence_idx,
           style_idx:          best.sentence_idx,
           accent_idx:         best.sentence_idx,
+          is_hook:            f < ULTRA_HOOK_FRAMES,
         };
       }
     }
   } else {
-    const cd = (realDur - 2) / sentenceCount;
-    for (let f = HOOK_FRAMES; f < nFrames; f++) {
-      const t  = (f / FPS) - 2;
+    const cd = realDur / sentenceCount;
+    for (let f = 0; f < nFrames; f++) {
+      const t  = f / FPS;
       const si = Math.min(Math.floor(t / cd), sentenceCount - 1);
       const ws = (sentences[si]||"").split(" ");
       const lt = t - si * cd;
       const wi = Math.min(Math.floor((lt / cd) * ws.length), ws.length - 1);
+      const vc = wi + 1;
+
+      if (vc !== last_vc) {
+        frames_since_reveal = 0;
+        last_vc = vc;
+        // [SFX_TRIGGER: whoosh.mp3 / pop.mp3] -> word reveal detected
+      } else {
+        frames_since_reveal++;
+      }
+
       map[f] = {
         ...map[f],
         screen_type:        SCREEN_TYPE.SENTENCE,
         sentence_idx:       si,
-        visible_word_count: wi + 1,
+        visible_word_count: vc,
+        word_frame_idx:     Math.min(frames_since_reveal, 5),
         position_idx:       si,
         style_idx:          si,
         accent_idx:         si,
+        is_hook:            f < ULTRA_HOOK_FRAMES,
       };
     }
   }
 
+  // [SFX_TRIGGER: glitch.mp3 / hit.mp3] -> Pattern interrupt injection
   let piIdx = 0;
   for (const pf of patternInterruptFrames) {
     for (let f = pf; f < Math.min(pf + 20, nFrames); f++) {
@@ -667,6 +660,7 @@ function buildFrameStateMap(timeline, nFrames, realDur) {
     piIdx++;
   }
 
+  // [SFX_TRIGGER: swipe.mp3] -> Engagement prompt injection
   let eqIdx = 0;
   for (const ef of engagementFrames) {
     for (let f = ef; f < Math.min(ef + 25, nFrames); f++) {
@@ -687,34 +681,33 @@ async function renderAllPNGs(page, frameStateMap) {
   const uniqueStates = new Map();
   for (const state of frameStateMap) {
     let key;
-    if      (state.screen_type === SCREEN_TYPE.HOOK)       key = "hook_0";
-    else if (state.screen_type === SCREEN_TYPE.PATTERN)    key = `pi_${state.pi_idx}`;
+    if      (state.screen_type === SCREEN_TYPE.PATTERN)    key = `pi_${state.pi_idx}`;
     else if (state.screen_type === SCREEN_TYPE.ENGAGEMENT) key = `eq_${state.eq_idx}`;
-    else key = `s_${state.sentence_idx}_${state.visible_word_count}`;
+    else {
+      // Key now includes word_frame_idx for sub-frame animation
+      key = `s_${state.sentence_idx}_${state.visible_word_count}_${state.word_frame_idx}`;
+    }
     if (!uniqueStates.has(key)) uniqueStates.set(key, state);
   }
-  console.log(`  📸 ${uniqueStates.size} unique states`);
+  console.log(`  📸 ${uniqueStates.size} unique states (with sub-frame motion)`);
 
   const initHtml = buildSentenceHTML(
-    sentences[0]||" ", 0, title, 0, sentences.length, 0, ACCENT_COLORS[0], 0
+    sentences[0]||" ", 0, title, 0, sentences.length, 0, ACCENT_COLORS[0], 0, 0, false
   );
   writeFileSync(`${TMP}/init.html`, initHtml, "utf-8");
   await page.goto(`file://${TMP}/init.html`, { waitUntil: "networkidle" });
   await page.waitForTimeout(2000);
   console.log("  ✅ Fonts loaded");
 
-  const isAr      = isArabic(title) || isArabic(sentences[0]||"");
+  const isAr       = isArabic(title) || isArabic(sentences[0]||"");
   const INTERRUPTS = isAr ? PATTERN_INTERRUPTS_AR : PATTERN_INTERRUPTS_EN;
   const QUESTIONS  = isAr ? ENGAGEMENT_QUESTIONS_AR : ENGAGEMENT_QUESTIONS_EN;
-  const hookText   = sentences[0] || title;
   const pngCache   = new Map();
   let rendered     = 0;
 
   for (const [key, state] of uniqueStates) {
     let html;
-    if (state.screen_type === SCREEN_TYPE.HOOK) {
-      html = buildHookHTML(hookText, ACCENT_COLORS[0]);
-    } else if (state.screen_type === SCREEN_TYPE.PATTERN) {
+    if (state.screen_type === SCREEN_TYPE.PATTERN) {
       html = buildPatternInterruptHTML(
         INTERRUPTS[state.pi_idx % INTERRUPTS.length],
         ACCENT_COLORS[(state.pi_idx + 2) % ACCENT_COLORS.length]
@@ -734,19 +727,21 @@ async function renderAllPNGs(page, frameStateMap) {
         state.position_idx,
         ACCENT_COLORS[state.accent_idx % ACCENT_COLORS.length],
         state.style_idx,
+        state.word_frame_idx,
+        state.is_hook
       );
     }
 
     const htmlPath = `${TMP}/${key}.html`;
     writeFileSync(htmlPath, html, "utf-8");
     await page.goto(`file://${htmlPath}`, { waitUntil: "load" });
-    await page.waitForTimeout(30);
+    await page.waitForTimeout(20);
 
     const pngPath = `${TMP}/${key}.png`;
     await page.screenshot({ path: pngPath, type: "png", omitBackground: true });
     pngCache.set(key, pngPath);
     rendered++;
-    if (rendered % 20 === 0 || rendered === uniqueStates.size)
+    if (rendered % 50 === 0 || rendered === uniqueStates.size)
       process.stdout.write(`    ${rendered}/${uniqueStates.size} PNGs\n`);
   }
   return pngCache;
@@ -762,10 +757,9 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
   for (let f = 0; f < clipFrameMap.length; f++) {
     const state = clipFrameMap[f];
     let key;
-    if      (state.screen_type === SCREEN_TYPE.HOOK)       key = "hook_0";
-    else if (state.screen_type === SCREEN_TYPE.PATTERN)    key = `pi_${state.pi_idx}`;
+    if      (state.screen_type === SCREEN_TYPE.PATTERN)    key = `pi_${state.pi_idx}`;
     else if (state.screen_type === SCREEN_TYPE.ENGAGEMENT) key = `eq_${state.eq_idx}`;
-    else key = `s_${state.sentence_idx}_${state.visible_word_count}`;
+    else key = `s_${state.sentence_idx}_${state.visible_word_count}_${state.word_frame_idx}`;
     const src  = pngCache.get(key);
     const dest = `${dir}/frame_${String(f).padStart(6,"0")}.png`;
     if (!src) continue;
@@ -775,16 +769,17 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// المرحلة 6: PROCESS BACKGROUND — 4 أنماط Zoom ديناميكي
+// المرحلة 6: PROCESS BACKGROUND — Cinematic Dynamic Background Movement
 // ─────────────────────────────────────────────────────────────────────────────
 
 function processBackground(videoPath, duration, outPath, idx) {
   const n = Math.ceil(duration * FPS);
+  // Target zoom range 1.12 - 1.20 with slow pan and micro movement
   const ZOOM_PATTERNS = [
-    `zoompan=z='min(zoom+0.0004,1.09)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    `zoompan=z='if(eq(on\\,1)\\,1.09\\,max(zoom-0.0004\\,1.0))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    `zoompan=z='min(zoom+0.0003,1.07)':x='min(iw*0.05+on*0.3\\,iw*0.1)':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    `zoompan=z='1.06':x='max(iw*0.1-on*0.3\\,0)':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    `zoompan=z='min(max(zoom\\,1.12)+0.0005\\,1.20)':x='iw/2-(iw/zoom/2)+on*0.3':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    `zoompan=z='if(eq(on\\,1)\\,1.20\\,max(zoom-0.0005\\,1.12))':x='iw/2-(iw/zoom/2)-on*0.3':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    `zoompan=z='min(max(zoom\\,1.12)+0.0004\\,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)+on*0.3':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    `zoompan=z='1.15':x='iw/2-(iw/zoom/2)+on*0.2':y='ih/2-(ih/zoom/2)-on*0.2':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
   ];
   const kb    = ZOOM_PATTERNS[idx % ZOOM_PATTERNS.length];
   const color = `curves=r='0/0 0.5/0.46 1/0.88':g='0/0 0.5/0.50 1/0.97':b='0/0.04 0.5/0.56 1/1.0',hue=s=0.82,vignette=PI/5`;
@@ -896,7 +891,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // MAIN
 // ─────────────────────────────────────────────────────────────────────────────
 
-console.log("\n🚀 Starting v2 render (10-phase retention system)...\n");
+console.log("\n🚀 Starting Ultimate Retention Renderer (Ultra Hook + Sub-Frame Motion)...\n");
 
 const frameStateMap = buildFrameStateMap(word_timeline, totalFrames, effectiveDuration);
 
@@ -912,7 +907,7 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 
-console.log("🖼️  Rendering states...");
+console.log("🖼️  Rendering dynamic states...");
 const pngCache = await renderAllPNGs(page, frameStateMap);
 await browser.close();
 console.log(`✅ ${pngCache.size} PNGs done\n`);
@@ -958,7 +953,6 @@ const transNames = finalClips.slice(0,-1).map((_,i) => getTransition(i));
 console.log(`\n✨ Transitions: ${transNames.join(" → ")}`);
 const dissolved = xfadeConcat(finalClips, clipDurations);
 
-console.log("🎵 Merging voiceover...");
+console.log("🎵 Merging voiceover & SFX prep...");
 mergeAudio(dissolved, audio, outputPath);
 console.log(`\n🎉 Final video → ${outputPath}`);
-console.log(`   Phases: Hook | Sentences | Pattern Interrupts | Engagement | Dynamic Zoom`);
