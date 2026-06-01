@@ -4,7 +4,7 @@
 Reads EN + AR scripts from Excel/CSV → produces synced videos → publishes to Facebook.
 
 النشر التلقائي:
-  - إذا كانت FB_PAGE_ID و FB_PAGE_TOKEN موجودتين في البيئة
+  - إذا كانت FB_PAGE_ID1 و FB_PAGE_TOKEN موجودتين في البيئة
     يُنشر كل فيديو تلقائياً فور اكتماله — بدون أي flag إضافي
   - --publish-fb لا يزال مدعوماً للتوافق مع الـ workflow القديم
   - --no-publish لإيقاف النشر صراحةً عند الحاجة
