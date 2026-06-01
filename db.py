@@ -2,14 +2,11 @@
 db.py — SQLite database for VSG
 Tracks: used videos, render progress (resume), script metadata.
 
-Changes vs original:
-  - _conn() الآن context manager حقيقي بدلاً من فتح connection جديد لكل دالة
-  - connection pool بسيط (threading.local) لتجنب مشاكل multi-thread
-  - دالة get_pending_publish() جديدة — تُرجع الفيديوهات المنتهية التي لم تُنشر
-  - mark_published() و is_published() لتتبع النشر على فيسبوك
-  - print_db_summary() أكثر تفصيلاً
-  - ✨ FIX: write_lock لمنع race conditions في multi-threading
-  - ✨ FIX: is_published() يدعم en_b وأي lang آخر
+✨ FIX (Critical):
+  - _write_lock لمنع race conditions في multi-threading
+  - is_published() و mark_published() يدعمان en_b وأي lang آخر
+  - busy_timeout=30000 لمنع "database is locked" errors
+  - timeout=30.0 في sqlite3.connect
 """
 
 from __future__ import annotations
@@ -23,8 +20,8 @@ DB_PATH = Path("vsg.db")
 # ── Thread-local connection pool ──────────────────────────────────────────────
 # كل thread لها connection خاصة — آمن مع ThreadPoolExecutor
 
-_local       = threading.local()
-_write_lock  = threading.Lock()  # ✨ FIX: lock للكتابة فقط
+_local      = threading.local()
+_write_lock = threading.Lock()  # ✨ FIX: lock للكتابة فقط
 
 
 def _conn() -> sqlite3.Connection:
@@ -37,8 +34,8 @@ def _conn() -> sqlite3.Connection:
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA synchronous=NORMAL")
-        c.execute("PRAGMA cache_size=-8000")
-        c.execute("PRAGMA busy_timeout=30000")  # ✨ FIX: 30s timeout
+        c.execute("PRAGMA cache_size=-8000")     # 8MB cache
+        c.execute("PRAGMA busy_timeout=30000")   # ✨ FIX: 30s timeout
         _local.conn = c
     return _local.conn
 
@@ -62,7 +59,7 @@ def _normalize_lang_col(lang: str) -> str:
     """
     base_lang = lang.split("_")[0]  # en_b → en
     if base_lang not in ("ar", "en"):
-        base_lang = "en"  # fallback
+        base_lang = "en"             # fallback
     return f"published_{base_lang}"
 
 
@@ -111,6 +108,7 @@ def init_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_status  ON renders(status);
             """)
 
+            # Migration: أضف عمود published إذا لم يكن موجوداً (للـ dbs القديمة)
             try:
                 c.execute("ALTER TABLE renders ADD COLUMN published_ar INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
@@ -213,7 +211,7 @@ def is_published(video_number: str, lang: str) -> bool:
     هل هذا الفيديو نُشر بالفعل على فيسبوك؟
     ✨ FIX: يدعم en_b وأي lang آخر بشكل صحيح.
     """
-    col = _normalize_lang_col(lang)  # ✨ FIX: normalize
+    col = _normalize_lang_col(lang)  # ✨ FIX
     row = _conn().execute(
         f"SELECT {col} FROM renders WHERE video_number=? AND lang=?",
         (str(video_number), lang),
@@ -223,8 +221,8 @@ def is_published(video_number: str, lang: str) -> bool:
 
 def mark_published(video_number: str, lang: str) -> None:
     """سجّل أن هذا الفيديو نُشر على فيسبوك."""
-    col = _normalize_lang_col(lang)  # ✨ FIX: normalize
-    with _write_lock:  # ✨ FIX
+    col = _normalize_lang_col(lang)  # ✨ FIX
+    with _write_lock:                # ✨ FIX
         with _conn() as c:
             c.execute(
                 f"""UPDATE renders SET {col}=1, updated_at=CURRENT_TIMESTAMP
