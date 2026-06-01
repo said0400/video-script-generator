@@ -1,29 +1,19 @@
 """
-Manages background music and SFX from local assets.
-
-Directory structure:
-  assets/music/motivation/  ← *.mp3 / *.wav
-  assets/music/cinematic/   ← *.mp3 / *.wav
-  sfx/swoosh/               ← Swoosh*.mp3 / *.wav
-  sfx/whoosh/               ← Whoosh*.mp3 / *.wav
-
-✨ FIX (Critical):
-  - استبدال /tmp/sfx_track.wav الثابت بـ tempfile.mkstemp()
-  - يعمل على Windows/Linux/Mac
-  - تنظيف الملفات المؤقتة دائماً (حتى عند الفشل)
+audio_manager.py — Background music and SFX mixing
+✨ يختار موسيقى عشوائياً من المجلد المحدد
 """
 
 import os
 import random
 import shutil
 import subprocess
-import tempfile  # ✨ FIX
+import tempfile
 from pathlib import Path
 
-# ── Asset paths ───────────────────────────────────────────────────────────────
 MUSIC_DIR = Path("assets") / "music"
 SFX_DIR   = Path("sfx")
 
+# يختار من المجلد الموجود (motivation أو أي مجلد آخر)
 MUSIC_POOLS: dict[str, Path] = {
     "motivation": MUSIC_DIR / "motivation",
     "cinematic":  MUSIC_DIR / "cinematic",
@@ -35,17 +25,15 @@ SFX_POOLS: dict[str, Path] = {
 }
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _probe_duration(path: str) -> float:
-    """Return audio duration in seconds, or 0.0 on failure."""
     r = subprocess.run(
-        [
-            "ffprobe", "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            path,
-        ],
+        ["ffprobe", "-v", "error",
+         "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
         capture_output=True, text=True,
     )
     try:
@@ -55,41 +43,45 @@ def _probe_duration(path: str) -> float:
 
 
 def _make_temp_path(prefix: str, suffix: str = ".wav") -> str:
-    """
-    ✨ FIX: إنشاء مسار مؤقت آمن متعدد المنصات.
-    يعمل على Windows/Linux/Mac بدون افتراض وجود /tmp.
-    """
     fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
     os.close(fd)
     return path
 
 
-# ── Music selection ────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# MUSIC & SFX SELECTION
+# ═════════════════════════════════════════════════════════════════════════════
 
 def get_music_file(content_type: str = "motivational", seed: int = None) -> Path | None:
-    """Pick a random music file from the motivation pool."""
-    pool_dir = MUSIC_POOLS.get("motivation")
-
-    if not pool_dir or not pool_dir.exists():
-        print(f"  ⚠️  Music dir not found: {pool_dir}")
+    """
+    اختيار موسيقى عشوائية من المجلد.
+    يبحث في كل المجلدات المتاحة.
+    """
+    # جرّب كل المجلدات المعرّفة
+    all_files = []
+    for pool_name, pool_dir in MUSIC_POOLS.items():
+        if pool_dir.exists():
+            files = list(pool_dir.glob("*.mp3")) + list(pool_dir.glob("*.wav"))
+            all_files.extend(files)
+    
+    # إذا لم نجد، جرّب جذر مجلد الموسيقى
+    if not all_files and MUSIC_DIR.exists():
+        for ext in ("*.mp3", "*.wav"):
+            all_files.extend(MUSIC_DIR.rglob(ext))
+    
+    if not all_files:
+        print(f"  ⚠️  No music files found in {MUSIC_DIR}")
         return None
-
-    files = list(pool_dir.glob("*.mp3")) + list(pool_dir.glob("*.wav"))
-    if not files:
-        print(f"  ⚠️  No music files in {pool_dir}")
-        return None
-
-    pick = random.Random(seed).choice(files)
+    
+    pick = random.Random(seed).choice(all_files)
     print(f"  🎵 Music: {pick.name}")
     return pick
 
 
 def get_sfx_file(sfx_type: str = "swoosh", seed: int = None) -> Path | None:
-    """Pick a random SFX file."""
     pool_dir = SFX_POOLS.get(sfx_type)
 
     if not pool_dir or not pool_dir.exists():
-        print(f"  ⚠️  SFX dir not found: {pool_dir}")
         return None
 
     files = list(pool_dir.glob("*.mp3")) + list(pool_dir.glob("*.wav"))
@@ -99,7 +91,9 @@ def get_sfx_file(sfx_type: str = "swoosh", seed: int = None) -> Path | None:
     return random.Random(seed).choice(files)
 
 
-# ── Audio mixing ───────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# AUDIO MIXING
+# ═════════════════════════════════════════════════════════════════════════════
 
 def mix_audio(
     voice_path: str,
@@ -109,13 +103,12 @@ def mix_audio(
     fade_in: float = 1.0,
     fade_out: float = 2.0,
 ) -> Path:
-    """Mix voiceover with background music. Output = exact voice duration."""
     voice_dur = _probe_duration(voice_path)
     if voice_dur <= 0:
         voice_dur = 60.0
 
     fade_out_st = max(0.0, voice_dur - fade_out)
-    print(f"  🎚️  Mixing: voice={voice_dur:.2f}s  music_vol={music_volume*100:.0f}%")
+    print(f"  🎚️  Mixing: voice={voice_dur:.2f}s music_vol={music_volume*100:.0f}%")
 
     result = subprocess.run(
         [
@@ -139,23 +132,19 @@ def mix_audio(
     )
 
     if result.returncode != 0:
-        print(f"  ⚠️  Audio mix failed: {result.stderr[-200:]}")
-        print(f"  ↩️  Using voice only")
+        print(f"  ⚠️  Mix failed: {result.stderr[-200:]}")
         return Path(voice_path)
 
     print(f"  ✅ Mixed → {Path(output_path).name}")
     return Path(output_path)
 
 
-# ── SFX track builder ─────────────────────────────────────────────────────────
-
 def build_sfx_track(
     n_clips: int,
     clip_durations: list[float],
     sfx_type: str = "swoosh",
-    output_path: str = None,  # ✨ FIX: لم يعد ثابتاً
+    output_path: str = None,
 ) -> Path | None:
-    """Build a SFX track with swoosh/whoosh at each clip transition."""
     if n_clips <= 1:
         return None
 
@@ -167,12 +156,10 @@ def build_sfx_track(
     if not all_sfx:
         return None
 
-    # ✨ FIX: إنشاء مسار مؤقت آمن إذا لم يُمرّر
     if output_path is None:
         output_path = _make_temp_path("sfx_track_", ".wav")
 
-    # Calculate transition timestamps from real clip durations
-    transition_times: list[float] = []
+    transition_times = []
     t = 0.0
     for dur in clip_durations[:-1]:
         t += max(dur, 0.1)
@@ -182,8 +169,8 @@ def build_sfx_track(
         return None
 
     total_dur = sum(clip_durations)
-    inputs: list[str] = []
-    delays: list[str] = []
+    inputs    = []
+    delays    = []
 
     for i, trans_t in enumerate(transition_times):
         sfx_file  = random.choice(all_sfx)
@@ -208,14 +195,11 @@ def build_sfx_track(
     )
 
     if result.returncode != 0:
-        print(f"  ⚠️  SFX track failed: {result.stderr[-150:]}")
         return None
 
     print(f"  ✅ SFX track: {len(transition_times)} transitions")
     return Path(output_path)
 
-
-# ── Full pipeline ──────────────────────────────────────────────────────────────
 
 def mix_voice_music_sfx(
     voice_path: str,
@@ -227,21 +211,12 @@ def mix_voice_music_sfx(
     sfx_volume: float = 0.35,
     seed: int = None,
 ) -> Path:
-    """
-    Full audio pipeline:
-      1. Pick background music
-      2. Mix voice + music  →  intermediate temp file
-      3. Add transition SFX →  final output_path
-
-    Returns path to final mixed audio.
-    """
     music_file = get_music_file(content_type, seed=seed)
 
     if music_file is None:
-        print("  ⚠️  No music found — voice only")
+        print("  ⚠️  No music — voice only")
         return Path(voice_path)
 
-    # ✨ FIX: استخدام tempfile للملف المؤقت
     p          = Path(output_path)
     mixed_path = _make_temp_path(f"{p.stem}_vm_", ".aac")
 
@@ -252,16 +227,12 @@ def mix_voice_music_sfx(
         music_volume=music_volume,
     )
 
-    # If mix failed, mixed == voice_path (fallback)
     if str(mixed) == str(voice_path):
-        # ✨ FIX: نظّف الملف المؤقت إن لم يُستخدم
         Path(mixed_path).unlink(missing_ok=True)
         return Path(voice_path)
 
-    # ── Add SFX at transitions ────────────────────────────────────────────────
     sfx_tmp_path = None
     if clip_durations and len(clip_durations) > 1:
-        # ✨ FIX: مسار مؤقت آمن للـ SFX track
         sfx_tmp_path = _make_temp_path("sfx_track_", ".wav")
 
         sfx_track = build_sfx_track(
@@ -292,22 +263,17 @@ def mix_voice_music_sfx(
                 capture_output=True, text=True,
             )
 
-            # ✨ FIX: تنظيف كل الملفات المؤقتة
             Path(mixed_path).unlink(missing_ok=True)
             Path(sfx_tmp_path).unlink(missing_ok=True)
 
             if result.returncode == 0:
-                print(f"  ✅ Final audio with SFX → {Path(output_path).name}")
+                print(f"  ✅ Final with SFX → {Path(output_path).name}")
                 return Path(output_path)
             else:
-                print(f"  ⚠️  SFX mix failed: {result.stderr[-150:]}")
                 shutil.copy(voice_path, output_path)
                 return Path(output_path)
 
-    # No SFX — rename temp to final output
     shutil.move(mixed_path, output_path)
-
-    # ✨ FIX: تنظيف نهائي
     if sfx_tmp_path:
         Path(sfx_tmp_path).unlink(missing_ok=True)
 
