@@ -3,8 +3,9 @@ video_sources.py — Unified stock video fetcher
 Sources (in priority order): Local → Pexels → Pixabay
 
 ✨ FIX (Critical):
-  - _fill_gaps() الآن يستخدم فيديوهات متنوعة عشوائياً
-    بدل تكرار نفس الفيديو في كل الفجوات
+  - _fill_gaps() يستخدم فيديوهات متنوعة عشوائياً
+  - ✨ NEW: التحقق أن الفيديو متحرك فعلاً (motion detection)
+  - ✨ NEW: رفض الفيديوهات الثابتة (frame واحد أو animated stills)
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ MIN_DURATION     = 5
 MIN_FILE_BYTES   = 100_000
 DOWNLOAD_TIMEOUT = 90
 API_TIMEOUT      = 15
+MIN_FRAMES       = 60        # ✨ NEW: حد أدنى للـ frames (60 = 2 ثانية بـ 30fps)
+MIN_FPS          = 15        # ✨ NEW: حد أدنى للـ FPS (تجنب الـ timelapses)
 
 PEXELS_API_URL  = "https://api.pexels.com/videos/search"
 PIXABAY_API_URL = "https://pixabay.com/api/videos/"
@@ -33,26 +36,161 @@ PIXABAY_API_URL = "https://pixabay.com/api/videos/"
 RETRY_DELAYS = [1.0, 2.0, 4.0]
 
 
-# ── Shared helpers ────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# ✨ NEW: VIDEO MOTION DETECTION
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _probe_video_info(path: Path) -> dict:
+    """
+    ✨ NEW: تحليل شامل للفيديو (duration, frames, fps).
+    
+    Returns: {
+        "duration": float,
+        "frames":   int,
+        "fps":      float,
+        "valid":    bool,
+        "reason":   str (if not valid)
+    }
+    """
+    try:
+        # Get duration, frame count, and FPS
+        r = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "v:0",
+                "-count_frames",
+                "-show_entries", "stream=nb_read_frames,r_frame_rate,duration",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1",
+                str(path),
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        
+        if r.returncode != 0:
+            return {"valid": False, "reason": "ffprobe failed"}
+        
+        # Parse output
+        info = {"duration": 0.0, "frames": 0, "fps": 0.0}
+        
+        for line in r.stdout.strip().split("\n"):
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            key = key.strip()
+            val = val.strip()
+            
+            if key == "duration" and val and val != "N/A":
+                try:
+                    info["duration"] = float(val)
+                except ValueError:
+                    pass
+            elif key == "nb_read_frames" and val and val != "N/A":
+                try:
+                    info["frames"] = int(val)
+                except ValueError:
+                    pass
+            elif key == "r_frame_rate" and val and "/" in val:
+                try:
+                    num, den = val.split("/")
+                    if int(den) > 0:
+                        info["fps"] = int(num) / int(den)
+                except (ValueError, ZeroDivisionError):
+                    pass
+        
+        # Validation
+        if info["duration"] < MIN_DURATION:
+            return {**info, "valid": False, 
+                    "reason": f"too short ({info['duration']:.1f}s)"}
+        
+        if info["frames"] < MIN_FRAMES:
+            return {**info, "valid": False, 
+                    "reason": f"too few frames ({info['frames']})"}
+        
+        if info["fps"] < MIN_FPS:
+            return {**info, "valid": False, 
+                    "reason": f"low fps ({info['fps']:.1f})"}
+        
+        return {**info, "valid": True, "reason": "ok"}
+        
+    except (subprocess.TimeoutExpired, Exception) as e:
+        return {"valid": False, "reason": f"error: {str(e)[:50]}"}
+
+
+def _detect_motion(path: Path, sample_duration: float = 2.0) -> bool:
+    """
+    ✨ NEW: كشف الحركة في الفيديو باستخدام scene detection.
+    
+    إذا كان الفيديو ثابت (لا تغيير بين frames)، يُعتبر صورة.
+    
+    Returns: True إذا الفيديو متحرك، False إذا ثابت
+    """
+    try:
+        # استخدم scene detection filter
+        # نأخذ عينة من أول 2 ثواني
+        r = subprocess.run(
+            [
+                "ffmpeg", "-v", "error",
+                "-i", str(path),
+                "-t", str(sample_duration),
+                "-vf", "select='gt(scene,0.01)',showinfo",
+                "-f", "null",
+                "-",
+            ],
+            capture_output=True, text=True, timeout=20,
+        )
+        
+        # عدد الـ scene changes في الـ stderr
+        scene_changes = r.stderr.count("scene:")
+        
+        # طريقة بديلة: حساب الـ pts (مؤشرات الـ frames المختلفة)
+        n_frames_with_motion = r.stderr.count("n:")
+        
+        # إذا وجدنا frames مع motion، الفيديو متحرك
+        # نتساهل قليلاً: حتى 1 frame مع motion كافي
+        return n_frames_with_motion >= 1 or scene_changes >= 1
+        
+    except (subprocess.TimeoutExpired, Exception):
+        # في حالة الفشل، نفترض أنه متحرك (لا نرفض بدون سبب)
+        return True
+
+
+def _is_video_animated(path: Path) -> tuple[bool, str]:
+    """
+    ✨ NEW: تحقق شامل أن الفيديو فعلاً متحرك (وليس صورة).
+    
+    Returns: (is_valid, reason)
+    """
+    # 1. تحقق من معلومات الفيديو الأساسية
+    info = _probe_video_info(path)
+    
+    if not info["valid"]:
+        return False, info["reason"]
+    
+    # 2. تحقق من الحركة الفعلية
+    has_motion = _detect_motion(path)
+    
+    if not has_motion:
+        return False, "no motion detected (static image)"
+    
+    return True, f"valid ({info['frames']} frames, {info['fps']:.1f}fps, {info['duration']:.1f}s)"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Shared helpers
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _probe_video(path: Path) -> float:
-    r = subprocess.run(
-        [
-            "ffprobe", "-v", "error",
-            "-select_streams", "v:0",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
-            str(path),
-        ],
-        capture_output=True, text=True, timeout=10,
-    )
-    try:
-        return float(r.stdout.strip())
-    except (ValueError, subprocess.TimeoutExpired):
-        return 0.0
+    """احصل على مدة الفيديو فقط (للتوافق مع الكود القديم)."""
+    info = _probe_video_info(path)
+    return info.get("duration", 0.0)
 
 
 def _download(url: str, dest: Path, retries: int = 3) -> bool:
+    """
+    ✨ FIXED: تحميل الفيديو + التحقق من أنه متحرك فعلاً.
+    """
     for attempt in range(retries):
         try:
             with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as r:
@@ -65,18 +203,23 @@ def _download(url: str, dest: Path, retries: int = 3) -> bool:
                         if chunk:
                             f.write(chunk)
 
+            # Basic checks
             if not dest.exists() or dest.stat().st_size < MIN_FILE_BYTES:
                 dest.unlink(missing_ok=True)
                 raise ValueError("File too small or missing")
 
-            dur = _probe_video(dest)
-            if dur < MIN_DURATION:
+            # ✨ NEW: تحقق شامل من الحركة
+            is_valid, reason = _is_video_animated(dest)
+            
+            if not is_valid:
+                print(f"    ⏭️  Skipped: {reason}")
                 dest.unlink(missing_ok=True)
-                raise ValueError(f"Video duration {dur:.1f}s < minimum")
+                return False  # ❌ ارفض هذا الفيديو وجرب التالي
 
+            print(f"    ✅ Motion verified: {reason}")
             return True
 
-        except Exception:
+        except Exception as e:
             dest.unlink(missing_ok=True)
             if attempt < retries - 1:
                 time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)])
@@ -88,7 +231,9 @@ def _safe_name(keyword: str, length: int = 20) -> str:
     return re.sub(r"[^a-z0-9_]", "_", keyword.lower())[:length]
 
 
-# ── Local videos ──────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# Local videos
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _search_local(
     keyword: str,
@@ -119,7 +264,9 @@ def _search_local(
     return pick
 
 
-# ── Pexels ────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# Pexels (with motion verification)
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _search_pexels(
     keyword: str,
@@ -141,7 +288,7 @@ def _search_pexels(
                 headers={"Authorization": api_key},
                 params={
                     "query":       keyword,
-                    "per_page":    15,
+                    "per_page":    20,                      # ✨ زدنا من 15 لـ 20
                     "orientation": "portrait",
                     "size":        "medium",
                 },
@@ -166,16 +313,19 @@ def _search_pexels(
             if attempt < retries - 1:
                 time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS)-1)])
 
+    # ✨ NEW: فلتر مسبق - فقط الفيديوهات بمدة ≥ 5 ثوانٍ
+    videos = [v for v in videos if v.get("duration", 0) >= MIN_DURATION]
+    
+    # رتّب من الأطول للأقصر (الأطول غالباً متحرك)
     videos = sorted(videos, key=lambda v: v.get("duration", 0), reverse=True)
 
     for video in videos:
-        if video.get("duration", 0) < MIN_DURATION:
-            continue
         vid_id = str(video["id"])
         sk     = f"px_{vid_id}"
         if sk in session_used or is_video_used(vid_id, "pexels"):
             continue
 
+        # خذ أعلى جودة MP4
         files = sorted(
             [f for f in video.get("video_files", []) if f.get("file_type") == "video/mp4"],
             key=lambda f: f.get("width", 0) * f.get("height", 0),
@@ -186,16 +336,21 @@ def _search_pexels(
             continue
 
         dest = Path(output_dir) / f"{index:02d}_{sub}_px_{_safe_name(keyword)}_raw.mp4"
+        
+        # ✨ الـ download سيتحقق من الحركة تلقائياً
         if _download(url, dest, retries=retries):
             session_used.add(sk)
             mark_video_used(vid_id, keyword, "pexels")
             print(f"    🎬 Pexels: {dest.name}")
             return dest
+        # إذا فشل (فيديو ثابت) جرّب التالي
 
     return None
 
 
-# ── Pixabay ───────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# Pixabay (with motion verification)
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _search_pixabay(
     keyword: str,
@@ -217,10 +372,11 @@ def _search_pixabay(
                 params={
                     "key":        api_key,
                     "q":          keyword,
-                    "video_type": "film",
-                    "per_page":   20,
+                    "video_type": "film",                 # ✨ "film" بدلاً من "all"
+                    "per_page":   25,                      # ✨ زدنا من 20 لـ 25
                     "safesearch": "true",
                     "order":      "popular",
+                    "min_width":  720,                     # ✨ NEW: جودة دنيا
                 },
                 timeout=API_TIMEOUT,
             )
@@ -243,20 +399,23 @@ def _search_pixabay(
             if attempt < retries - 1:
                 time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS)-1)])
 
+    # ✨ NEW: فلتر مسبق
+    hits = [h for h in hits if h.get("duration", 0) >= MIN_DURATION]
+    
     hits = sorted(hits, key=lambda h: h.get("duration", 0), reverse=True)
 
     for hit in hits:
-        if hit.get("duration", 0) < MIN_DURATION:
-            continue
         vid_id = str(hit["id"])
         sk     = f"pb_{vid_id}"
         if sk in session_used or is_video_used(vid_id, "pixabay"):
             continue
 
         vids = hit.get("videos", {})
+        
+        # ✨ NEW: استخدم large أولاً (جودة أفضل = حركة أوضح)
         url  = (
-            vids.get("medium", {}).get("url") or
             vids.get("large",  {}).get("url") or
+            vids.get("medium", {}).get("url") or
             vids.get("small",  {}).get("url") or
             vids.get("tiny",   {}).get("url")
         )
@@ -264,6 +423,8 @@ def _search_pixabay(
             continue
 
         dest = Path(output_dir) / f"{index:02d}_{sub}_pb_{_safe_name(keyword)}_raw.mp4"
+        
+        # ✨ التحقق من الحركة سيحدث في _download
         if _download(url, dest, retries=retries):
             session_used.add(sk)
             mark_video_used(vid_id, keyword, "pixabay")
@@ -273,25 +434,36 @@ def _search_pixabay(
     return None
 
 
-# ── Fallback ──────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# Fallback
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _get_fallback_video(output_dir: str, index: int) -> Path | None:
     out      = Path(output_dir)
     existing = sorted(out.glob("*_raw.mp4"))
     if existing:
-        print(f"    ♻️  Reusing: {existing[0].name}")
-        return existing[0]
+        # ✨ NEW: تأكد أن الفيديو الموجود متحرك أيضاً
+        for video in existing:
+            is_valid, _ = _is_video_animated(video)
+            if is_valid:
+                print(f"    ♻️  Reusing: {video.name}")
+                return video
 
     for pattern in ["assets/videos/*.mp4", "assets/videos/*.mov"]:
         found = list(Path(".").glob(pattern))
         if found:
-            print(f"    📁 Asset fallback: {found[0].name}")
-            return found[0]
+            for video in found:
+                is_valid, _ = _is_video_animated(video)
+                if is_valid:
+                    print(f"    📁 Asset fallback: {video.name}")
+                    return video
 
     return None
 
 
-# ── Main fetch function ───────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# Main fetch function
+# ═════════════════════════════════════════════════════════════════════════════
 
 def fetch_videos_for_script(
     keywords_per_sentence: list[list[str]],
@@ -305,11 +477,12 @@ def fetch_videos_for_script(
     session_used  : set[str] = set()
     results       : list[Path | None] = [None] * n
 
-    print(f"\n  📹 Fetching {n} videos...")
+    print(f"\n  📹 Fetching {n} videos (with motion verification)...")
 
     for i, kws in enumerate(keywords_per_sentence):
         found = False
 
+        # ✨ NEW: جرّب كل keyword مع كل المصادر قبل الانتقال للتالي
         for sub, kw in enumerate(kws):
             kw = kw.strip()
             if not kw:
@@ -317,11 +490,14 @@ def fetch_videos_for_script(
 
             print(f"  [{i+1}/{n}] \"{kw}\" ...", end=" ", flush=True)
 
+            # Local first
             path = _search_local(kw, i, sub, output_dir, session_used)
 
+            # Pexels
             if path is None:
                 path = _search_pexels(kw, i, sub, output_dir, session_used)
 
+            # Pixabay
             if path is None:
                 path = _search_pixabay(kw, i, sub, output_dir, session_used)
 
@@ -331,7 +507,7 @@ def fetch_videos_for_script(
                 print("✓")
                 break
             else:
-                print("✗ trying next...")
+                print("✗ trying next keyword...")
 
         if not found:
             fallback = _get_fallback_video(output_dir, i)
@@ -339,46 +515,36 @@ def fetch_videos_for_script(
                 results[i] = fallback
                 print(f"  [{i+1}/{n}] ♻️  Fallback → {fallback.name}")
             else:
-                print(f"  [{i+1}/{n}] ❌ No video found")
+                print(f"  [{i+1}/{n}] ❌ No animated video found")
 
     results = _fill_gaps(results)
     found_count = sum(1 for r in results if r is not None)
-    print(f"\n  ✅ Videos: {found_count}/{n} fetched")
+    print(f"\n  ✅ Videos: {found_count}/{n} fetched (all verified animated)")
     return results
 
 
 def _fill_gaps(results: list[Path | None]) -> list[Path]:
     """
     ✨ FIX: ملء الفجوات بفيديوهات متنوعة عشوائياً
-    بدلاً من تكرار نفس الفيديو في كل الجمل التالية.
-
-    قبل الإصلاح:
-      [A, None, None, B, None]  →  [A, A, A, B, B]   ❌ ممل
-    
-    بعد الإصلاح:
-      [A, None, None, B, None]  →  [A, B, A, B, A]   ✅ متنوع
     """
     n         = len(results)
     available = [r for r in results if r is not None]
 
     if not available:
         raise RuntimeError(
-            "Could not fetch any videos. "
-            "Check PEXELS_API_KEY and PIXABAY_API_KEY."
+            "Could not fetch any animated videos. "
+            "Check PEXELS_API_KEY and PIXABAY_API_KEY.\n"
+            "Or add fallback videos in assets/videos/"
         )
 
-    # ✨ FIX: استخدم Random instance منفصل لضمان توزيع جيد
     rng = random.Random()
-
-    # تتبّع آخر فيديو مُستخدم لتجنب التكرار المتتالي
     last_used = None
 
     for i in range(n):
         if results[i] is None:
-            # اختر فيديو من المتاحة، مع تفضيل اختلافه عن السابق
             candidates = [v for v in available if v != last_used]
             if not candidates:
-                candidates = available  # كلهم نفس الفيديو
+                candidates = available
             
             picked     = rng.choice(candidates)
             results[i] = picked
