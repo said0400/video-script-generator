@@ -1,5 +1,6 @@
-// remotion/render.mjs — Karaoke Cinematic System (KCS)
+// remotion/render.mjs — Karaoke Cinematic System (KCS) - FIXED
 // ✨ نظام نظيف: نص فقط + ألوان للكلمات القوية + فلاتر سينمائية
+// ✅ FIX: الفيديوهات تتحرك بشكل صحيح (loop بدلاً من freeze)
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync,
          symlinkSync, existsSync } from "fs";
@@ -38,29 +39,22 @@ const TMP     = `/tmp/vsg_${safeOut}`;
 mkdirSync(TMP, { recursive: true });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎯 KCS CONFIGURATION (Karaoke Cinematic System)
+// 🎯 KCS CONFIGURATION
 // ═════════════════════════════════════════════════════════════════════════════
 
 const KCS = {
-  // كلمات لكل عرض (chunk)
   WORDS_PER_CHUNK_MIN: 3,
   WORDS_PER_CHUNK_MAX: 4,
-  
-  // التقسيم على سطرين
   MAX_WORDS_PER_LINE: 2,
   
-  // الأحجام (موزونة - ليست عملاقة)
-  NORMAL_SIZE_AR:  78,    // كلمة عادية عربي
-  NORMAL_SIZE_EN:  74,    // كلمة عادية إنجليزي
-  POWER_SIZE_AR:   110,   // كلمة قوية عربي (أكبر بـ 40%)
-  POWER_SIZE_EN:   105,   // كلمة قوية إنجليزي
+  NORMAL_SIZE_AR:  78,
+  NORMAL_SIZE_EN:  74,
+  POWER_SIZE_AR:   110,
+  POWER_SIZE_EN:   105,
   
-  // الحركات (سلسة وسريعة)
-  FADE_IN_FRAMES:  4,     // 0.13s
-  
-  // المسافات
+  FADE_IN_FRAMES:  4,
   LINE_HEIGHT:     1.4,
-  WORD_GAP:        18,    // px بين الكلمات
+  WORD_GAP:        18,
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -68,17 +62,13 @@ const KCS = {
 // ═════════════════════════════════════════════════════════════════════════════
 
 const DEFAULT_COLORS = [
-  "#FFD700",  // ذهبي (الافتراضي للكلمات القوية)
-  "#00E5FF",  // سماوي
-  "#FF6B00",  // برتقالي
-  "#39FF14",  // أخضر نيون
+  "#FFD700", "#00E5FF", "#FF6B00", "#39FF14",
 ];
 
 const POWER_COLORS = (accent_colors && accent_colors.length >= 2)
   ? accent_colors
   : DEFAULT_COLORS;
 
-// لون مختلف لكل جملة (تنويع بصري)
 function getPowerColorForSentence(sIdx) {
   return POWER_COLORS[sIdx % POWER_COLORS.length];
 }
@@ -108,7 +98,6 @@ function isPowerWord(word) {
     const pwNorm = normalizeWord(pw);
     if (!pwNorm) return false;
     if (normalized === pwNorm) return true;
-    // مطابقة جزئية للجذور العربية
     if (pwNorm.length >= 3 && normalized.includes(pwNorm)) return true;
     if (normalized.length >= 3 && pwNorm.includes(normalized)) return true;
     return false;
@@ -129,28 +118,17 @@ function chunkSentence(sentence) {
   let i = 0;
   
   while (i < words.length) {
-    // كم كلمة في هذا الـ chunk؟
     const remaining = words.length - i;
     let chunkSize;
     
     if (remaining <= KCS.WORDS_PER_CHUNK_MAX) {
-      // باقي قليل - خذه كله
       chunkSize = remaining;
     } else if (remaining <= KCS.WORDS_PER_CHUNK_MAX + 1) {
-      // لو أخذنا 4، يبقى 1 (سيء)
-      // خذ 3 ليبقى 2
       chunkSize = KCS.WORDS_PER_CHUNK_MIN;
     } else {
-      // عادي - 3 أو 4 حسب وجود كلمات قوية
       const slice = words.slice(i, i + KCS.WORDS_PER_CHUNK_MAX);
       const hasPower = slice.some(w => isPowerWord(w));
-      
-      if (hasPower) {
-        // إذا فيها كلمة قوية، خذ 3 فقط (للتركيز عليها)
-        chunkSize = 3;
-      } else {
-        chunkSize = 4;
-      }
+      chunkSize = hasPower ? 3 : 4;
     }
     
     const chunkWords = words.slice(i, i + chunkSize);
@@ -166,15 +144,14 @@ function chunkSentence(sentence) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 📐 LINE SPLITTING — توزيع الكلمات على سطرين إذا كثيرة
+// 📐 LINE SPLITTING
 // ═════════════════════════════════════════════════════════════════════════════
 
 function splitChunkIntoLines(words) {
   if (words.length <= KCS.MAX_WORDS_PER_LINE) {
-    return [words];  // سطر واحد
+    return [words];
   }
   
-  // سطرين: قسّم بالنصف
   const mid = Math.ceil(words.length / 2);
   return [
     words.slice(0, mid),
@@ -213,10 +190,10 @@ const esc = s => (s||"").toString()
 
 function buildKaraokeHTML(opts) {
   const {
-    chunk,              // {words: [...], hasPower: bool}
-    currentWordIdx,     // -1 = none yet, 0 = first word active
-    accent,             // لون الكلمات القوية
-    fadeProgress,       // 0-1 (للـ fade in)
+    chunk,
+    currentWordIdx,
+    accent,
+    fadeProgress,
     sentenceIdx,
     totalSentences,
   } = opts;
@@ -228,10 +205,8 @@ function buildKaraokeHTML(opts) {
     ? `"Noto Naskh Arabic","Amiri",serif`
     : `"Inter","Helvetica Neue",Arial,sans-serif`;
   
-  // قسّم الكلمات على سطر واحد أو سطرين
   const lines = splitChunkIntoLines(allWords);
   
-  // بناء HTML لكل سطر
   let wordCounter = 0;
   const linesHTML = lines.map(lineWords => {
     const wordsHTML = lineWords.map(word => {
@@ -239,18 +214,15 @@ function buildKaraokeHTML(opts) {
       const isPast    = wordCounter < currentWordIdx;
       const isPower   = isPowerWord(word);
       
-      // تحديد الحجم
       const fontSize = isPower
         ? (ar ? `${KCS.POWER_SIZE_AR}px` : `${KCS.POWER_SIZE_EN}px`)
         : (ar ? `${KCS.NORMAL_SIZE_AR}px` : `${KCS.NORMAL_SIZE_EN}px`);
       
-      // تحديد اللون
       let color;
       let opacity;
       let textShadow;
       
       if (isCurrent) {
-        // الكلمة الحالية - مضيئة
         if (isPower) {
           color = accent;
           textShadow = `
@@ -270,14 +242,12 @@ function buildKaraokeHTML(opts) {
         }
         opacity = 1;
       } else if (isPast) {
-        // الكلمات السابقة (تم نطقها)
         color = isPower ? accent : "#FFFFFF";
         opacity = isPower ? 0.95 : 0.85;
         textShadow = isPower
           ? `0 0 15px ${accent}aa, 0 4px 15px rgba(0,0,0,0.9), 2px 2px 0 rgba(0,0,0,0.8)`
           : `0 4px 15px rgba(0,0,0,0.9), 2px 2px 0 rgba(0,0,0,0.8)`;
       } else {
-        // الكلمات القادمة (لم تنطق بعد)
         color = isPower ? `${accent}` : "#FFFFFF";
         opacity = isPower ? 0.55 : 0.40;
         textShadow = `0 4px 12px rgba(0,0,0,0.85), 2px 2px 0 rgba(0,0,0,0.7)`;
@@ -319,7 +289,6 @@ function buildKaraokeHTML(opts) {
       background:transparent;
     }
     
-    /* تدرج معتم من الأعلى والأسفل */
     .overlay-top{
       position:absolute;
       top:0;left:0;right:0;
@@ -347,7 +316,6 @@ function buildKaraokeHTML(opts) {
       z-index:1;
     }
     
-    /* النص في المنتصف */
     .text-container{
       position:absolute;
       left:50%;
@@ -422,10 +390,7 @@ function buildFrameStateMap(realDur) {
     return [];
   }
   
-  // الوقت لكل chunk
   const timePerChunk = realDur / totalChunks;
-  
-  // الوقت لكل كلمة داخل الـ chunk (للـ karaoke effect)
   const map = new Array(totalFrames).fill(null);
   
   for (let f = 0; f < totalFrames; f++) {
@@ -435,18 +400,15 @@ function buildFrameStateMap(realDur) {
     
     if (!chunk) continue;
     
-    // الوقت داخل الـ chunk (0 إلى timePerChunk)
     const chunkStartT = chunkIdx * timePerChunk;
     const tInChunk = t - chunkStartT;
     
-    // أي كلمة نطقها الآن؟
     const timePerWord = timePerChunk / chunk.words.length;
     const currentWordIdx = Math.min(
       Math.floor(tInChunk / timePerWord),
       chunk.words.length - 1
     );
     
-    // Fade in في أول الـ chunk
     const framesSinceChunkStart = f - Math.floor(chunkStartT * FPS);
     const fadeProgress = Math.min(framesSinceChunkStart / KCS.FADE_IN_FRAMES, 1.0);
     
@@ -468,13 +430,11 @@ function buildFrameStateMap(realDur) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function renderAllPNGs(page, frameStateMap) {
-  // اجمع الحالات الفريدة فقط
   const uniqueStates = new Map();
   
   for (const state of frameStateMap) {
     if (!state) continue;
     
-    // المفتاح يجمع: chunk + current word + fade stage
     const fadeStage = state.fade_progress >= 1.0 ? "full" : Math.floor(state.fade_progress * 4);
     const key = `c${state.chunk_idx}_w${state.current_word_idx}_f${fadeStage}`;
     
@@ -485,7 +445,6 @@ async function renderAllPNGs(page, frameStateMap) {
   
   console.log(`  📸 ${uniqueStates.size} unique states (Karaoke)`);
   
-  // Warm up fonts
   const initHtml = buildKaraokeHTML({
     chunk:           { words: ["تحميل"], hasPower: false },
     currentWordIdx:  0,
@@ -561,69 +520,106 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎬 PROCESS BACKGROUND (CINEMATIC FILTERS)
+// 🎬 ✅ PROCESS BACKGROUND — Loop video to fill duration + Cinematic filters
 // ═════════════════════════════════════════════════════════════════════════════
 
 function processBackground(videoPath, duration, outPath, idx) {
-  const n = Math.ceil(duration * FPS);
   
-  // ✨ زووم سينمائي بطيء وأنيق
-  const ZOOM_PATTERNS = [
-    // Zoom In بطيء
-    `zoompan=z='min(zoom+0.0008,1.25)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    // Zoom Out بطيء
-    `zoompan=z='if(eq(on,1),1.25,max(zoom-0.0008,1.05))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    // Pan يميناً مع zoom خفيف
-    `zoompan=z='min(zoom+0.0005,1.18)':x='iw/2-(iw/zoom/2)+on*0.5':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    // Pan يساراً مع zoom خفيف
-    `zoompan=z='min(zoom+0.0005,1.18)':x='iw/2-(iw/zoom/2)-on*0.5':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-  ];
+  // ✅ خطوة 1: احصل على مدة الفيديو الأصلي
+  const probeResult = spawnSync("ffprobe", [
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    videoPath,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
   
-  const kb = ZOOM_PATTERNS[idx % ZOOM_PATTERNS.length];
+  const sourceDuration = parseFloat(probeResult.stdout.toString().trim()) || 0;
+  console.log(`     [bg ${idx}] source: ${sourceDuration.toFixed(2)}s | need: ${duration.toFixed(2)}s`);
   
-  // ✨ فلاتر سينمائية احترافية
-  const filters = [
-    // 1. تصحيح الألوان (Cinematic Color Grading)
-    `curves=r='0/0 0.3/0.25 0.7/0.78 1/0.92':g='0/0 0.3/0.27 0.7/0.80 1/0.95':b='0/0.05 0.3/0.32 0.7/0.85 1/1.0'`,
-    
-    // 2. تشبع متوسط (لون سينمائي دافئ)
-    `hue=s=0.75`,
-    
-    // 3. تباين أعلى قليلاً
-    `eq=contrast=1.08:brightness=-0.02:saturation=0.9`,
-    
-    // 4. حواف داكنة (Vignette)
-    `vignette=PI/4.5`,
-    
-    // 5. حدّة خفيفة (Sharpness)
-    `unsharp=5:5:0.5:5:5:0.0`,
-    
-    // 6. حبيبية سينمائية خفيفة جداً (Film Grain)
-    `noise=alls=4:allf=t`,
+  // ✅ خطوة 2: قرر استراتيجية الفيديو
+  let inputArgs;
+  
+  if (sourceDuration >= duration + 0.5) {
+    console.log(`     [bg ${idx}] mode: direct cut`);
+    inputArgs = ["-i", videoPath];
+  } else {
+    console.log(`     [bg ${idx}] mode: LOOP video to fill ${duration.toFixed(2)}s`);
+    inputArgs = ["-stream_loop", "-1", "-i", videoPath];
+  }
+  
+  // ✅ خطوة 3: فلاتر سينمائية (بدون zoompan!)
+  const cinematicFilters = [
+    "curves=r='0/0 0.3/0.25 0.7/0.78 1/0.92':g='0/0 0.3/0.27 0.7/0.80 1/0.95':b='0/0.05 0.3/0.32 0.7/0.85 1/1.0'",
+    "hue=s=0.85",
+    "eq=contrast=1.10:brightness=-0.02:saturation=0.95",
+    "vignette=PI/4.5",
+    "unsharp=5:5:0.6:5:5:0.0",
   ].join(",");
   
-  const fade = `fade=t=in:st=0:d=0.4,fade=t=out:st=${(duration-0.4).toFixed(3)}:d=0.4`;
+  const fade = `fade=t=in:st=0:d=0.4,fade=t=out:st=${(duration - 0.4).toFixed(3)}:d=0.4`;
   
-  const full = `scale=${Math.round(WIDTH*1.15)}:${Math.round(HEIGHT*1.15)}:force_original_aspect_ratio=increase,`
-             + `crop=${Math.round(WIDTH*1.15)}:${Math.round(HEIGHT*1.15)},${kb},${filters},${fade}`;
-
-  let r = spawnSync("ffmpeg",[
-    "-y","-i",videoPath,"-t",duration.toFixed(3),
-    "-vf",full,"-r",String(FPS),
-    "-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-an",outPath,
-  ],{stdio:["ignore","pipe","pipe"]});
-
+  // ✅ خطوة 4: scale + crop بسيط
+  const scaleFilter = `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`;
+  const cropFilter  = `crop=${WIDTH}:${HEIGHT}`;
+  
+  const videoFilter = `${scaleFilter},${cropFilter},setsar=1,${cinematicFilters},${fade}`;
+  
+  // ✅ خطوة 5: تشغيل ffmpeg
+  const r = spawnSync("ffmpeg", [
+    "-y",
+    ...inputArgs,
+    "-t", duration.toFixed(3),
+    "-vf", videoFilter,
+    "-r", String(FPS),
+    "-c:v", "libx264",
+    "-preset", "fast",
+    "-crf", "20",
+    "-pix_fmt", "yuv420p",
+    "-an",
+    outPath,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  
   if (r.status !== 0) {
-    // Fallback أبسط
-    const simple = `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,`
-                 + `crop=${WIDTH}:${HEIGHT},setsar=1,${filters},${fade}`;
-    r = spawnSync("ffmpeg",[
-      "-y","-i",videoPath,"-t",duration.toFixed(3),
-      "-vf",simple,"-r",String(FPS),
-      "-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-an",outPath,
-    ],{stdio:["ignore","pipe","pipe"]});
-    if (r.status !== 0) { console.error("❌ BG failed"); process.exit(1); }
+    console.error(`     [bg ${idx}] FAILED:`, r.stderr.toString().slice(-300));
+    console.error(`     [bg ${idx}] Trying basic fallback with loop...`);
+    
+    const basicFilter = `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT},setsar=1`;
+    
+    const r2 = spawnSync("ffmpeg", [
+      "-y",
+      "-stream_loop", "-1",
+      "-i", videoPath,
+      "-t", duration.toFixed(3),
+      "-vf", basicFilter,
+      "-r", String(FPS),
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "22",
+      "-pix_fmt", "yuv420p",
+      "-an",
+      outPath,
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    
+    if (r2.status !== 0) {
+      console.error("❌ Background processing failed completely");
+      console.error(r2.stderr.toString().slice(-300));
+      process.exit(1);
+    }
   }
+  
+  // ✅ تحقق نهائي
+  const verifyResult = spawnSync("ffprobe", [
+    "-v", "error",
+    "-select_streams", "v:0",
+    "-count_packets",
+    "-show_entries", "stream=nb_read_packets,duration",
+    "-of", "default=noprint_wrappers=1",
+    outPath,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+  
+  const verifyOutput = verifyResult.stdout.toString().replace(/\n/g, " | ");
+  console.log(`     [bg ${idx}] ✅ output: ${verifyOutput}`);
+  
   return outPath;
 }
 
@@ -655,7 +651,6 @@ function overlayOnBackground(bgMp4, captionMov, outPath) {
 function xfadeConcat(clipPaths, clipDurations) {
   if (clipPaths.length === 1) return clipPaths[0];
   
-  // انتقالات سلسة (لا تشتيت)
   const TRANSITIONS = ["fade", "fadeblack", "dissolve"];
   const XFADE = 0.35;
   
@@ -687,30 +682,60 @@ function xfadeConcat(clipPaths, clipDurations) {
   return outPath;
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎵 ✅ MERGE AUDIO — يحافظ على حركة الفيديو حتى لو الصوت أطول
+// ═════════════════════════════════════════════════════════════════════════════
+
 function mergeAudio(videoPath, audioPath, outPath) {
   const aDur = probeDuration(audioPath);
   const vDur = probeDuration(videoPath);
   console.log(`🎵 Audio: ${aDur.toFixed(3)}s | 🎬 Video: ${vDur.toFixed(3)}s`);
   
   let finalVideo = videoPath;
+  
+  // ✅ إذا الفيديو أقصر من الصوت، نعمل loop بدل tpad (clone last frame)
   if (vDur < aDur - 0.3) {
-    const ext = `${TMP}/video_ext.mp4`;
-    const r = spawnSync("ffmpeg",[
-      "-y","-i",videoPath,
-      "-vf",`tpad=stop_mode=clone:stop_duration=${(aDur-vDur+0.5).toFixed(3)}`,
-      "-c:v","libx264","-preset","fast","-crf","22","-pix_fmt","yuv420p","-an",ext,
-    ],{stdio:["ignore","pipe","pipe"]});
-    if (r.status === 0) finalVideo = ext;
+    console.log(`⚠️  Video shorter than audio by ${(aDur - vDur).toFixed(2)}s - looping video...`);
+    
+    const looped = `${TMP}/video_looped.mp4`;
+    const r = spawnSync("ffmpeg", [
+      "-y",
+      "-stream_loop", "-1",   // ← LOOP الفيديو
+      "-i", videoPath,
+      "-t", aDur.toFixed(3),
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "22",
+      "-pix_fmt", "yuv420p",
+      "-an",
+      looped,
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+    
+    if (r.status === 0) {
+      finalVideo = looped;
+      console.log(`  ✅ Video looped to ${aDur.toFixed(2)}s`);
+    } else {
+      console.error(`  ⚠️  Loop failed, using original`);
+    }
   }
   
-  const r = spawnSync("ffmpeg",[
-    "-y","-i",finalVideo,"-i",audioPath,
-    "-map","0:v:0","-map","1:a:0",
-    "-c:v","copy","-c:a","aac","-b:a","192k",
-    "-t",aDur.toFixed(3),outPath,
-  ],{stdio:["ignore","pipe","pipe"]});
+  // دمج الفيديو والصوت
+  const r = spawnSync("ffmpeg", [
+    "-y",
+    "-i", finalVideo,
+    "-i", audioPath,
+    "-map", "0:v:0",
+    "-map", "1:a:0",
+    "-c:v", "copy",
+    "-c:a", "aac", "-b:a", "192k",
+    "-t", aDur.toFixed(3),
+    outPath,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
   
-  if (r.status !== 0) { console.error("❌ Merge failed"); process.exit(1); }
+  if (r.status !== 0) { 
+    console.error("❌ Merge failed:", r.stderr.toString().slice(-300));
+    process.exit(1); 
+  }
   console.log(`✅ Final: ${aDur.toFixed(3)}s → ${outPath}`);
 }
 
