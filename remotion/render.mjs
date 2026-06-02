@@ -1,6 +1,10 @@
-// remotion/render.mjs — Karaoke Cinematic System (KCS) - FIXED
-// ✨ نظام نظيف: نص فقط + ألوان للكلمات القوية + فلاتر سينمائية
-// ✅ FIX: الفيديوهات تتحرك بشكل صحيح (loop بدلاً من freeze)
+// remotion/render.mjs — Karaoke Cinematic System (KCS) + HOOK
+// ✨ النسخة الكاملة:
+//    - نص فقط + ألوان للكلمات القوية
+//    - فلاتر سينمائية
+//    - كل مقطع 3 ثوانٍ (TikTok style)
+//    - 🔥 HOOK في أول 3 ثوانٍ (zoom قوي + flash)
+//    - ✅ Zoom in على كل المقاطع
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync,
          symlinkSync, existsSync } from "fs";
@@ -28,6 +32,10 @@ const {
   word_timeline = [],
   aligned = [],
   lang = "ar",
+  // ✨ NEW
+  clip_duration = 3.0,
+  has_hook      = false,
+  hook_keyword  = "",
 } = props;
 
 const FPS    = 30;
@@ -37,6 +45,8 @@ const HEIGHT = 1920;
 const safeOut = outputPath.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").slice(-22);
 const TMP     = `/tmp/vsg_${safeOut}`;
 mkdirSync(TMP, { recursive: true });
+
+console.log(`🎬 Clip duration: ${clip_duration}s | Hook: ${has_hook ? "YES (🔥 " + hook_keyword + ")" : "NO"}`);
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎯 KCS CONFIGURATION
@@ -107,7 +117,7 @@ function isPowerWord(word) {
 console.log(`🔥 Power Words (${power_words.length}): ${power_words.slice(0, 8).join(", ")}${power_words.length > 8 ? "..." : ""}`);
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 📦 CHUNKING — تقسيم الجملة إلى مجموعات من 3-4 كلمات
+// 📦 CHUNKING
 // ═════════════════════════════════════════════════════════════════════════════
 
 function chunkSentence(sentence) {
@@ -520,10 +530,10 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎬 ✅ PROCESS BACKGROUND — Loop video to fill duration + Cinematic filters
+// 🎬 ✅ PROCESS BACKGROUND — Zoom In على كل المقاطع + HOOK خاص
 // ═════════════════════════════════════════════════════════════════════════════
 
-function processBackground(videoPath, duration, outPath, idx) {
+function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   
   // ✅ خطوة 1: احصل على مدة الفيديو الأصلي
   const probeResult = spawnSync("ffprobe", [
@@ -534,7 +544,9 @@ function processBackground(videoPath, duration, outPath, idx) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
   
   const sourceDuration = parseFloat(probeResult.stdout.toString().trim()) || 0;
-  console.log(`     [bg ${idx}] source: ${sourceDuration.toFixed(2)}s | need: ${duration.toFixed(2)}s`);
+  
+  const hookTag = isHook ? "🔥 HOOK" : "";
+  console.log(`     [bg ${idx}] ${hookTag} source: ${sourceDuration.toFixed(2)}s | need: ${duration.toFixed(2)}s`);
   
   // ✅ خطوة 2: قرر استراتيجية الفيديو
   let inputArgs;
@@ -543,28 +555,49 @@ function processBackground(videoPath, duration, outPath, idx) {
     console.log(`     [bg ${idx}] mode: direct cut`);
     inputArgs = ["-i", videoPath];
   } else {
-    console.log(`     [bg ${idx}] mode: LOOP video to fill ${duration.toFixed(2)}s`);
+    console.log(`     [bg ${idx}] mode: LOOP video`);
     inputArgs = ["-stream_loop", "-1", "-i", videoPath];
   }
   
-  // ✅ خطوة 3: فلاتر سينمائية (بدون zoompan!)
+  // ✅ خطوة 3: ZOOM IN على كل المقاطع
+  // الـ HOOK: zoom قوي (من 1.0 إلى 1.4)
+  // المقاطع العادية: zoom ناعم (من 1.0 إلى 1.15)
+  const startScale = 1.0;
+  const endScale   = isHook ? 1.4 : 1.15;
+  const scaleStep  = (endScale - startScale) / duration;
+  
+  // scale يكبر مع الوقت (مع trunc للحصول على أرقام زوجية)
+  const zoomFilter = 
+    `scale=w='trunc((iw*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':` +
+    `h='trunc((ih*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':` +
+    `eval=frame`;
+  
+  // ✅ خطوة 4: فلاتر سينمائية
   const cinematicFilters = [
     "curves=r='0/0 0.3/0.25 0.7/0.78 1/0.92':g='0/0 0.3/0.27 0.7/0.80 1/0.95':b='0/0.05 0.3/0.32 0.7/0.85 1/1.0'",
     "hue=s=0.85",
-    "eq=contrast=1.10:brightness=-0.02:saturation=0.95",
+    isHook 
+      ? "eq=contrast=1.20:brightness=0.00:saturation=1.05"   // HOOK: تباين أعلى
+      : "eq=contrast=1.10:brightness=-0.02:saturation=0.95",
     "vignette=PI/4.5",
     "unsharp=5:5:0.6:5:5:0.0",
   ].join(",");
   
-  const fade = `fade=t=in:st=0:d=0.4,fade=t=out:st=${(duration - 0.4).toFixed(3)}:d=0.4`;
+  // ✅ خطوة 5: fade in/out
+  // HOOK: بدون fade in (دخول فوري)
+  const fadeFilter = isHook
+    ? `fade=t=out:st=${(duration - 0.2).toFixed(3)}:d=0.2`
+    : `fade=t=in:st=0:d=0.3,fade=t=out:st=${(duration - 0.3).toFixed(3)}:d=0.3`;
   
-  // ✅ خطوة 4: scale + crop بسيط
-  const scaleFilter = `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`;
-  const cropFilter  = `crop=${WIDTH}:${HEIGHT}`;
+  // ✅ بناء filter chain النهائي
+  const videoFilter = 
+    `${zoomFilter},` +
+    `crop=${WIDTH}:${HEIGHT}:(iw-${WIDTH})/2:(ih-${HEIGHT})/2,` +
+    `setsar=1,` +
+    `${cinematicFilters},` +
+    `${fadeFilter}`;
   
-  const videoFilter = `${scaleFilter},${cropFilter},setsar=1,${cinematicFilters},${fade}`;
-  
-  // ✅ خطوة 5: تشغيل ffmpeg
+  // ✅ تشغيل ffmpeg
   const r = spawnSync("ffmpeg", [
     "-y",
     ...inputArgs,
@@ -573,7 +606,7 @@ function processBackground(videoPath, duration, outPath, idx) {
     "-r", String(FPS),
     "-c:v", "libx264",
     "-preset", "fast",
-    "-crf", "20",
+    "-crf", isHook ? "18" : "20",     // HOOK: جودة أعلى
     "-pix_fmt", "yuv420p",
     "-an",
     outPath,
@@ -581,9 +614,12 @@ function processBackground(videoPath, duration, outPath, idx) {
   
   if (r.status !== 0) {
     console.error(`     [bg ${idx}] FAILED:`, r.stderr.toString().slice(-300));
-    console.error(`     [bg ${idx}] Trying basic fallback with loop...`);
+    console.error(`     [bg ${idx}] Trying basic fallback...`);
     
-    const basicFilter = `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT},setsar=1`;
+    // Fallback: بدون zoom، فقط scale + crop
+    const basicFilter = 
+      `scale=${Math.round(WIDTH * 1.1)}:${Math.round(HEIGHT * 1.1)}:force_original_aspect_ratio=increase,` +
+      `crop=${WIDTH}:${HEIGHT},setsar=1,${cinematicFilters},${fadeFilter}`;
     
     const r2 = spawnSync("ffmpeg", [
       "-y",
@@ -607,19 +643,7 @@ function processBackground(videoPath, duration, outPath, idx) {
     }
   }
   
-  // ✅ تحقق نهائي
-  const verifyResult = spawnSync("ffprobe", [
-    "-v", "error",
-    "-select_streams", "v:0",
-    "-count_packets",
-    "-show_entries", "stream=nb_read_packets,duration",
-    "-of", "default=noprint_wrappers=1",
-    outPath,
-  ], { stdio: ["ignore", "pipe", "pipe"] });
-  
-  const verifyOutput = verifyResult.stdout.toString().replace(/\n/g, " | ");
-  console.log(`     [bg ${idx}] ✅ output: ${verifyOutput}`);
-  
+  console.log(`     [bg ${idx}] ✅ rendered with zoom ${startScale}→${endScale}`);
   return outPath;
 }
 
@@ -651,7 +675,8 @@ function overlayOnBackground(bgMp4, captionMov, outPath) {
 function xfadeConcat(clipPaths, clipDurations) {
   if (clipPaths.length === 1) return clipPaths[0];
   
-  const TRANSITIONS = ["fade", "fadeblack", "dissolve"];
+  // انتقالات سلسة بين المقاطع
+  const TRANSITIONS = ["fade", "fadeblack", "dissolve", "wiperight", "slideleft"];
   const XFADE = 0.35;
   
   const filters = [];
@@ -683,7 +708,7 @@ function xfadeConcat(clipPaths, clipDurations) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎵 ✅ MERGE AUDIO — يحافظ على حركة الفيديو حتى لو الصوت أطول
+// 🎵 ✅ MERGE AUDIO — يحافظ على حركة الفيديو
 // ═════════════════════════════════════════════════════════════════════════════
 
 function mergeAudio(videoPath, audioPath, outPath) {
@@ -693,14 +718,14 @@ function mergeAudio(videoPath, audioPath, outPath) {
   
   let finalVideo = videoPath;
   
-  // ✅ إذا الفيديو أقصر من الصوت، نعمل loop بدل tpad (clone last frame)
+  // ✅ إذا الفيديو أقصر من الصوت، نعمل loop بدل tpad
   if (vDur < aDur - 0.3) {
     console.log(`⚠️  Video shorter than audio by ${(aDur - vDur).toFixed(2)}s - looping video...`);
     
     const looped = `${TMP}/video_looped.mp4`;
     const r = spawnSync("ffmpeg", [
       "-y",
-      "-stream_loop", "-1",   // ← LOOP الفيديو
+      "-stream_loop", "-1",
       "-i", videoPath,
       "-t", aDur.toFixed(3),
       "-c:v", "libx264",
@@ -719,7 +744,6 @@ function mergeAudio(videoPath, audioPath, outPath) {
     }
   }
   
-  // دمج الفيديو والصوت
   const r = spawnSync("ffmpeg", [
     "-y",
     "-i", finalVideo,
@@ -744,7 +768,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log("\n🚀 Starting KCS Renderer (Karaoke Cinematic System)\n");
+  console.log("\n🚀 Starting KCS Renderer (Karaoke Cinematic System + HOOK)\n");
 
   const frameStateMap = buildFrameStateMap(effectiveDuration);
 
@@ -767,35 +791,48 @@ async function main() {
   await browser.close();
   console.log(`✅ ${pngCache.size} PNGs done\n`);
 
-  const sentenceData = (aligned && aligned.length > 0)
-    ? aligned
-    : sentences.map((s,i) => ({
-        sentence: s,
-        start:    (effectiveDuration / sentences.length) * i,
-        end:      (effectiveDuration / sentences.length) * (i + 1),
-      }));
-
+  // ✨ NEW: حساب عدد المقاطع بناءً على المدة الإجمالية و clip_duration
+  const totalClips = Math.max(1, Math.floor(effectiveDuration / clip_duration));
+  const actualClipDuration = effectiveDuration / totalClips;
+  
+  console.log(`\n📊 Splitting into ${totalClips} clips × ${actualClipDuration.toFixed(2)}s each`);
+  console.log(`🎥 Available videos: ${videos.length}`);
+  
+  if (has_hook && videos.length > 0) {
+    console.log(`🔥 First clip will use HOOK video with strong zoom (1.0→1.4)`);
+  }
+  
   const finalClips = [], clipDurations = [];
 
-  console.log("🎬 Processing clips with cinematic filters...");
-  for (let i = 0; i < sentences.length; i++) {
-    const info      = sentenceData[i] || {};
-    const clipStart = info.start ?? (effectiveDuration / sentences.length) * i;
-    const clipEnd   = info.end   ?? (effectiveDuration / sentences.length) * (i + 1);
-    const clipDur   = Math.max(clipEnd - clipStart, 0.5);
+  console.log("\n🎬 Processing clips...");
+  
+  for (let i = 0; i < totalClips; i++) {
+    const clipStart = i * actualClipDuration;
+    const clipEnd   = Math.min((i + 1) * actualClipDuration, effectiveDuration);
+    const clipDur   = clipEnd - clipStart;
     const nFrames   = Math.ceil(clipDur * FPS);
     const startF    = Math.floor(clipStart * FPS);
     const clipMap   = frameStateMap.slice(startF, startF + nFrames);
-
-    process.stdout.write(`  [${i+1}/${sentences.length}] ${clipDur.toFixed(2)}s "${(sentences[i]||"").slice(0,30)}"... `);
+    
+    // ✨ NEW: هل هذا المقطع هو الـ HOOK؟
+    const isHook = (i === 0 && has_hook);
+    
+    // ✨ NEW: اختيار الفيديو
+    // المقطع 0 → فيديو 0 (HOOK)
+    // المقطع 1 → فيديو 1
+    // إذا انتهت الفيديوهات، نُعيد من البداية
+    const videoIdx = i % videos.length;
+    const videoSrc = videos[videoIdx];
+    
+    const clipLabel = isHook ? "🔥 HOOK" : `clip ${i+1}`;
+    process.stdout.write(`  [${i+1}/${totalClips}] ${clipDur.toFixed(2)}s ${clipLabel}... `);
 
     const frameDir   = buildFrameDir(clipMap, pngCache, i);
     const captionMov = `${TMP}/caption_${i}.mov`;
     framesToMov(frameDir, captionMov);
 
-    const videoSrc = videos[i] || videos[videos.length - 1];
-    const bgMp4    = `${TMP}/bg_${String(i).padStart(3,"0")}.mp4`;
-    processBackground(videoSrc, clipDur, bgMp4, i);
+    const bgMp4 = `${TMP}/bg_${String(i).padStart(3,"0")}.mp4`;
+    processBackground(videoSrc, clipDur, bgMp4, i, isHook);
 
     const finalClip = `${TMP}/final_${String(i).padStart(3,"0")}.mp4`;
     overlayOnBackground(bgMp4, captionMov, finalClip);
