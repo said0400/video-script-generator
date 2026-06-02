@@ -2,7 +2,7 @@
 db.py — SQLite database for VSG
 Tracks: used videos, render progress, script metadata, AI cache.
 
-✨ NEW: hook_keyword column في ai_cache
+✨ NEW: attractive_title column in ai_cache
 """
 
 from __future__ import annotations
@@ -102,6 +102,7 @@ def init_db() -> None:
                     captions     TEXT,
                     accent_colors TEXT,
                     hook_keyword TEXT,
+                    attractive_title TEXT,
                     ar_tagged    TEXT,
                     en_tagged    TEXT,
                     created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -131,9 +132,13 @@ def init_db() -> None:
                 c.execute("ALTER TABLE scripts ADD COLUMN en_tags_json TEXT")
             except sqlite3.OperationalError:
                 pass
-            # ✨ NEW: hook_keyword
             try:
                 c.execute("ALTER TABLE ai_cache ADD COLUMN hook_keyword TEXT")
+            except sqlite3.OperationalError:
+                pass
+            # ✨ NEW
+            try:
+                c.execute("ALTER TABLE ai_cache ADD COLUMN attractive_title TEXT")
             except sqlite3.OperationalError:
                 pass
 
@@ -348,12 +353,19 @@ def get_ai_cache(video_number: str) -> dict | None:
         except (json.JSONDecodeError, TypeError):
             return None
     
-    # ✨ NEW: hook_keyword (مع backward compatibility)
+    # backward compatibility
     hook_keyword = ""
     try:
         hook_keyword = row["hook_keyword"] or ""
     except (IndexError, KeyError):
         hook_keyword = ""
+    
+    # ✨ NEW: attractive_title
+    attractive_title = None
+    try:
+        attractive_title = safe_json(row["attractive_title"])
+    except (IndexError, KeyError):
+        attractive_title = None
     
     return {
         "video_number":         row["video_number"],
@@ -366,7 +378,8 @@ def get_ai_cache(video_number: str) -> dict | None:
         "hashtags":             safe_json(row["hashtags"]),
         "captions":             safe_json(row["captions"]),
         "accent_colors":        safe_json(row["accent_colors"]),
-        "hook_keyword":         hook_keyword,    # ✨ NEW
+        "hook_keyword":         hook_keyword,
+        "attractive_title":     attractive_title,    # ✨ NEW
         "ar_tagged":            safe_json(row["ar_tagged"]),
         "en_tagged":            safe_json(row["en_tagged"]),
         "created_at":           row["created_at"],
@@ -385,8 +398,9 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
                 """INSERT INTO ai_cache (
                     video_number, title, analysis, power_words, visual_keywords,
                     pattern_interrupts, engagement_questions, hashtags,
-                    captions, accent_colors, hook_keyword, ar_tagged, en_tagged
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    captions, accent_colors, hook_keyword, attractive_title,
+                    ar_tagged, en_tagged
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(video_number) DO UPDATE SET
                    title=excluded.title,
                    analysis=excluded.analysis,
@@ -398,6 +412,7 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
                    captions=excluded.captions,
                    accent_colors=excluded.accent_colors,
                    hook_keyword=excluded.hook_keyword,
+                   attractive_title=excluded.attractive_title,
                    ar_tagged=excluded.ar_tagged,
                    en_tagged=excluded.en_tagged,
                    updated_at=CURRENT_TIMESTAMP""",
@@ -411,7 +426,8 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
                     to_json(enriched.get("hashtags")),
                     to_json(enriched.get("captions")),
                     to_json(enriched.get("accent_colors")),
-                    enriched.get("hook_keyword", ""),     # ✨ NEW
+                    enriched.get("hook_keyword", ""),
+                    to_json(enriched.get("attractive_title")),     # ✨ NEW
                     to_json(enriched.get("ar_tagged")),
                     to_json(enriched.get("en_tagged")),
                 ),
@@ -452,7 +468,12 @@ def show_ai_cache(video_number: str | None = None) -> None:
             print(f"     Intensity : {a.get('intensity')}/10")
             print(f"     Tone      : {a.get('tone')}")
         
-        # ✨ NEW: Hook Keyword
+        # ✨ NEW: Attractive Title
+        if cache.get("attractive_title"):
+            at = cache["attractive_title"]
+            print(f"\n  📌 Display Title:")
+            print(f"     {at.get('emoji_left', '🔥')} {at.get('title', '')} {at.get('emoji_right', '💥')}")
+        
         if cache.get("hook_keyword"):
             print(f"\n  🔥 Hook Keyword: '{cache['hook_keyword']}'")
         
