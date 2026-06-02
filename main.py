@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
 🎬 Video Generator — Visual Addiction System (VAS)
-✨ NEW Architecture:
+✨ Features:
   - Excel = 4 columns only
-  - Groq generates EVERYTHING else (cached)
+  - Groq generates EVERYTHING (cached)
   - Tags control voice tone
-  - ✨ Clips = 3 seconds each (TikTok style)
-  - ✨ HOOK video in first 3 seconds (shocking + dramatic zoom)
+  - Clips = 3 seconds each (TikTok style)
+  - HOOK video in first 3 seconds (shocking + zoom)
+  - ✨ NEW: Attractive title + emojis (top of video)
+  - ✨ NEW: Text backgrounds (black for normal, red for power words)
 """
 
 from __future__ import annotations
@@ -49,7 +51,7 @@ MIN_S         = 30
 MAX_S         = 90
 RENDER_SCRIPT = Path("remotion/render.mjs")
 
-# ✨ FIX: مدة كل clip بالضبط (TikTok style)
+# ✨ مدة كل clip بالضبط (TikTok style)
 CLIP_DURATION = 3.0
 
 
@@ -142,12 +144,12 @@ def get_or_create_ai_data(record: dict, force_ai: bool = False) -> dict:
     if not force_ai and has_ai_cache(video_number):
         cached = get_ai_cache(video_number)
         if cached:
-            # ✨ تحقق من وجود hook_keyword (للـ cache القديم)
-            if cached.get("hook_keyword"):
+            # ✨ تحقق من وجود البيانات الجديدة (للـ cache القديم)
+            if cached.get("hook_keyword") and cached.get("attractive_title"):
                 print(f"\n  ♻️  Using cached AI data for #{video_number}")
                 return cached
             else:
-                print(f"\n  🔄 Cache exists but missing hook_keyword - regenerating...")
+                print(f"\n  🔄 Cache exists but missing new fields - regenerating...")
     
     ar_tagged = None
     en_tagged = None
@@ -193,6 +195,11 @@ def save_manifest(
 ) -> Path:
     manifest = {
         "title":         script_data["title"],
+        # ✨ NEW: Display title with emojis
+        "display_title": script_data.get("display_title", script_data["title"]),
+        "emoji_left":    script_data.get("emoji_left", "🔥"),
+        "emoji_right":   script_data.get("emoji_right", "💥"),
+        
         "sentences":     script_data["sentences"],
         "tagged_sentences": script_data.get("tagged_sentences", []),
         "audio":         str(Path(str(audio_path)).resolve()),
@@ -208,7 +215,6 @@ def save_manifest(
         "keywords":             script_data.get("visual_keywords", []),
         "analysis":             script_data.get("analysis", {}),
         
-        # ✨ NEW: معلومات المقاطع
         "clip_duration":        CLIP_DURATION,
         "has_hook":             bool(script_data.get("has_hook", True)),
         "hook_keyword":         script_data.get("hook_keyword", ""),
@@ -483,6 +489,11 @@ def process_video(
         print(f"\n  🇬🇧  English content:")
         print_tags_summary(en_tagged, lang="en")
     
+    # ✨ NEW: Show display title
+    attractive = ai_data.get("attractive_title", {})
+    if attractive:
+        print(f"\n  📌 Display Title: {attractive.get('emoji_left', '🔥')} {attractive.get('title', '')} {attractive.get('emoji_right', '💥')}")
+    
     # ── 3. Script-only mode ──────────────────────────────────────────────────
     if args.script_only:
         _display_script_only(record, ai_data)
@@ -511,7 +522,7 @@ def process_video(
     
     primary_data = ar_data or en_data
     
-    # ✨ NEW: حساب عدد المقاطع المطلوبة (3 ثوانٍ لكل مقطع)
+    # حساب عدد المقاطع
     total_duration = primary_data["estimated_seconds"]
     n_clips = max(1, int(total_duration / CLIP_DURATION))
     
@@ -519,17 +530,15 @@ def process_video(
     if hook_keyword:
         print(f"  🔥 HOOK keyword: '{hook_keyword}'")
     
-    # ✨ بناء قائمة keywords للمقاطع
+    # بناء قائمة keywords للمقاطع
     clip_keywords = []
     
-    # الـ HOOK (أول مقطع)
     if hook_keyword:
         clip_keywords.append([hook_keyword, "dramatic close-up", "intense moment"])
         remaining_clips = n_clips - 1
     else:
         remaining_clips = n_clips
     
-    # باقي المقاطع - نوزّع visual_keywords بالتناوب
     flat_keywords = []
     for kws in visual_keywords:
         if isinstance(kws, list):
@@ -547,7 +556,6 @@ def process_video(
         ]
         clip_keywords.append(kws_for_clip)
     
-    # ✅ كل مقطع = 3 ثوانٍ بالضبط
     clip_dur = [CLIP_DURATION] * n_clips
     
     vid_dir = str(Path(out_dir) / f"videos_{num}")
@@ -687,8 +695,17 @@ def _build_script_data(record: dict, lang: str, ai_data: dict) -> dict:
         tag = sent.get("final_tag", DEFAULT_TAG)
         tags_summary[tag] = tags_summary.get(tag, 0) + 1
     
+    # ✨ NEW: استخدم العنوان المحسّن من AI
+    attractive_title = ai_data.get("attractive_title") or {}
+    display_title = attractive_title.get("title") or record["title"]
+    emoji_left    = attractive_title.get("emoji_left", "🔥")
+    emoji_right   = attractive_title.get("emoji_right", "💥")
+    
     return {
         "title":             record["title"],
+        "display_title":     display_title,
+        "emoji_left":        emoji_left,
+        "emoji_right":       emoji_right,
         "hook":              sentences_clean[0] if sentences_clean else "",
         "full_script":       full_script,
         "sentences":         sentences_clean,
@@ -706,7 +723,6 @@ def _build_script_data(record: dict, lang: str, ai_data: dict) -> dict:
         "visual_keywords":      ai_data.get("visual_keywords", []),
         "analysis":             ai_data.get("analysis", {}),
         
-        # ✨ NEW
         "hook_keyword":         ai_data.get("hook_keyword", ""),
         "has_hook":             bool(ai_data.get("hook_keyword", "")),
     }
@@ -714,6 +730,12 @@ def _build_script_data(record: dict, lang: str, ai_data: dict) -> dict:
 
 def _display_script_only(record: dict, ai_data: dict) -> None:
     print(f"\n  📝 Script preview:")
+    
+    # ✨ NEW: Show attractive title
+    attractive = ai_data.get("attractive_title", {})
+    if attractive:
+        print(f"\n  📌 Display Title:")
+        print(f"     {attractive.get('emoji_left', '🔥')} {attractive.get('title', '')} {attractive.get('emoji_right', '💥')}")
     
     ar_tagged = ai_data.get("ar_tagged") or []
     en_tagged = ai_data.get("en_tagged") or []
@@ -812,14 +834,14 @@ def main() -> None:
     will_publish = _should_publish(args)
 
     print(f"\n{'═'*62}")
-    print(f"  🚀  Video Generator — VAS + AI Enrichment + HOOK")
+    print(f"  🚀  Video Generator — VAS + AI + Title + Backgrounds")
     print(f"{'═'*62}")
     print(f"  Input      : {args.input_file}")
     print(f"  Voice EN   : {args.voice_en}  |  AR: {args.voice_ar}")
     print(f"  Music      : {args.music_volume}  |  SFX: {args.sfx_type}")
     print(f"  Output     : {args.output_dir}")
     print(f"  Renderer   : {RENDER_SCRIPT.name}")
-    print(f"  Clip Dur   : {CLIP_DURATION}s (with HOOK in first clip)")
+    print(f"  Clip Dur   : {CLIP_DURATION}s (with HOOK + Title + BG)")
     print(f"  FB Publish : {'✅ AUTO' if will_publish else '❌ OFF'}  |  Lang: {args.fb_lang}")
     print(f"  Force AI   : {'✅' if args.force_ai else '❌'}")
     print()
