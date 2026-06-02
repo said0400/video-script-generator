@@ -12,7 +12,8 @@ ai_enricher.py — Smart AI Assistant powered by Groq
   7. توليد Hashtags
   8. توليد Caption للنشر
   9. اقتراح Accent Colors
-  10. ✨ NEW: توليد Hook Keyword (للفيديو الصادم في البداية)
+  10. توليد Hook Keyword (للفيديو الصادم في البداية)
+  11. ✨ NEW: توليد Attractive Title + Emojis
 
 السلوك عند الفشل: ⛔ توقف الفيديو نهائياً (لا قيم افتراضية)
 """
@@ -736,16 +737,12 @@ Example: ["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🔟 ✨ NEW: HOOK VIDEO KEYWORD GENERATOR
+# 🔟 HOOK VIDEO KEYWORD GENERATOR
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_hook_keyword(title: str, content: str, context: dict) -> str:
     """
-    ✨ NEW: توليد كلمة مفتاحية صادمة للفيديو الأول (HOOK).
-    
-    يُولّد كلمة بصرية مثيرة للانتباه ترتبط بالمحتوى.
-    
-    Returns: visual keyword (English) for stock footage
+    توليد كلمة مفتاحية صادمة للفيديو الأول (HOOK).
     """
     if not content or not content.strip():
         return "shocking dramatic moment"
@@ -798,17 +795,115 @@ Your keyword:"""
     keyword = raw.strip().split("\n")[0].strip()
     keyword = keyword.strip('"').strip("'").strip()
     
-    # Remove common prefixes Groq might add
+    # Remove common prefixes
     for prefix in ["keyword:", "answer:", "result:", "→", ":"]:
         if keyword.lower().startswith(prefix):
             keyword = keyword[len(prefix):].strip()
     
-    # Validation
     if not keyword or len(keyword) > 80:
         keyword = "dramatic close-up emotional moment"
     
     print(f"  ✅ Hook keyword: '{keyword}'")
     return keyword
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 1️⃣1️⃣ ✨ NEW: ATTRACTIVE TITLE + EMOJIS GENERATOR
+# ═════════════════════════════════════════════════════════════════════════════
+
+def generate_attractive_title(title: str, context: dict) -> dict:
+    """
+    ✨ NEW: توليد عنوان احترافي جذاب + إيموجيين مناسبين.
+    
+    Returns: {
+        "title":       "العنوان المحسّن",
+        "emoji_left":  "🔥",
+        "emoji_right": "💥",
+    }
+    """
+    if not title or not title.strip():
+        return {
+            "title": "محتوى مهم",
+            "emoji_left": "🔥",
+            "emoji_right": "💥",
+        }
+    
+    is_ar = bool(re.search(r"[\u0600-\u06FF]", title))
+    lang_name = "Arabic" if is_ar else "English"
+    
+    content_type = context.get('content_type', 'general')
+    emotion      = context.get('primary_emotion', 'curiosity')
+    
+    prompt = f"""You are a viral video title expert for TikTok/Reels.
+
+Original title: "{title}"
+Content type: {content_type}
+Emotion: {emotion}
+Language: {lang_name}
+
+Improve this title to be more attractive and clickbait-style.
+Also suggest 2 PERFECT emojis (one for left side, one for right side).
+
+Requirements:
+- Keep it SHORT (4-7 words max)
+- Make it INTRIGUING and EMOTIONAL
+- Match the {emotion} emotion
+- Use {lang_name} ONLY
+- Emojis should be RELEVANT to content (not generic)
+
+Examples of GOOD title transformations:
+- "كيف تقرأ الناس" → "اكتشف أسرار الناس الخفية"
+- "علامات الخيانة" → "5 علامات صادمة للخيانة"
+- "How to read people" → "Hidden Truths About People"
+
+Emoji examples by content:
+- relationships → 💔 💕 😢 🔥
+- psychology → 🧠 👁️ 🤯 🔮
+- success → 💎 🏆 🚀 ⚡
+- fear/warning → ⚠️ 🚨 😱 🔴
+- money → 💰 💸 📈 🤑
+
+Return ONLY valid JSON:
+{{
+  "title": "improved title here",
+  "emoji_left": "🔥",
+  "emoji_right": "💥"
+}}"""
+
+    raw = _call_groq(
+        prompt,
+        max_tokens=200,
+        temperature=0.7,
+        operation_name="Attractive Title",
+    )
+    
+    try:
+        data = _parse_json_response(raw, dict, "Attractive Title")
+        
+        result = {
+            "title": str(data.get("title", title)).strip()[:100],
+            "emoji_left": str(data.get("emoji_left", "🔥")).strip()[:4],
+            "emoji_right": str(data.get("emoji_right", "💥")).strip()[:4],
+        }
+        
+        # Validation
+        if not result["title"]:
+            result["title"] = title
+        if not result["emoji_left"]:
+            result["emoji_left"] = "🔥"
+        if not result["emoji_right"]:
+            result["emoji_right"] = "💥"
+        
+        print(f"  ✅ Title: {result['emoji_left']} {result['title']} {result['emoji_right']}")
+        return result
+        
+    except (AIEnrichmentError, Exception) as e:
+        print(f"  ⚠️  Title generation failed - using original")
+        return {
+            "title": title,
+            "emoji_left": "🔥",
+            "emoji_right": "💥",
+        }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -913,12 +1008,15 @@ def enrich_record(
     # ── 9. Accent Colors ─────────────────────────────────────────────────────
     accent_colors = suggest_accent_colors(analysis)
     
-    # ── 10. ✨ NEW: Hook Keyword ─────────────────────────────────────────────
+    # ── 10. Hook Keyword ─────────────────────────────────────────────────────
     hook_keyword = generate_hook_keyword(title, ar_content or en_content, analysis)
+    
+    # ── 11. ✨ NEW: Attractive Title + Emojis ────────────────────────────────
+    attractive_title = generate_attractive_title(title, analysis)
     
     if verbose:
         print(f"  {'─' * 50}")
-        print(f"  ✅ AI enrichment complete (10/10 operations)")
+        print(f"  ✅ AI enrichment complete (11/11 operations)")
     
     return {
         "analysis":             analysis,
@@ -929,7 +1027,8 @@ def enrich_record(
         "hashtags":             hashtags,
         "captions":             captions,
         "accent_colors":        accent_colors,
-        "hook_keyword":         hook_keyword,    # ✨ NEW
+        "hook_keyword":         hook_keyword,
+        "attractive_title":     attractive_title,    # ✨ NEW
         "ar_tagged":            ar_tagged,
         "en_tagged":            en_tagged,
     }
