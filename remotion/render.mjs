@@ -1,5 +1,5 @@
-// remotion/render.mjs — Visual Addiction System (VAS)
-// ✨ يقرأ كل البيانات من manifest.json (من AI Enrichment)
+// remotion/render.mjs — Karaoke Cinematic System (KCS)
+// ✨ نظام نظيف: نص فقط + ألوان للكلمات القوية + فلاتر سينمائية
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync,
          symlinkSync, existsSync } from "fs";
@@ -16,19 +16,14 @@ if (!manifestPath || !outputPath) {
 
 const props = JSON.parse(readFileSync(manifestPath, "utf-8"));
 
-// ✨ كل البيانات من AI
 const {
   title,
-  sentences,                  // نظيفة (بدون tags)
-  tagged_sentences = [],      // مع tags
+  sentences,
   audio,
   videos,
   duration_s,
-  power_words = [],           // ✨ من Groq
-  pattern_interrupts = {},    // ✨ من Groq
-  engagement_questions = {},  // ✨ من Groq
-  accent_colors = [],         // ✨ من Groq
-  analysis = {},              // ✨ من Groq
+  power_words = [],
+  accent_colors = [],
   word_timeline = [],
   aligned = [],
   lang = "ar",
@@ -43,55 +38,62 @@ const TMP     = `/tmp/vsg_${safeOut}`;
 mkdirSync(TMP, { recursive: true });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎯 VAS CONFIGURATION
+// 🎯 KCS CONFIGURATION (Karaoke Cinematic System)
 // ═════════════════════════════════════════════════════════════════════════════
 
-const VAS = {
-  HOOK_ZONE_END:       3.0,
-  MAX_STATIC_TIME:     1.5,
-  SHOCK_INTERVAL:      4.0,
-  PATTERN_INTERRUPT:   8.0,
-  ENGAGEMENT_INTERVAL: 12.0,
+const KCS = {
+  // كلمات لكل عرض (chunk)
+  WORDS_PER_CHUNK_MIN: 3,
+  WORDS_PER_CHUNK_MAX: 4,
   
-  MEGA_SIZE:           240,
-  POWER_SIZE:          180,
-  NORMAL_SIZE:         110,
-  SMALL_SIZE:          70,
+  // التقسيم على سطرين
+  MAX_WORDS_PER_LINE: 2,
   
-  MAX_WORDS_PER_REVEAL: 2,
-  SHAKE_INTENSITY:      8,
-  FLASH_OPACITY:        0.5,
-  ZOOM_PUNCH:           0.45,
+  // الأحجام (موزونة - ليست عملاقة)
+  NORMAL_SIZE_AR:  78,    // كلمة عادية عربي
+  NORMAL_SIZE_EN:  74,    // كلمة عادية إنجليزي
+  POWER_SIZE_AR:   110,   // كلمة قوية عربي (أكبر بـ 40%)
+  POWER_SIZE_EN:   105,   // كلمة قوية إنجليزي
+  
+  // الحركات (سلسة وسريعة)
+  FADE_IN_FRAMES:  4,     // 0.13s
+  
+  // المسافات
+  LINE_HEIGHT:     1.4,
+  WORD_GAP:        18,    // px بين الكلمات
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎨 COLORS (من AI أو افتراضية)
+// 🎨 COLORS
 // ═════════════════════════════════════════════════════════════════════════════
 
 const DEFAULT_COLORS = [
-  "#FF003C", "#00FFFF", "#FFD700", "#FF6B00",
-  "#39FF14", "#A020F0", "#FF1493", "#00E5FF",
+  "#FFD700",  // ذهبي (الافتراضي للكلمات القوية)
+  "#00E5FF",  // سماوي
+  "#FF6B00",  // برتقالي
+  "#39FF14",  // أخضر نيون
 ];
 
-const COLOR_CYCLE = (accent_colors && accent_colors.length >= 2)
-  ? [...accent_colors, ...DEFAULT_COLORS]
+const POWER_COLORS = (accent_colors && accent_colors.length >= 2)
+  ? accent_colors
   : DEFAULT_COLORS;
 
-function getAccent(idx) {
-  return COLOR_CYCLE[idx % COLOR_CYCLE.length];
+// لون مختلف لكل جملة (تنويع بصري)
+function getPowerColorForSentence(sIdx) {
+  return POWER_COLORS[sIdx % POWER_COLORS.length];
 }
 
-console.log(`🎨 Using ${accent_colors.length > 0 ? "AI" : "default"} colors: ${COLOR_CYCLE.slice(0, 4).join(", ")}`);
+console.log(`🎨 Power colors: ${POWER_COLORS.slice(0, 4).join(", ")}`);
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🔥 POWER WORDS (من AI)
+// 🔥 POWER WORDS DETECTION
 // ═════════════════════════════════════════════════════════════════════════════
 
 function normalizeWord(word) {
   if (!word) return "";
   return word
     .toString()
-    .replace(/[.,!?؟،;:"'(){}[\]<>]/g, "")
+    .replace(/[.,!?؟،;:"'(){}[\]<>«»…]/g, "")
     .trim()
     .toLowerCase();
 }
@@ -106,6 +108,7 @@ function isPowerWord(word) {
     const pwNorm = normalizeWord(pw);
     if (!pwNorm) return false;
     if (normalized === pwNorm) return true;
+    // مطابقة جزئية للجذور العربية
     if (pwNorm.length >= 3 && normalized.includes(pwNorm)) return true;
     if (normalized.length >= 3 && pwNorm.includes(normalized)) return true;
     return false;
@@ -115,110 +118,69 @@ function isPowerWord(word) {
 console.log(`🔥 Power Words (${power_words.length}): ${power_words.slice(0, 8).join(", ")}${power_words.length > 8 ? "..." : ""}`);
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎭 ANIMATION PATTERNS
+// 📦 CHUNKING — تقسيم الجملة إلى مجموعات من 3-4 كلمات
 // ═════════════════════════════════════════════════════════════════════════════
 
-const PATTERNS = {
-  MEGA_SHOCK:      "mega_shock",
-  GLITCH_REVEAL:   "glitch_reveal",
-  ZOOM_PUNCH:      "zoom_punch",
-  WORD_EXPLOSION:  "word_explosion",
-  SIDE_SLAM_L:     "side_slam_left",
-  SIDE_SLAM_R:     "side_slam_right",
-  STACK_BUILD:     "stack_build",
-  SPLIT_FOCUS:     "split_focus",
-  CORNER_BLAST:    "corner_blast",
-  SCREEN_TAKEOVER: "screen_takeover",
-  TRIPLE_FLASH:    "triple_flash",
-  COLOR_STORM:     "color_storm",
-};
+function chunkSentence(sentence) {
+  const words = sentence.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
+  
+  const chunks = [];
+  let i = 0;
+  
+  while (i < words.length) {
+    // كم كلمة في هذا الـ chunk؟
+    const remaining = words.length - i;
+    let chunkSize;
+    
+    if (remaining <= KCS.WORDS_PER_CHUNK_MAX) {
+      // باقي قليل - خذه كله
+      chunkSize = remaining;
+    } else if (remaining <= KCS.WORDS_PER_CHUNK_MAX + 1) {
+      // لو أخذنا 4، يبقى 1 (سيء)
+      // خذ 3 ليبقى 2
+      chunkSize = KCS.WORDS_PER_CHUNK_MIN;
+    } else {
+      // عادي - 3 أو 4 حسب وجود كلمات قوية
+      const slice = words.slice(i, i + KCS.WORDS_PER_CHUNK_MAX);
+      const hasPower = slice.some(w => isPowerWord(w));
+      
+      if (hasPower) {
+        // إذا فيها كلمة قوية، خذ 3 فقط (للتركيز عليها)
+        chunkSize = 3;
+      } else {
+        chunkSize = 4;
+      }
+    }
+    
+    const chunkWords = words.slice(i, i + chunkSize);
+    chunks.push({
+      words: chunkWords,
+      hasPower: chunkWords.some(w => isPowerWord(w)),
+    });
+    
+    i += chunkSize;
+  }
+  
+  return chunks;
+}
 
-function selectPattern(opts) {
-  const { isHook, isPower, revealIdx } = opts;
-  
-  if (isHook) {
-    if (revealIdx === 0) return PATTERNS.MEGA_SHOCK;
-    if (isPower)         return PATTERNS.GLITCH_REVEAL;
-    return PATTERNS.ZOOM_PUNCH;
+// ═════════════════════════════════════════════════════════════════════════════
+// 📐 LINE SPLITTING — توزيع الكلمات على سطرين إذا كثيرة
+// ═════════════════════════════════════════════════════════════════════════════
+
+function splitChunkIntoLines(words) {
+  if (words.length <= KCS.MAX_WORDS_PER_LINE) {
+    return [words];  // سطر واحد
   }
   
-  if (isPower) {
-    const choices = [
-      PATTERNS.WORD_EXPLOSION,
-      PATTERNS.SCREEN_TAKEOVER,
-      PATTERNS.TRIPLE_FLASH,
-      PATTERNS.COLOR_STORM,
-    ];
-    return choices[revealIdx % choices.length];
-  }
-  
-  const bodyPatterns = [
-    PATTERNS.SIDE_SLAM_L,
-    PATTERNS.SIDE_SLAM_R,
-    PATTERNS.STACK_BUILD,
-    PATTERNS.SPLIT_FOCUS,
-    PATTERNS.CORNER_BLAST,
-    PATTERNS.WORD_EXPLOSION,
+  // سطرين: قسّم بالنصف
+  const mid = Math.ceil(words.length / 2);
+  return [
+    words.slice(0, mid),
+    words.slice(mid),
   ];
-  return bodyPatterns[revealIdx % bodyPatterns.length];
 }
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 📍 POSITIONS
-// ═════════════════════════════════════════════════════════════════════════════
-
-const POSITIONS = {
-  CENTER:       { x: "50%", y: "50%", tx: "-50%", ty: "-50%" },
-  TOP_LEFT:     { x: "8%",  y: "20%", tx: "0",    ty: "0"    },
-  TOP_RIGHT:    { x: "92%", y: "20%", tx: "-100%",ty: "0"    },
-  TOP_CENTER:   { x: "50%", y: "20%", tx: "-50%", ty: "0"    },
-  BOT_LEFT:     { x: "8%",  y: "75%", tx: "0",    ty: "-100%"},
-  BOT_RIGHT:    { x: "92%", y: "75%", tx: "-100%",ty: "-100%"},
-  BOT_CENTER:   { x: "50%", y: "75%", tx: "-50%", ty: "-100%"},
-  MID_LEFT:     { x: "8%",  y: "50%", tx: "0",    ty: "-50%" },
-  MID_RIGHT:    { x: "92%", y: "50%", tx: "-100%",ty: "-50%" },
-};
-
-function getPosition(revealIdx, pattern) {
-  if (pattern === PATTERNS.MEGA_SHOCK || 
-      pattern === PATTERNS.GLITCH_REVEAL ||
-      pattern === PATTERNS.SCREEN_TAKEOVER ||
-      pattern === PATTERNS.ZOOM_PUNCH ||
-      pattern === PATTERNS.TRIPLE_FLASH ||
-      pattern === PATTERNS.COLOR_STORM) {
-    return POSITIONS.CENTER;
-  }
-  
-  if (pattern === PATTERNS.CORNER_BLAST) {
-    const corners = [POSITIONS.TOP_LEFT, POSITIONS.TOP_RIGHT, 
-                     POSITIONS.BOT_LEFT, POSITIONS.BOT_RIGHT];
-    return corners[revealIdx % 4];
-  }
-  
-  if (pattern === PATTERNS.SIDE_SLAM_L) return POSITIONS.MID_LEFT;
-  if (pattern === PATTERNS.SIDE_SLAM_R) return POSITIONS.MID_RIGHT;
-  if (pattern === PATTERNS.STACK_BUILD) return POSITIONS.CENTER;
-  
-  const all = [POSITIONS.TOP_CENTER, POSITIONS.MID_LEFT, POSITIONS.BOT_CENTER,
-               POSITIONS.MID_RIGHT, POSITIONS.CENTER];
-  return all[revealIdx % all.length];
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 💬 PATTERN INTERRUPTS & ENGAGEMENT (من AI)
-// ═════════════════════════════════════════════════════════════════════════════
-
-const isAr = lang === "ar";
-
-const INTERRUPTS = isAr
-  ? (pattern_interrupts.ar || ["انتبه! 🚨", "هذا خطير", "صادم!"])
-  : (pattern_interrupts.en || ["WAIT!", "WARNING", "SHOCKING!"]);
-
-const QUESTIONS = isAr
-  ? (engagement_questions.ar || ["هل توافق؟ 💭", "اكتب رأيك 👇"])
-  : (engagement_questions.en || ["Agree? 💭", "Comment below 👇"]);
-
-console.log(`💬 Interrupts: ${INTERRUPTS.length} | Questions: ${QUESTIONS.length}`);
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🛠️ HELPERS
@@ -245,243 +207,104 @@ const isArabicText = t => /[\u0600-\u06FF]/.test(t);
 const esc = s => (s||"").toString()
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
-function splitIntoMicroUnits(sentence) {
-  const words = sentence.trim().split(/\s+/).filter(Boolean);
-  const units = [];
-  
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i];
-    const wIsPower = isPowerWord(w);
-    
-    if (wIsPower) {
-      units.push({ text: w, isPower: true, wordCount: 1 });
-      continue;
-    }
-    
-    if (w.length <= 3 && i + 1 < words.length) {
-      const next = words[i + 1];
-      if (!isPowerWord(next) && next.length <= 6) {
-        units.push({ text: `${w} ${next}`, isPower: false, wordCount: 2 });
-        i++;
-        continue;
-      }
-    }
-    
-    units.push({ text: w, isPower: false, wordCount: 1 });
-  }
-  
-  return units;
-}
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎨 HTML BUILDERS — Pattern Interrupt Screen
+// 🎨 HTML BUILDER — Karaoke Style
 // ═════════════════════════════════════════════════════════════════════════════
 
-function buildPatternInterruptHTML(message, accent) {
-  const ar = isArabicText(message);
-  const dir = ar ? "rtl" : "ltr";
-  const font = ar
-    ? `"Noto Naskh Arabic","Amiri",serif`
-    : `"Inter","Helvetica Neue",Arial,sans-serif`;
-
-  return `<!DOCTYPE html>
-<html lang="${ar?"ar":"en"}">
-<head>
-  <meta charset="UTF-8"/>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@800;900&family=Inter:wght@800;900&display=swap" rel="stylesheet"/>
-  <style>
-    *{margin:0;padding:0;box-sizing:border-box;}
-    html,body{width:${WIDTH}px;height:${HEIGHT}px;overflow:hidden;background:transparent;}
-    .overlay{position:absolute;inset:0;background:rgba(0,0,0,0.7);}
-    .wrap{position:absolute;inset:0;display:flex;justify-content:center;align-items:center;}
-    .box{
-      background:${accent};border-radius:36px;
-      padding:48px 80px;max-width:920px;
-      direction:${dir};
-      box-shadow:0 0 120px ${accent}cc,0 25px 80px rgba(0,0,0,0.95);
-      transform: scale(1.08);
-    }
-    .text{
-      font-family:${font};
-      font-size:${ar?"82px":"78px"};
-      font-weight:900;color:#000;
-      text-align:center;line-height:1.15;
-      text-transform:uppercase;
-      letter-spacing:${ar?"0":"-0.02em"};
-    }
-  </style>
-</head>
-<body>
-  <div class="overlay"></div>
-  <div class="wrap">
-    <div class="box"><div class="text">${esc(message)}</div></div>
-  </div>
-</body>
-</html>`;
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🎨 HTML BUILDERS — Engagement Question Screen
-// ═════════════════════════════════════════════════════════════════════════════
-
-function buildEngagementHTML(question, accent) {
-  const ar = isArabicText(question);
-  const dir = ar ? "rtl" : "ltr";
-  const font = ar
-    ? `"Noto Naskh Arabic","Amiri",serif`
-    : `"Inter","Helvetica Neue",Arial,sans-serif`;
-
-  return `<!DOCTYPE html>
-<html lang="${ar?"ar":"en"}">
-<head>
-  <meta charset="UTF-8"/>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@800&family=Inter:wght@800&display=swap" rel="stylesheet"/>
-  <style>
-    *{margin:0;padding:0;box-sizing:border-box;}
-    html,body{width:${WIDTH}px;height:${HEIGHT}px;overflow:hidden;background:transparent;}
-    .wrap{position:absolute;bottom:280px;left:0;right:0;display:flex;justify-content:center;padding:0 60px;}
-    .box{
-      background:rgba(0,0,0,0.92);
-      border:5px solid ${accent};
-      border-radius:28px;padding:40px 70px;
-      max-width:960px;direction:${dir};
-      box-shadow:0 0 60px ${accent}88;
-    }
-    .text{
-      font-family:${font};
-      font-size:${ar?"64px":"60px"};
-      font-weight:900;color:#fff;
-      text-align:center;line-height:1.3;
-      text-shadow:0 4px 16px rgba(0,0,0,0.95);
-    }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="box"><div class="text">${esc(question)}</div></div>
-  </div>
-</body>
-</html>`;
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🎨 HTML BUILDERS — Sentence Screen (12 patterns)
-// ═════════════════════════════════════════════════════════════════════════════
-
-function buildSentenceHTML(opts) {
+function buildKaraokeHTML(opts) {
   const {
-    text, pattern, accent, position, wordFrameIdx,
-    isPower, isHook, sentenceIdx, totalSentences,
+    chunk,              // {words: [...], hasPower: bool}
+    currentWordIdx,     // -1 = none yet, 0 = first word active
+    accent,             // لون الكلمات القوية
+    fadeProgress,       // 0-1 (للـ fade in)
+    sentenceIdx,
+    totalSentences,
   } = opts;
-
-  const ar = isArabicText(text);
+  
+  const allWords = chunk.words;
+  const ar = isArabicText(allWords.join(" "));
   const dir = ar ? "rtl" : "ltr";
   const font = ar
     ? `"Noto Naskh Arabic","Amiri",serif`
     : `"Inter","Helvetica Neue",Arial,sans-serif`;
-
-  // Animation progress
-  const wf = wordFrameIdx || 0;
-  const prog = Math.min(wf / 5.0, 1.0);
   
-  let scale = 1.0;
-  let rotate = 0;
-  let opacity = 1.0;
-  let flashOpacity = 0;
-  let blur = 0;
-  let translateX = 0;
-  let translateY = 0;
-
-  // ── Pattern-specific animations ──────────────────────────────────────────
-  switch (pattern) {
-    case PATTERNS.MEGA_SHOCK:
-      scale = 1.0 + Math.sin(prog * Math.PI) * 0.4;
-      flashOpacity = Math.max(0, 0.6 * (1 - prog * 2));
-      blur = Math.sin(prog * Math.PI) * 4;
-      break;
-
-    case PATTERNS.GLITCH_REVEAL:
-      scale = 1.0 + Math.sin(prog * Math.PI) * 0.15;
-      if (prog < 0.5) {
-        translateX = Math.sin(wf * 5) * 6;
+  // قسّم الكلمات على سطر واحد أو سطرين
+  const lines = splitChunkIntoLines(allWords);
+  
+  // بناء HTML لكل سطر
+  let wordCounter = 0;
+  const linesHTML = lines.map(lineWords => {
+    const wordsHTML = lineWords.map(word => {
+      const isCurrent = wordCounter === currentWordIdx;
+      const isPast    = wordCounter < currentWordIdx;
+      const isPower   = isPowerWord(word);
+      
+      // تحديد الحجم
+      const fontSize = isPower
+        ? (ar ? `${KCS.POWER_SIZE_AR}px` : `${KCS.POWER_SIZE_EN}px`)
+        : (ar ? `${KCS.NORMAL_SIZE_AR}px` : `${KCS.NORMAL_SIZE_EN}px`);
+      
+      // تحديد اللون
+      let color;
+      let opacity;
+      let textShadow;
+      
+      if (isCurrent) {
+        // الكلمة الحالية - مضيئة
+        if (isPower) {
+          color = accent;
+          textShadow = `
+            0 0 30px ${accent},
+            0 0 60px ${accent}cc,
+            0 0 90px ${accent}88,
+            0 6px 25px rgba(0,0,0,1),
+            4px 4px 0 rgba(0,0,0,0.9)
+          `;
+        } else {
+          color = "#FFFFFF";
+          textShadow = `
+            0 0 25px rgba(255,255,255,0.6),
+            0 6px 20px rgba(0,0,0,1),
+            3px 3px 0 rgba(0,0,0,0.9)
+          `;
+        }
+        opacity = 1;
+      } else if (isPast) {
+        // الكلمات السابقة (تم نطقها)
+        color = isPower ? accent : "#FFFFFF";
+        opacity = isPower ? 0.95 : 0.85;
+        textShadow = isPower
+          ? `0 0 15px ${accent}aa, 0 4px 15px rgba(0,0,0,0.9), 2px 2px 0 rgba(0,0,0,0.8)`
+          : `0 4px 15px rgba(0,0,0,0.9), 2px 2px 0 rgba(0,0,0,0.8)`;
+      } else {
+        // الكلمات القادمة (لم تنطق بعد)
+        color = isPower ? `${accent}` : "#FFFFFF";
+        opacity = isPower ? 0.55 : 0.40;
+        textShadow = `0 4px 12px rgba(0,0,0,0.85), 2px 2px 0 rgba(0,0,0,0.7)`;
       }
-      flashOpacity = Math.max(0, 0.3 * (1 - prog));
-      break;
-
-    case PATTERNS.ZOOM_PUNCH:
-      scale = 1.5 - (prog * 0.5);
-      opacity = prog;
-      break;
-
-    case PATTERNS.WORD_EXPLOSION:
-      scale = 0.5 + (prog * 0.5);
-      opacity = prog;
-      break;
-
-    case PATTERNS.SIDE_SLAM_L:
-      translateX = (1 - prog) * -300;
-      opacity = prog;
-      break;
-
-    case PATTERNS.SIDE_SLAM_R:
-      translateX = (1 - prog) * 300;
-      opacity = prog;
-      break;
-
-    case PATTERNS.STACK_BUILD:
-      translateY = (1 - prog) * 50;
-      opacity = prog;
-      break;
-
-    case PATTERNS.SPLIT_FOCUS:
-      scale = 0.85 + (prog * 0.15);
-      opacity = prog;
-      break;
-
-    case PATTERNS.CORNER_BLAST:
-      scale = 0.6 + (prog * 0.4);
-      rotate = (1 - prog) * 15;
-      opacity = prog;
-      break;
-
-    case PATTERNS.SCREEN_TAKEOVER:
-      scale = 0.3 + (prog * 0.7);
-      flashOpacity = Math.max(0, 0.4 * (1 - prog));
-      break;
-
-    case PATTERNS.TRIPLE_FLASH:
-      const flashCycle = (wf % 3) / 3;
-      flashOpacity = flashCycle < 0.5 ? 0.5 : 0;
-      scale = 1.0 + Math.sin(prog * Math.PI) * 0.2;
-      break;
-
-    case PATTERNS.COLOR_STORM:
-      scale = 1.0 + Math.sin(prog * Math.PI) * 0.3;
-      rotate = Math.sin(wf * 2) * 5;
-      break;
-  }
-
-  const transform = `translate(calc(${position.tx} + ${translateX}px), calc(${position.ty} + ${translateY}px)) scale(${scale}) rotate(${rotate}deg)`;
-
-  // ── Determine size based on pattern ──────────────────────────────────────
-  let fontSize;
-  if (isHook && pattern === PATTERNS.MEGA_SHOCK) {
-    fontSize = ar ? `${VAS.MEGA_SIZE}px` : `${VAS.MEGA_SIZE - 30}px`;
-  } else if (isPower || pattern === PATTERNS.SCREEN_TAKEOVER) {
-    fontSize = ar ? `${VAS.POWER_SIZE}px` : `${VAS.POWER_SIZE - 20}px`;
-  } else {
-    fontSize = ar ? `${VAS.NORMAL_SIZE}px` : `${VAS.NORMAL_SIZE - 10}px`;
-  }
-
-  // ── Text color ───────────────────────────────────────────────────────────
-  const textColor = isPower ? accent : "#FFFFFF";
-
-  // ── Text shadow (heavy for impact) ───────────────────────────────────────
-  const textShadow = isPower
-    ? `0 0 60px ${accent}cc, 0 0 120px ${accent}88, 0 8px 30px rgba(0,0,0,1), 6px 6px 0 rgba(0,0,0,0.9)`
-    : `0 0 40px rgba(0,0,0,0.9), 0 6px 25px rgba(0,0,0,1), 4px 4px 0 rgba(0,0,0,0.85)`;
-
-  const stroke = isPower ? "5px" : "3px";
-
+      
+      const stroke = isPower ? "4px" : "3px";
+      
+      wordCounter++;
+      
+      return `<span class="word" style="
+        font-size: ${fontSize};
+        color: ${color};
+        opacity: ${opacity};
+        text-shadow: ${textShadow};
+        -webkit-text-stroke: ${stroke} rgba(0,0,0,0.95);
+        paint-order: stroke fill;
+        font-weight: 900;
+        line-height: ${KCS.LINE_HEIGHT};
+        display: inline-block;
+        margin: 0 ${KCS.WORD_GAP / 2}px;
+        transition: all 0.15s ease-out;
+      ">${esc(word)}</span>`;
+    }).join("");
+    
+    return `<div class="line">${wordsHTML}</div>`;
+  }).join("");
+  
   return `<!DOCTYPE html>
 <html lang="${ar?"ar":"en"}">
 <head>
@@ -489,322 +312,221 @@ function buildSentenceHTML(opts) {
   <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700;800;900&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
-    html,body{width:${WIDTH}px;height:${HEIGHT}px;overflow:hidden;background:transparent;}
+    html,body{
+      width:${WIDTH}px;
+      height:${HEIGHT}px;
+      overflow:hidden;
+      background:transparent;
+    }
+    
+    /* تدرج معتم من الأعلى والأسفل */
+    .overlay-top{
+      position:absolute;
+      top:0;left:0;right:0;
+      height:30%;
+      background:linear-gradient(to bottom,
+        rgba(0,0,0,0.75) 0%,
+        rgba(0,0,0,0.3) 60%,
+        transparent 100%
+      );
+      pointer-events:none;
+      z-index:1;
+    }
     
     .overlay-bottom{
-      position:absolute;bottom:0;left:0;right:0;height:60%;
+      position:absolute;
+      bottom:0;left:0;right:0;
+      height:50%;
       background:linear-gradient(to top,
-        rgba(0,0,0,0.85) 0%,
-        rgba(0,0,0,0.5) 40%,
+        rgba(0,0,0,0.90) 0%,
+        rgba(0,0,0,0.6) 40%,
+        rgba(0,0,0,0.2) 80%,
         transparent 100%
-      );pointer-events:none;
-    }
-    
-    .overlay-top{
-      position:absolute;top:0;left:0;right:0;height:25%;
-      background:linear-gradient(to bottom,
-        rgba(0,0,0,0.6) 0%, transparent 100%
-      );pointer-events:none;
-    }
-    
-    .flash{
-      position:absolute;inset:0;
-      background:#fff;
-      opacity:${flashOpacity};
-      mix-blend-mode:overlay;
+      );
       pointer-events:none;
-      z-index:50;
+      z-index:1;
     }
     
+    /* النص في المنتصف */
     .text-container{
       position:absolute;
-      left:${position.x};
-      top:${position.y};
-      transform:${transform};
-      opacity:${opacity};
-      filter:blur(${blur}px);
+      left:50%;
+      top:50%;
+      transform:translate(-50%, -50%);
+      width:90%;
+      max-width:960px;
       direction:${dir};
-      max-width:90vw;
-      z-index:10;
-    }
-    
-    .text{
-      font-family:${font};
-      font-size:${fontSize};
-      font-weight:900;
-      color:${textColor};
-      line-height:1.0;
       text-align:center;
-      text-shadow:${textShadow};
-      -webkit-text-stroke:${stroke} rgba(0,0,0,0.95);
-      paint-order:stroke fill;
-      letter-spacing:${ar?"0":"-0.03em"};
-      word-break:break-word;
-      white-space:nowrap;
+      z-index:10;
+      opacity:${fadeProgress};
     }
     
-    .progress-bar{
-      position:absolute;
-      bottom:60px;
-      left:80px;
-      right:80px;
-      height:6px;
-      background:rgba(255,255,255,0.2);
-      border-radius:3px;
-      overflow:hidden;
-      z-index:5;
+    .line{
+      display:block;
+      text-align:center;
+      margin-bottom:8px;
     }
     
-    .progress-fill{
-      height:100%;
-      width:${((sentenceIdx + 1) / totalSentences) * 100}%;
-      background:linear-gradient(90deg, ${accent}, ${accent}cc);
-      border-radius:3px;
-      box-shadow:0 0 15px ${accent};
+    .line:last-child{
+      margin-bottom:0;
+    }
+    
+    .word{
+      vertical-align:middle;
     }
   </style>
 </head>
 <body>
   <div class="overlay-top"></div>
   <div class="overlay-bottom"></div>
-  <div class="flash"></div>
   
   <div class="text-container">
-    <div class="text">${esc(text)}</div>
-  </div>
-  
-  <div class="progress-bar">
-    <div class="progress-fill"></div>
+    ${linesHTML}
   </div>
 </body>
 </html>`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎬 FRAME STATE MAP — VAS Style
+// 🎬 BUILD CHUNKS TIMELINE
 // ═════════════════════════════════════════════════════════════════════════════
 
-const SCREEN_TYPE = {
-  SENTENCE:   "sentence",
-  INTERRUPT:  "interrupt",
-  ENGAGEMENT: "engagement",
-};
-
-function buildFrameStateMap(timeline, nFrames, realDur) {
-  // ── Build micro-units for each sentence ──────────────────────────────────
-  const allUnits = [];
+function buildChunksTimeline() {
+  const allChunks = [];
   
-  for (let sIdx = 0; sIdx < sentences.length; sIdx++) {
-    const sentence = sentences[sIdx];
-    const units = splitIntoMicroUnits(sentence);
-    
-    units.forEach((unit, uIdx) => {
-      allUnits.push({
-        ...unit,
+  sentences.forEach((sentence, sIdx) => {
+    const sentenceChunks = chunkSentence(sentence);
+    sentenceChunks.forEach((chunk, cIdx) => {
+      allChunks.push({
+        ...chunk,
         sentence_idx: sIdx,
-        unit_idx:     uIdx,
-        global_idx:   allUnits.length,
+        chunk_idx:    cIdx,
+        global_idx:   allChunks.length,
       });
     });
+  });
+  
+  console.log(`📦 Total chunks: ${allChunks.length}`);
+  return allChunks;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎬 BUILD FRAME STATE MAP
+// ═════════════════════════════════════════════════════════════════════════════
+
+function buildFrameStateMap(realDur) {
+  const allChunks = buildChunksTimeline();
+  const totalChunks = allChunks.length;
+  
+  if (totalChunks === 0) {
+    return [];
   }
   
-  console.log(`📦 Total micro-units: ${allUnits.length}`);
+  // الوقت لكل chunk
+  const timePerChunk = realDur / totalChunks;
   
-  // ── Calculate timing for each unit ───────────────────────────────────────
-  const unitsPerSentence = sentences.map(s => splitIntoMicroUnits(s).length);
-  const totalUnits = allUnits.length;
+  // الوقت لكل كلمة داخل الـ chunk (للـ karaoke effect)
+  const map = new Array(totalFrames).fill(null);
   
-  // Time per unit
-  const timePerUnit = realDur / totalUnits;
-  
-  // ── Add pattern interrupts every PATTERN_INTERRUPT seconds ──────────────
-  const PI_INTERVAL_FRAMES = Math.round(VAS.PATTERN_INTERRUPT * FPS);
-  const EQ_INTERVAL_FRAMES = Math.round(VAS.ENGAGEMENT_INTERVAL * FPS);
-  const INTERRUPT_DURATION = Math.round(0.6 * FPS);  // 0.6s for each interrupt
-  
-  const patternFrames = new Set();
-  const engagementFrames = new Set();
-  
-  for (let f = PI_INTERVAL_FRAMES; f < nFrames - FPS * 2; f += PI_INTERVAL_FRAMES) {
-    patternFrames.add(f);
-  }
-  
-  for (let f = EQ_INTERVAL_FRAMES; f < nFrames - FPS * 2; f += EQ_INTERVAL_FRAMES) {
-    engagementFrames.add(f);
-  }
-  
-  // ── Build frame map ─────────────────────────────────────────────────────
-  const map = new Array(nFrames).fill(null).map(() => ({
-    screen_type:   SCREEN_TYPE.SENTENCE,
-    unit_idx:      0,
-    sentence_idx:  0,
-    text:          "",
-    pattern:       PATTERNS.WORD_EXPLOSION,
-    accent:        getAccent(0),
-    is_power:      false,
-    is_hook:       false,
-    position:      POSITIONS.CENTER,
-    word_frame_idx: 0,
-    interrupt_idx: 0,
-    engagement_idx: 0,
-  }));
-  
-  // ── Fill sentence frames ────────────────────────────────────────────────
-  const ULTRA_HOOK_FRAMES = Math.round(VAS.HOOK_ZONE_END * FPS);
-  let lastUnitIdx = -1;
-  let framesSinceReveal = 0;
-  
-  for (let f = 0; f < nFrames; f++) {
+  for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
-    const unitIdx = Math.min(Math.floor(t / timePerUnit), totalUnits - 1);
+    const chunkIdx = Math.min(Math.floor(t / timePerChunk), totalChunks - 1);
+    const chunk = allChunks[chunkIdx];
     
-    if (unitIdx !== lastUnitIdx) {
-      framesSinceReveal = 0;
-      lastUnitIdx = unitIdx;
-    } else {
-      framesSinceReveal++;
-    }
+    if (!chunk) continue;
     
-    const unit = allUnits[unitIdx];
-    if (!unit) continue;
+    // الوقت داخل الـ chunk (0 إلى timePerChunk)
+    const chunkStartT = chunkIdx * timePerChunk;
+    const tInChunk = t - chunkStartT;
     
-    const isHook = f < ULTRA_HOOK_FRAMES;
-    const pattern = selectPattern({
-      isHook,
-      isPower: unit.isPower,
-      revealIdx: unitIdx,
-    });
+    // أي كلمة نطقها الآن؟
+    const timePerWord = timePerChunk / chunk.words.length;
+    const currentWordIdx = Math.min(
+      Math.floor(tInChunk / timePerWord),
+      chunk.words.length - 1
+    );
     
-    const position = getPosition(unitIdx, pattern);
-    const accentIdx = unit.sentence_idx;
+    // Fade in في أول الـ chunk
+    const framesSinceChunkStart = f - Math.floor(chunkStartT * FPS);
+    const fadeProgress = Math.min(framesSinceChunkStart / KCS.FADE_IN_FRAMES, 1.0);
     
     map[f] = {
-      screen_type:    SCREEN_TYPE.SENTENCE,
-      unit_idx:       unitIdx,
-      sentence_idx:   unit.sentence_idx,
-      text:           unit.text,
-      pattern:        pattern,
-      accent:         getAccent(accentIdx),
-      is_power:       unit.isPower,
-      is_hook:        isHook,
-      position:       position,
-      word_frame_idx: Math.min(framesSinceReveal, 5),
-      interrupt_idx:  0,
-      engagement_idx: 0,
+      chunk_idx:        chunkIdx,
+      chunk:            chunk,
+      current_word_idx: currentWordIdx,
+      accent:           getPowerColorForSentence(chunk.sentence_idx),
+      fade_progress:    fadeProgress,
+      sentence_idx:     chunk.sentence_idx,
     };
-  }
-  
-  // ── Overlay pattern interrupts ──────────────────────────────────────────
-  let piCounter = 0;
-  for (const startFrame of patternFrames) {
-    for (let f = startFrame; f < Math.min(startFrame + INTERRUPT_DURATION, nFrames); f++) {
-      if (map[f].screen_type === SCREEN_TYPE.SENTENCE) {
-        map[f] = {
-          ...map[f],
-          screen_type:   SCREEN_TYPE.INTERRUPT,
-          interrupt_idx: piCounter,
-          accent:        getAccent(piCounter + 2),
-        };
-      }
-    }
-    piCounter++;
-  }
-  
-  // ── Overlay engagement questions ────────────────────────────────────────
-  let eqCounter = 0;
-  const ENGAGEMENT_DURATION = Math.round(1.2 * FPS);  // 1.2s
-  for (const startFrame of engagementFrames) {
-    for (let f = startFrame; f < Math.min(startFrame + ENGAGEMENT_DURATION, nFrames); f++) {
-      if (map[f].screen_type === SCREEN_TYPE.SENTENCE) {
-        map[f] = {
-          ...map[f],
-          screen_type:    SCREEN_TYPE.ENGAGEMENT,
-          engagement_idx: eqCounter,
-          accent:         getAccent(eqCounter + 1),
-        };
-      }
-    }
-    eqCounter++;
   }
   
   return map;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🖼️ RENDER ALL UNIQUE PNGs
+// 🖼️ RENDER UNIQUE PNGs
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function renderAllPNGs(page, frameStateMap) {
+  // اجمع الحالات الفريدة فقط
   const uniqueStates = new Map();
   
   for (const state of frameStateMap) {
-    let key;
-    if (state.screen_type === SCREEN_TYPE.INTERRUPT) {
-      key = `int_${state.interrupt_idx}`;
-    } else if (state.screen_type === SCREEN_TYPE.ENGAGEMENT) {
-      key = `eng_${state.engagement_idx}`;
-    } else {
-      key = `s_${state.unit_idx}_${state.word_frame_idx}_${state.pattern}`;
+    if (!state) continue;
+    
+    // المفتاح يجمع: chunk + current word + fade stage
+    const fadeStage = state.fade_progress >= 1.0 ? "full" : Math.floor(state.fade_progress * 4);
+    const key = `c${state.chunk_idx}_w${state.current_word_idx}_f${fadeStage}`;
+    
+    if (!uniqueStates.has(key)) {
+      uniqueStates.set(key, state);
     }
-    if (!uniqueStates.has(key)) uniqueStates.set(key, state);
   }
   
-  console.log(`  📸 ${uniqueStates.size} unique states`);
+  console.log(`  📸 ${uniqueStates.size} unique states (Karaoke)`);
   
   // Warm up fonts
-  const initHtml = buildSentenceHTML({
-    text: "تحميل",
-    pattern: PATTERNS.WORD_EXPLOSION,
-    accent: getAccent(0),
-    position: POSITIONS.CENTER,
-    wordFrameIdx: 0,
-    isPower: false,
-    isHook: false,
-    sentenceIdx: 0,
-    totalSentences: 1,
+  const initHtml = buildKaraokeHTML({
+    chunk:           { words: ["تحميل"], hasPower: false },
+    currentWordIdx:  0,
+    accent:          POWER_COLORS[0],
+    fadeProgress:    1.0,
+    sentenceIdx:     0,
+    totalSentences:  1,
   });
   writeFileSync(`${TMP}/init.html`, initHtml, "utf-8");
   await page.goto(`file://${TMP}/init.html`, { waitUntil: "networkidle" });
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
   console.log("  ✅ Fonts loaded");
   
   const pngCache = new Map();
   let rendered = 0;
   
   for (const [key, state] of uniqueStates) {
-    let html;
-    
-    if (state.screen_type === SCREEN_TYPE.INTERRUPT) {
-      const msg = INTERRUPTS[state.interrupt_idx % INTERRUPTS.length];
-      html = buildPatternInterruptHTML(msg, state.accent);
-    } else if (state.screen_type === SCREEN_TYPE.ENGAGEMENT) {
-      const q = QUESTIONS[state.engagement_idx % QUESTIONS.length];
-      html = buildEngagementHTML(q, state.accent);
-    } else {
-      html = buildSentenceHTML({
-        text:           state.text,
-        pattern:        state.pattern,
-        accent:         state.accent,
-        position:       state.position,
-        wordFrameIdx:   state.word_frame_idx,
-        isPower:        state.is_power,
-        isHook:         state.is_hook,
-        sentenceIdx:    state.sentence_idx,
-        totalSentences: sentences.length,
-      });
-    }
+    const html = buildKaraokeHTML({
+      chunk:           state.chunk,
+      currentWordIdx:  state.current_word_idx,
+      accent:          state.accent,
+      fadeProgress:    state.fade_progress,
+      sentenceIdx:     state.sentence_idx,
+      totalSentences:  sentences.length,
+    });
     
     const htmlPath = `${TMP}/${key}.html`;
     writeFileSync(htmlPath, html, "utf-8");
     await page.goto(`file://${htmlPath}`, { waitUntil: "load" });
-    await page.waitForTimeout(30);
+    await page.waitForTimeout(40);
     
     const pngPath = `${TMP}/${key}.png`;
-    await page.screenshot({ path: pngPath, type: "png", omitBackground: true });
+    await page.screenshot({ 
+      path: pngPath, 
+      type: "png", 
+      omitBackground: true 
+    });
     pngCache.set(key, pngPath);
     rendered++;
     
-    if (rendered % 50 === 0 || rendered === uniqueStates.size) {
+    if (rendered % 30 === 0 || rendered === uniqueStates.size) {
       process.stdout.write(`    ${rendered}/${uniqueStates.size} PNGs\n`);
     }
   }
@@ -813,7 +535,7 @@ async function renderAllPNGs(page, frameStateMap) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// BUILD FRAME DIR
+// BUILD FRAME DIRECTORY
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildFrameDir(clipFrameMap, pngCache, idx) {
@@ -822,15 +544,10 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
   
   for (let f = 0; f < clipFrameMap.length; f++) {
     const state = clipFrameMap[f];
-    let key;
+    if (!state) continue;
     
-    if (state.screen_type === SCREEN_TYPE.INTERRUPT) {
-      key = `int_${state.interrupt_idx}`;
-    } else if (state.screen_type === SCREEN_TYPE.ENGAGEMENT) {
-      key = `eng_${state.engagement_idx}`;
-    } else {
-      key = `s_${state.unit_idx}_${state.word_frame_idx}_${state.pattern}`;
-    }
+    const fadeStage = state.fade_progress >= 1.0 ? "full" : Math.floor(state.fade_progress * 4);
+    const key = `c${state.chunk_idx}_w${state.current_word_idx}_f${fadeStage}`;
     
     const src = pngCache.get(key);
     const dest = `${dir}/frame_${String(f).padStart(6,"0")}.png`;
@@ -844,36 +561,66 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// PROCESS BACKGROUND VIDEO
+// 🎬 PROCESS BACKGROUND (CINEMATIC FILTERS)
 // ═════════════════════════════════════════════════════════════════════════════
 
 function processBackground(videoPath, duration, outPath, idx) {
   const n = Math.ceil(duration * FPS);
+  
+  // ✨ زووم سينمائي بطيء وأنيق
   const ZOOM_PATTERNS = [
-    `zoompan=z='min(max(zoom\\,1.12)+0.0005\\,1.20)':x='iw/2-(iw/zoom/2)+on*0.3':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    `zoompan=z='if(eq(on\\,1)\\,1.20\\,max(zoom-0.0005\\,1.12))':x='iw/2-(iw/zoom/2)-on*0.3':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    `zoompan=z='min(max(zoom\\,1.12)+0.0004\\,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)+on*0.3':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    `zoompan=z='1.15':x='iw/2-(iw/zoom/2)+on*0.2':y='ih/2-(ih/zoom/2)-on*0.2':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    // Zoom In بطيء
+    `zoompan=z='min(zoom+0.0008,1.25)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    // Zoom Out بطيء
+    `zoompan=z='if(eq(on,1),1.25,max(zoom-0.0008,1.05))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    // Pan يميناً مع zoom خفيف
+    `zoompan=z='min(zoom+0.0005,1.18)':x='iw/2-(iw/zoom/2)+on*0.5':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    // Pan يساراً مع zoom خفيف
+    `zoompan=z='min(zoom+0.0005,1.18)':x='iw/2-(iw/zoom/2)-on*0.5':y='ih/2-(ih/zoom/2)':d=${n}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
   ];
-  const kb    = ZOOM_PATTERNS[idx % ZOOM_PATTERNS.length];
-  const color = `curves=r='0/0 0.5/0.46 1/0.88':g='0/0 0.5/0.50 1/0.97':b='0/0.04 0.5/0.56 1/1.0',hue=s=0.82,vignette=PI/5`;
-  const fade  = `fade=t=in:st=0:d=0.28,fade=t=out:st=${(duration-0.28).toFixed(3)}:d=0.28`;
-  const full  = `scale=${Math.round(WIDTH*1.1)}:${Math.round(HEIGHT*1.1)}:force_original_aspect_ratio=increase,`
-              + `crop=${Math.round(WIDTH*1.1)}:${Math.round(HEIGHT*1.1)},${kb},${color},${fade}`;
+  
+  const kb = ZOOM_PATTERNS[idx % ZOOM_PATTERNS.length];
+  
+  // ✨ فلاتر سينمائية احترافية
+  const filters = [
+    // 1. تصحيح الألوان (Cinematic Color Grading)
+    `curves=r='0/0 0.3/0.25 0.7/0.78 1/0.92':g='0/0 0.3/0.27 0.7/0.80 1/0.95':b='0/0.05 0.3/0.32 0.7/0.85 1/1.0'`,
+    
+    // 2. تشبع متوسط (لون سينمائي دافئ)
+    `hue=s=0.75`,
+    
+    // 3. تباين أعلى قليلاً
+    `eq=contrast=1.08:brightness=-0.02:saturation=0.9`,
+    
+    // 4. حواف داكنة (Vignette)
+    `vignette=PI/4.5`,
+    
+    // 5. حدّة خفيفة (Sharpness)
+    `unsharp=5:5:0.5:5:5:0.0`,
+    
+    // 6. حبيبية سينمائية خفيفة جداً (Film Grain)
+    `noise=alls=4:allf=t`,
+  ].join(",");
+  
+  const fade = `fade=t=in:st=0:d=0.4,fade=t=out:st=${(duration-0.4).toFixed(3)}:d=0.4`;
+  
+  const full = `scale=${Math.round(WIDTH*1.15)}:${Math.round(HEIGHT*1.15)}:force_original_aspect_ratio=increase,`
+             + `crop=${Math.round(WIDTH*1.15)}:${Math.round(HEIGHT*1.15)},${kb},${filters},${fade}`;
 
   let r = spawnSync("ffmpeg",[
     "-y","-i",videoPath,"-t",duration.toFixed(3),
     "-vf",full,"-r",String(FPS),
-    "-c:v","libx264","-preset","fast","-crf","22","-pix_fmt","yuv420p","-an",outPath,
+    "-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-an",outPath,
   ],{stdio:["ignore","pipe","pipe"]});
 
   if (r.status !== 0) {
+    // Fallback أبسط
     const simple = `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,`
-                 + `crop=${WIDTH}:${HEIGHT},setsar=1,${color},${fade}`;
+                 + `crop=${WIDTH}:${HEIGHT},setsar=1,${filters},${fade}`;
     r = spawnSync("ffmpeg",[
       "-y","-i",videoPath,"-t",duration.toFixed(3),
       "-vf",simple,"-r",String(FPS),
-      "-c:v","libx264","-preset","fast","-crf","22","-pix_fmt","yuv420p","-an",outPath,
+      "-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-an",outPath,
     ],{stdio:["ignore","pipe","pipe"]});
     if (r.status !== 0) { console.error("❌ BG failed"); process.exit(1); }
   }
@@ -908,8 +655,9 @@ function overlayOnBackground(bgMp4, captionMov, outPath) {
 function xfadeConcat(clipPaths, clipDurations) {
   if (clipPaths.length === 1) return clipPaths[0];
   
-  const TRANSITIONS = ["fade","slideleft","slideright","slideup","fadeblack","wipeleft","circleopen"];
-  const XFADE = 0.30;
+  // انتقالات سلسة (لا تشتيت)
+  const TRANSITIONS = ["fade", "fadeblack", "dissolve"];
+  const XFADE = 0.35;
   
   const filters = [];
   let offset = 0, last = "[0:v]";
@@ -971,9 +719,9 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log("\n🚀 Starting VAS Renderer (Visual Addiction System)\n");
+  console.log("\n🚀 Starting KCS Renderer (Karaoke Cinematic System)\n");
 
-  const frameStateMap = buildFrameStateMap(word_timeline, totalFrames, effectiveDuration);
+  const frameStateMap = buildFrameStateMap(effectiveDuration);
 
   const browser = await chromium.launch({
     headless: true,
@@ -994,7 +742,6 @@ async function main() {
   await browser.close();
   console.log(`✅ ${pngCache.size} PNGs done\n`);
 
-  // Build clips per sentence
   const sentenceData = (aligned && aligned.length > 0)
     ? aligned
     : sentences.map((s,i) => ({
@@ -1005,7 +752,7 @@ async function main() {
 
   const finalClips = [], clipDurations = [];
 
-  console.log("🎬 Processing clips...");
+  console.log("🎬 Processing clips with cinematic filters...");
   for (let i = 0; i < sentences.length; i++) {
     const info      = sentenceData[i] || {};
     const clipStart = info.start ?? (effectiveDuration / sentences.length) * i;
@@ -1032,7 +779,7 @@ async function main() {
     process.stdout.write("✓\n");
   }
 
-  console.log(`\n✨ Concatenating clips with transitions...`);
+  console.log(`\n✨ Concatenating with smooth transitions...`);
   const dissolved = xfadeConcat(finalClips, clipDurations);
 
   console.log("🎵 Merging audio...");
