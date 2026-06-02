@@ -6,15 +6,7 @@
   - Groq  = generates EVERYTHING else (cached in DB)
   - Tags  = control voice tone per sentence
 
-Pipeline:
-  1. Read Excel (4 columns)
-  2. Parse tags from content
-  3. Check AI cache (skip if exists)
-  4. Run 9 Groq enrichments (with caching)
-  5. TTS with tag-aware voice
-  6. Fetch videos (using AI-generated keywords)
-  7. Render (VAS system)
-  8. Publish to Facebook (AI-generated caption)
+✅ FIX: clip durations الآن قصيرة (8s) ليسهل loop-ها في render.mjs
 """
 
 from __future__ import annotations
@@ -57,6 +49,9 @@ MIN_S         = 30
 MAX_S         = 90
 RENDER_SCRIPT = Path("remotion/render.mjs")
 
+# ✅ FIX: مدة افتراضية لكل clip (قصيرة ليسهل loop-ها)
+CLIP_TARGET_DURATION = 8.0
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CLI
@@ -68,29 +63,24 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawTextHelpFormatter,
     )
     
-    # Input
     p.add_argument("input_file",      type=str, nargs="?", default=None,
                    help="Excel/CSV file path")
     p.add_argument("--output-dir",    type=str, default="output")
     p.add_argument("--video-number",  type=str, default=None,
                    help="Process specific video number")
     
-    # Voice
     p.add_argument("--voice-en",      type=str, default="male_smooth",
                    choices=list(VOICES.keys()))
     p.add_argument("--voice-ar",      type=str, default="female_warm",
                    choices=list(VOICES.keys()))
     
-    # Audio
     p.add_argument("--music-volume",  type=float, default=0.12)
     p.add_argument("--sfx-type",      type=str, default="swoosh",
                    choices=["swoosh","whoosh"])
     
-    # Export
     p.add_argument("--formats",       type=str, default="1x1,16x9")
     p.add_argument("--no-export",     action="store_true")
     
-    # Modes
     p.add_argument("--script-only",   action="store_true",
                    help="Show scripts only, no rendering")
     p.add_argument("--no-video",      action="store_true",
@@ -100,7 +90,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--force-ai",      action="store_true",
                    help="Force re-run AI enrichment")
     
-    # Facebook
     p.add_argument("--publish-fb",    action="store_true",
                    help="Force publish even if credentials check fails")
     p.add_argument("--no-publish",    action="store_true",
@@ -111,7 +100,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--publish-pending", action="store_true",
                    help="Publish unpublished videos only")
     
-    # ✨ NEW: AI Cache management
     p.add_argument("--show-ai-cache", type=str, nargs="?", const="all", default=None,
                    help="Show AI cache (all or specific number)")
     p.add_argument("--clear-ai-cache", type=str, default=None,
@@ -157,22 +145,15 @@ def _should_publish(args: argparse.Namespace) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_or_create_ai_data(record: dict, force_ai: bool = False) -> dict:
-    """
-    استرجاع AI data من cache أو توليده.
-    
-    Returns: dict من enrich_record()
-    """
     video_number = str(record["number"])
     title        = record.get("title", "")
     
-    # Check cache
     if not force_ai and has_ai_cache(video_number):
         print(f"\n  ♻️  Using cached AI data for #{video_number}")
         cached = get_ai_cache(video_number)
         if cached:
             return cached
     
-    # Process tagged content (لكل اللغات الموجودة)
     ar_tagged = None
     en_tagged = None
     
@@ -184,7 +165,6 @@ def get_or_create_ai_data(record: dict, force_ai: bool = False) -> dict:
         print(f"\n  🏷️  Parsing EN tags...")
         en_tagged = process_tagged_content(record["en_content"], lang="en")
     
-    # Enrich with Groq (will raise AIEnrichmentError on failure)
     try:
         enriched = enrich_record(
             record,
@@ -195,9 +175,8 @@ def get_or_create_ai_data(record: dict, force_ai: bool = False) -> dict:
     except AIEnrichmentError as e:
         print(f"\n  ❌ AI ENRICHMENT FAILED:")
         print(f"     {e}")
-        raise  # propagate to stop the video
+        raise
     
-    # Save to cache
     save_ai_cache(video_number, title, enriched)
     print(f"  💾 AI data cached for video #{video_number}")
     
@@ -217,20 +196,16 @@ def save_manifest(
     aligned: list = None,
     real_duration: float = None,
 ) -> Path:
-    """حفظ manifest.json مع كل البيانات للـ render."""
-    
     manifest = {
-        # Basic
         "title":         script_data["title"],
-        "sentences":     script_data["sentences"],        # نصوص نظيفة (بدون tags)
-        "tagged_sentences": script_data.get("tagged_sentences", []),  # مع tags
+        "sentences":     script_data["sentences"],
+        "tagged_sentences": script_data.get("tagged_sentences", []),
         "audio":         str(Path(str(audio_path)).resolve()),
         "videos":        [str(Path(str(p)).resolve()) for p in video_paths],
         "duration_s":    real_duration or float(script_data["estimated_seconds"]),
         "lang":          script_data.get("lang", "en"),
         "content_type":  CONTENT_TYPE,
         
-        # ✨ AI-generated data
         "power_words":          script_data.get("power_words", []),
         "pattern_interrupts":   script_data.get("pattern_interrupts", []),
         "engagement_questions": script_data.get("engagement_questions", []),
@@ -238,7 +213,6 @@ def save_manifest(
         "keywords":             script_data.get("visual_keywords", []),
         "analysis":             script_data.get("analysis", {}),
         
-        # Sync
         "word_timeline": timeline or [],
         "aligned":       aligned  or [],
     }
@@ -277,16 +251,12 @@ def produce_audio(
     music_volume: float,
     sfx_type: str,
 ) -> tuple[Path, float, list, list]:
-    """
-    إنتاج الصوت مع tags.
-    """
     tagged_sentences = script_data["tagged_sentences"]
     lang = script_data.get("lang", "en")
     sentences_clean  = [s["text"] for s in tagged_sentences]
     
     print(f"\n  🎙️  {lang.upper()} TTS (voice={voice_key})")
     
-    # ✨ TTS with tags
     synthesize_speech(
         tagged_sentences=tagged_sentences,
         output_path=f"{output_base}_voice",
@@ -369,8 +339,6 @@ def produce_version(
     fb_lang: str = "ar",
     fb_reel: bool = True,
 ) -> dict:
-    """إنتاج نسخة لغة واحدة كاملة."""
-    
     result = {
         "label":     label,
         "final":     None,
@@ -380,7 +348,6 @@ def produce_version(
         "published": False,
     }
 
-    # Resume check
     if not force and is_render_done(video_number, lang):
         existing = get_render_output(video_number, lang)
         print(f"  ⏭️  {label} already rendered → {Path(existing).name}")
@@ -449,11 +416,8 @@ def _do_publish(
     as_reel: bool,
     video_number: str,
 ) -> bool:
-    """نشر فيديو على Facebook مع caption مولّد بالـ AI."""
-    
     fb_lang_key = lang if lang in ("ar", "en") else "ar"
     
-    # احصل على الـ caption من AI data
     captions = ai_data.get("captions", {})
     ai_caption = captions.get(fb_lang_key, "")
     
@@ -467,7 +431,7 @@ def _do_publish(
             record=record,
             lang=fb_lang_key,
             as_reel=as_reel,
-            ai_caption=ai_caption,  # ✨ NEW
+            ai_caption=ai_caption,
         )
         mark_published(video_number, lang)
         return True
@@ -487,8 +451,6 @@ def process_video(
     thumbnail_queue: list,
     should_publish: bool,
 ) -> None:
-    """معالجة فيديو واحد كامل."""
-    
     num   = record["number"]
     title = record["title"]
 
@@ -546,13 +508,10 @@ def process_video(
     print(f"\n  📹 Fetching stock videos...")
     visual_keywords = ai_data.get("visual_keywords", [])
     
-    # نستخدم الجمل من النسخة الأولى المتاحة لتحديد عدد الفيديوهات
     primary_data = ar_data or en_data
     n_sentences  = len(primary_data["sentences"])
     
-    # تأكد من تطابق عدد الـ keywords مع عدد الجمل
     if len(visual_keywords) < n_sentences:
-        # padding
         defaults = [
             ["person thinking", "emotional moment", "deep thought"],
         ]
@@ -561,9 +520,8 @@ def process_video(
     elif len(visual_keywords) > n_sentences:
         visual_keywords = visual_keywords[:n_sentences]
     
-    clip_dur = [
-        primary_data["estimated_seconds"] / n_sentences
-    ] * n_sentences
+    # ✅ FIX: استخدم مدة قصيرة وثابتة (8s) - render.mjs سيعمل loop تلقائياً
+    clip_dur = [CLIP_TARGET_DURATION] * n_sentences
     
     vid_dir = str(Path(out_dir) / f"videos_{num}")
     
@@ -688,21 +646,15 @@ def process_video(
 
 
 def _build_script_data(record: dict, lang: str, ai_data: dict) -> dict:
-    """بناء script_data للغة معينة."""
-    
     tagged_key = f"{lang}_tagged"
     tagged_sentences = ai_data.get(tagged_key, []) or []
     
     if not tagged_sentences:
         return None
     
-    # نصوص نظيفة (بدون tags) - للعرض البصري
     sentences_clean = [s["text"] for s in tagged_sentences]
-    
-    # المحتوى الكامل
     full_script = " ".join(sentences_clean)
     
-    # ملخص الـ tags المستخدمة
     tags_summary = {}
     for sent in tagged_sentences:
         tag = sent.get("final_tag", DEFAULT_TAG)
@@ -712,15 +664,14 @@ def _build_script_data(record: dict, lang: str, ai_data: dict) -> dict:
         "title":             record["title"],
         "hook":              sentences_clean[0] if sentences_clean else "",
         "full_script":       full_script,
-        "sentences":         sentences_clean,         # نظيفة للعرض
-        "tagged_sentences":  tagged_sentences,        # مع tags للصوت
+        "sentences":         sentences_clean,
+        "tagged_sentences":  tagged_sentences,
         "tags_summary":      tags_summary,
         "estimated_seconds": _estimate_duration(full_script),
         "word_count":        len(full_script.split()),
         "lang":              lang,
         "content_type":      CONTENT_TYPE,
         
-        # ✨ من AI data
         "power_words":          ai_data.get("power_words", {}).get(lang, []),
         "pattern_interrupts":   ai_data.get("pattern_interrupts", {}).get(lang, []),
         "engagement_questions": ai_data.get("engagement_questions", {}).get(lang, []),
@@ -731,7 +682,6 @@ def _build_script_data(record: dict, lang: str, ai_data: dict) -> dict:
 
 
 def _display_script_only(record: dict, ai_data: dict) -> None:
-    """عرض السكريبت فقط (بدون render)."""
     print(f"\n  📝 Script preview:")
     
     ar_tagged = ai_data.get("ar_tagged") or []
@@ -751,7 +701,6 @@ def _display_script_only(record: dict, ai_data: dict) -> None:
             text = sent["text"][:70]
             print(f"     {i:>2}. [{tag:12}] {text}")
     
-    # عرض ملخص AI data
     analysis = ai_data.get("analysis", {})
     if analysis:
         print(f"\n  📊 AI Analysis:")
@@ -786,7 +735,6 @@ def _publish_pending(args: argparse.Namespace, all_scripts: list) -> None:
 
         print(f"\n  [{vnum}] {record.get('title','?')} ({lang.upper()}) → {Path(path).name}")
         
-        # Get AI data from cache
         ai_data = get_ai_cache(vnum)
         if not ai_data:
             print(f"  ⚠️  No AI cache for #{vnum} - using basic caption")
@@ -824,7 +772,6 @@ def main() -> None:
             print(f"  🗑️  Cleared {count} entry for video #{args.clear_ai_cache}")
         return
 
-    # ── Validate input ───────────────────────────────────────────────────────
     if not args.input_file:
         print("❌ Error: input_file is required")
         print("Usage: python main.py <excel_file>")
@@ -840,6 +787,7 @@ def main() -> None:
     print(f"  Music      : {args.music_volume}  |  SFX: {args.sfx_type}")
     print(f"  Output     : {args.output_dir}")
     print(f"  Renderer   : {RENDER_SCRIPT.name}")
+    print(f"  Clip Dur   : {CLIP_TARGET_DURATION}s (auto-loop in render)")
     print(f"  FB Publish : {'✅ AUTO' if will_publish else '❌ OFF'}  |  Lang: {args.fb_lang}")
     print(f"  Force AI   : {'✅' if args.force_ai else '❌'}")
     print()
@@ -901,7 +849,6 @@ def main() -> None:
             print(f"  ⏭️  Video #{record['number']} already rendered")
 
             if will_publish:
-                # Get AI data from cache for publishing
                 ai_data = get_ai_cache(str(record["number"]))
                 if not ai_data:
                     print(f"  ⚠️  No AI cache - using basic caption")
