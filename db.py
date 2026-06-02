@@ -1,11 +1,8 @@
 """
 db.py — SQLite database for VSG
-Tracks: used videos, render progress (resume), script metadata, AI cache.
+Tracks: used videos, render progress, script metadata, AI cache.
 
-✨ NEW:
-  - جدول ai_cache لحفظ نتائج Groq (تجنب إعادة التوليد)
-  - دوال show_ai_cache و clear_ai_cache
-  - تتبع المحتوى مع tags
+✨ NEW: hook_keyword column في ai_cache
 """
 
 from __future__ import annotations
@@ -93,7 +90,6 @@ def init_db() -> None:
                     saved_at     TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
-                /* ✨ NEW: AI Cache table */
                 CREATE TABLE IF NOT EXISTS ai_cache (
                     video_number TEXT PRIMARY KEY,
                     title        TEXT,
@@ -105,6 +101,7 @@ def init_db() -> None:
                     hashtags     TEXT,
                     captions     TEXT,
                     accent_colors TEXT,
+                    hook_keyword TEXT,
                     ar_tagged    TEXT,
                     en_tagged    TEXT,
                     created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -132,6 +129,11 @@ def init_db() -> None:
                 pass
             try:
                 c.execute("ALTER TABLE scripts ADD COLUMN en_tags_json TEXT")
+            except sqlite3.OperationalError:
+                pass
+            # ✨ NEW: hook_keyword
+            try:
+                c.execute("ALTER TABLE ai_cache ADD COLUMN hook_keyword TEXT")
             except sqlite3.OperationalError:
                 pass
 
@@ -284,7 +286,6 @@ def save_script_meta(
     en_data: dict,
     ar_data: dict | None = None,
 ) -> None:
-    """حفظ metadata للسكريبت مع tags."""
     ar_tags_json = json.dumps(
         ar_data.get("tags_summary", {}) if ar_data else {},
         ensure_ascii=False
@@ -325,7 +326,6 @@ def save_script_meta(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def has_ai_cache(video_number: str) -> bool:
-    """تحقق إذا كان لدينا cache لـ Groq لهذا الفيديو."""
     row = _conn().execute(
         "SELECT 1 FROM ai_cache WHERE video_number=?",
         (str(video_number),),
@@ -334,7 +334,6 @@ def has_ai_cache(video_number: str) -> bool:
 
 
 def get_ai_cache(video_number: str) -> dict | None:
-    """قراءة الـ AI cache."""
     row = _conn().execute(
         "SELECT * FROM ai_cache WHERE video_number=?",
         (str(video_number),),
@@ -349,6 +348,13 @@ def get_ai_cache(video_number: str) -> dict | None:
         except (json.JSONDecodeError, TypeError):
             return None
     
+    # ✨ NEW: hook_keyword (مع backward compatibility)
+    hook_keyword = ""
+    try:
+        hook_keyword = row["hook_keyword"] or ""
+    except (IndexError, KeyError):
+        hook_keyword = ""
+    
     return {
         "video_number":         row["video_number"],
         "title":                row["title"],
@@ -360,6 +366,7 @@ def get_ai_cache(video_number: str) -> dict | None:
         "hashtags":             safe_json(row["hashtags"]),
         "captions":             safe_json(row["captions"]),
         "accent_colors":        safe_json(row["accent_colors"]),
+        "hook_keyword":         hook_keyword,    # ✨ NEW
         "ar_tagged":            safe_json(row["ar_tagged"]),
         "en_tagged":            safe_json(row["en_tagged"]),
         "created_at":           row["created_at"],
@@ -378,8 +385,8 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
                 """INSERT INTO ai_cache (
                     video_number, title, analysis, power_words, visual_keywords,
                     pattern_interrupts, engagement_questions, hashtags,
-                    captions, accent_colors, ar_tagged, en_tagged
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    captions, accent_colors, hook_keyword, ar_tagged, en_tagged
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(video_number) DO UPDATE SET
                    title=excluded.title,
                    analysis=excluded.analysis,
@@ -390,6 +397,7 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
                    hashtags=excluded.hashtags,
                    captions=excluded.captions,
                    accent_colors=excluded.accent_colors,
+                   hook_keyword=excluded.hook_keyword,
                    ar_tagged=excluded.ar_tagged,
                    en_tagged=excluded.en_tagged,
                    updated_at=CURRENT_TIMESTAMP""",
@@ -403,6 +411,7 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
                     to_json(enriched.get("hashtags")),
                     to_json(enriched.get("captions")),
                     to_json(enriched.get("accent_colors")),
+                    enriched.get("hook_keyword", ""),     # ✨ NEW
                     to_json(enriched.get("ar_tagged")),
                     to_json(enriched.get("en_tagged")),
                 ),
@@ -410,7 +419,6 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
 
 
 def clear_ai_cache(video_number: str | None = None) -> int:
-    """حذف cache (لفيديو معين أو الكل)."""
     with _write_lock:
         with _conn() as c:
             if video_number:
@@ -424,7 +432,6 @@ def clear_ai_cache(video_number: str | None = None) -> int:
 
 
 def show_ai_cache(video_number: str | None = None) -> None:
-    """عرض محتوى الـ cache."""
     if video_number:
         cache = get_ai_cache(video_number)
         if not cache:
@@ -444,6 +451,10 @@ def show_ai_cache(video_number: str | None = None) -> None:
             print(f"     Emotion   : {a.get('primary_emotion')}")
             print(f"     Intensity : {a.get('intensity')}/10")
             print(f"     Tone      : {a.get('tone')}")
+        
+        # ✨ NEW: Hook Keyword
+        if cache.get("hook_keyword"):
+            print(f"\n  🔥 Hook Keyword: '{cache['hook_keyword']}'")
         
         if cache.get("power_words"):
             pw = cache["power_words"]
@@ -483,7 +494,6 @@ def show_ai_cache(video_number: str | None = None) -> None:
         print(f"  {'═' * 60}\n")
     
     else:
-        # عرض جميع الـ cache
         rows = _conn().execute(
             "SELECT video_number, title, created_at, updated_at FROM ai_cache ORDER BY video_number"
         ).fetchall()
