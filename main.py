@@ -2,11 +2,11 @@
 """
 🎬 Video Generator — Visual Addiction System (VAS)
 ✨ NEW Architecture:
-  - Excel = 4 columns only (number, title, ar_content, en_content)
-  - Groq  = generates EVERYTHING else (cached in DB)
-  - Tags  = control voice tone per sentence
-
-✅ FIX: clip durations الآن قصيرة (8s) ليسهل loop-ها في render.mjs
+  - Excel = 4 columns only
+  - Groq generates EVERYTHING else (cached)
+  - Tags control voice tone
+  - ✨ Clips = 3 seconds each (TikTok style)
+  - ✨ HOOK video in first 3 seconds (shocking + dramatic zoom)
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ MIN_S         = 30
 MAX_S         = 90
 RENDER_SCRIPT = Path("remotion/render.mjs")
 
-# ✅ FIX: مدة افتراضية لكل clip (قصيرة ليسهل loop-ها)
-CLIP_TARGET_DURATION = 8.0
+# ✨ FIX: مدة كل clip بالضبط (TikTok style)
+CLIP_DURATION = 3.0
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -81,29 +81,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--formats",       type=str, default="1x1,16x9")
     p.add_argument("--no-export",     action="store_true")
     
-    p.add_argument("--script-only",   action="store_true",
-                   help="Show scripts only, no rendering")
-    p.add_argument("--no-video",      action="store_true",
-                   help="Audio only, skip video render")
-    p.add_argument("--force",         action="store_true",
-                   help="Force re-render even if done")
-    p.add_argument("--force-ai",      action="store_true",
-                   help="Force re-run AI enrichment")
+    p.add_argument("--script-only",   action="store_true")
+    p.add_argument("--no-video",      action="store_true")
+    p.add_argument("--force",         action="store_true")
+    p.add_argument("--force-ai",      action="store_true")
     
-    p.add_argument("--publish-fb",    action="store_true",
-                   help="Force publish even if credentials check fails")
-    p.add_argument("--no-publish",    action="store_true",
-                   help="Disable auto-publish")
+    p.add_argument("--publish-fb",    action="store_true")
+    p.add_argument("--no-publish",    action="store_true")
     p.add_argument("--fb-lang",       type=str, default="ar",
                    choices=["ar","en","both"])
     p.add_argument("--fb-reel",       action="store_true", default=True)
-    p.add_argument("--publish-pending", action="store_true",
-                   help="Publish unpublished videos only")
+    p.add_argument("--publish-pending", action="store_true")
     
-    p.add_argument("--show-ai-cache", type=str, nargs="?", const="all", default=None,
-                   help="Show AI cache (all or specific number)")
-    p.add_argument("--clear-ai-cache", type=str, default=None,
-                   help="Clear AI cache (number or 'all')")
+    p.add_argument("--show-ai-cache", type=str, nargs="?", const="all", default=None)
+    p.add_argument("--clear-ai-cache", type=str, default=None)
     
     return p.parse_args()
 
@@ -141,7 +132,7 @@ def _should_publish(args: argparse.Namespace) -> bool:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🧠 AI ENRICHMENT (with cache)
+# 🧠 AI ENRICHMENT
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_or_create_ai_data(record: dict, force_ai: bool = False) -> dict:
@@ -149,10 +140,14 @@ def get_or_create_ai_data(record: dict, force_ai: bool = False) -> dict:
     title        = record.get("title", "")
     
     if not force_ai and has_ai_cache(video_number):
-        print(f"\n  ♻️  Using cached AI data for #{video_number}")
         cached = get_ai_cache(video_number)
         if cached:
-            return cached
+            # ✨ تحقق من وجود hook_keyword (للـ cache القديم)
+            if cached.get("hook_keyword"):
+                print(f"\n  ♻️  Using cached AI data for #{video_number}")
+                return cached
+            else:
+                print(f"\n  🔄 Cache exists but missing hook_keyword - regenerating...")
     
     ar_tagged = None
     en_tagged = None
@@ -212,6 +207,11 @@ def save_manifest(
         "accent_colors":        script_data.get("accent_colors", []),
         "keywords":             script_data.get("visual_keywords", []),
         "analysis":             script_data.get("analysis", {}),
+        
+        # ✨ NEW: معلومات المقاطع
+        "clip_duration":        CLIP_DURATION,
+        "has_hook":             bool(script_data.get("has_hook", True)),
+        "hook_keyword":         script_data.get("hook_keyword", ""),
         
         "word_timeline": timeline or [],
         "aligned":       aligned  or [],
@@ -463,7 +463,7 @@ def process_video(
         f.strip() for f in args.formats.split(",") if f.strip()
     ]
 
-    # ── 1. AI Enrichment (with cache) ────────────────────────────────────────
+    # ── 1. AI Enrichment ─────────────────────────────────────────────────────
     try:
         ai_data = get_or_create_ai_data(record, force_ai=args.force_ai)
     except AIEnrichmentError as e:
@@ -488,7 +488,7 @@ def process_video(
         _display_script_only(record, ai_data)
         return
     
-    # ── 4. Build script data for both languages ──────────────────────────────
+    # ── 4. Build script data ─────────────────────────────────────────────────
     ar_data = None
     en_data = None
     
@@ -505,29 +505,56 @@ def process_video(
     save_script_meta(num, title, en_data or {}, ar_data)
     
     # ── 5. Fetch videos ──────────────────────────────────────────────────────
-    print(f"\n  📹 Fetching stock videos...")
+    print(f"\n  📹 Fetching stock videos ({CLIP_DURATION}s per clip)...")
     visual_keywords = ai_data.get("visual_keywords", [])
+    hook_keyword    = ai_data.get("hook_keyword", "")
     
     primary_data = ar_data or en_data
-    n_sentences  = len(primary_data["sentences"])
     
-    if len(visual_keywords) < n_sentences:
-        defaults = [
-            ["person thinking", "emotional moment", "deep thought"],
+    # ✨ NEW: حساب عدد المقاطع المطلوبة (3 ثوانٍ لكل مقطع)
+    total_duration = primary_data["estimated_seconds"]
+    n_clips = max(1, int(total_duration / CLIP_DURATION))
+    
+    print(f"  📊 Total duration: {total_duration}s → {n_clips} clips × {CLIP_DURATION}s each")
+    if hook_keyword:
+        print(f"  🔥 HOOK keyword: '{hook_keyword}'")
+    
+    # ✨ بناء قائمة keywords للمقاطع
+    clip_keywords = []
+    
+    # الـ HOOK (أول مقطع)
+    if hook_keyword:
+        clip_keywords.append([hook_keyword, "dramatic close-up", "intense moment"])
+        remaining_clips = n_clips - 1
+    else:
+        remaining_clips = n_clips
+    
+    # باقي المقاطع - نوزّع visual_keywords بالتناوب
+    flat_keywords = []
+    for kws in visual_keywords:
+        if isinstance(kws, list):
+            flat_keywords.extend(kws)
+    
+    if not flat_keywords:
+        flat_keywords = ["person thinking", "emotional moment", "deep thought"]
+    
+    for i in range(remaining_clips):
+        base_idx = i % len(flat_keywords)
+        kws_for_clip = [
+            flat_keywords[base_idx],
+            flat_keywords[(base_idx + 1) % len(flat_keywords)],
+            flat_keywords[(base_idx + 2) % len(flat_keywords)],
         ]
-        while len(visual_keywords) < n_sentences:
-            visual_keywords.append(defaults[0])
-    elif len(visual_keywords) > n_sentences:
-        visual_keywords = visual_keywords[:n_sentences]
+        clip_keywords.append(kws_for_clip)
     
-    # ✅ FIX: استخدم مدة قصيرة وثابتة (8s) - render.mjs سيعمل loop تلقائياً
-    clip_dur = [CLIP_TARGET_DURATION] * n_sentences
+    # ✅ كل مقطع = 3 ثوانٍ بالضبط
+    clip_dur = [CLIP_DURATION] * n_clips
     
     vid_dir = str(Path(out_dir) / f"videos_{num}")
     
     try:
         video_paths = fetch_videos_for_script(
-            keywords_per_sentence=visual_keywords,
+            keywords_per_sentence=clip_keywords,
             clip_durations=clip_dur,
             output_dir=vid_dir,
         )
@@ -567,7 +594,7 @@ def process_video(
     except Exception as e:
         print(f"  ⚠️  Thumbnail HTML: {e}")
 
-    # ── 8. Determine publish languages ───────────────────────────────────────
+    # ── 8. Publish languages ─────────────────────────────────────────────────
     publish_langs = {"both": {"ar", "en"}, "ar": {"ar"}, "en": {"en"}}.get(
         args.fb_lang, {"ar"}
     )
@@ -678,6 +705,10 @@ def _build_script_data(record: dict, lang: str, ai_data: dict) -> dict:
         "accent_colors":        ai_data.get("accent_colors", []),
         "visual_keywords":      ai_data.get("visual_keywords", []),
         "analysis":             ai_data.get("analysis", {}),
+        
+        # ✨ NEW
+        "hook_keyword":         ai_data.get("hook_keyword", ""),
+        "has_hook":             bool(ai_data.get("hook_keyword", "")),
     }
 
 
@@ -708,6 +739,9 @@ def _display_script_only(record: dict, ai_data: dict) -> None:
         print(f"     Emotion   : {analysis.get('primary_emotion')}")
         print(f"     Intensity : {analysis.get('intensity')}/10")
         print(f"     Tone      : {analysis.get('tone')}")
+    
+    if ai_data.get("hook_keyword"):
+        print(f"\n  🔥 Hook keyword: '{ai_data['hook_keyword']}'")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -755,7 +789,6 @@ def main() -> None:
     args = parse_args()
     init_db()
 
-    # ── Cache management commands ────────────────────────────────────────────
     if args.show_ai_cache is not None:
         if args.show_ai_cache == "all":
             show_ai_cache()
@@ -774,20 +807,19 @@ def main() -> None:
 
     if not args.input_file:
         print("❌ Error: input_file is required")
-        print("Usage: python main.py <excel_file>")
         sys.exit(1)
     
     will_publish = _should_publish(args)
 
     print(f"\n{'═'*62}")
-    print(f"  🚀  Video Generator — VAS + AI Enrichment")
+    print(f"  🚀  Video Generator — VAS + AI Enrichment + HOOK")
     print(f"{'═'*62}")
     print(f"  Input      : {args.input_file}")
     print(f"  Voice EN   : {args.voice_en}  |  AR: {args.voice_ar}")
     print(f"  Music      : {args.music_volume}  |  SFX: {args.sfx_type}")
     print(f"  Output     : {args.output_dir}")
     print(f"  Renderer   : {RENDER_SCRIPT.name}")
-    print(f"  Clip Dur   : {CLIP_TARGET_DURATION}s (auto-loop in render)")
+    print(f"  Clip Dur   : {CLIP_DURATION}s (with HOOK in first clip)")
     print(f"  FB Publish : {'✅ AUTO' if will_publish else '❌ OFF'}  |  Lang: {args.fb_lang}")
     print(f"  Force AI   : {'✅' if args.force_ai else '❌'}")
     print()
@@ -797,7 +829,7 @@ def main() -> None:
         print(f"\n📘 Checking Facebook credentials...")
         if not check_credentials():
             if args.publish_fb:
-                print("  ⚠️  Credentials invalid — publish will fail at upload time")
+                print("  ⚠️  Credentials invalid — publish will fail")
             else:
                 print("  ⚠️  Credentials invalid — auto-publish disabled")
                 will_publish = False
@@ -851,7 +883,6 @@ def main() -> None:
             if will_publish:
                 ai_data = get_ai_cache(str(record["number"]))
                 if not ai_data:
-                    print(f"  ⚠️  No AI cache - using basic caption")
                     ai_data = {"captions": {}}
                 
                 out_base = str(Path(args.output_dir) / f"video_{record['number']}")
