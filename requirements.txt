@@ -5,16 +5,13 @@ openpyxl
 requests
 playwright
 
-# ── ✨ WhisperX (with COMPATIBLE versions) ───────────────────────
-# مهم جداً: استخدم هذه الإصدارات المختبرة بالضبط
-whisperx==3.1.1
+# ── ✨ WhisperX dependencies (compatible versions) ──────────────
 faster-whisper==1.0.3
 ctranslate2==4.4.0
 transformers==4.39.3
-
-# pyannote للـ alignment
 pyannote.audio==3.1.1
-
-# Helpers
 numpy<2.0
 ffmpeg-python
+
+# ⚠️ ملاحظة: whisperx يُثبّت يدوياً في run.yml (بدون deps)
+# لتجنب تحديث PyTorch
