@@ -115,7 +115,7 @@ jobs:
           cache: 'pip'
 
       # ═══════════════════════════════════════════════════════════════
-      # 3. ✨ FIX: Install PyTorch (CPU - COMPATIBLE versions)
+      # 3. ✨ Install PyTorch (CPU - COMPATIBLE versions)
       # ═══════════════════════════════════════════════════════════════
       - name: 🔥 Install PyTorch (CPU - COMPATIBLE versions)
         run: |
@@ -129,14 +129,18 @@ jobs:
           python -c "import torchaudio; print(f'✅ TorchAudio: {torchaudio.__version__}')"
 
       # ═══════════════════════════════════════════════════════════════
-      # 4. ✨ FIX: Install Dependencies (whisperx without deps)
+      # 4. ✨ Install Python Dependencies (whisperx with manual deps)
       # ═══════════════════════════════════════════════════════════════
       - name: 📦 Install Python dependencies
         run: |
           # ✅ تثبيت requirements (بدون whisperx)
           pip install -r requirements.txt
           
-          # ✅ تثبيت whisperx بدون deps (لتجنب تحديث PyTorch)
+          # ✅ تثبيت dependencies الخاصة بـ whisperx يدوياً
+          # (بدلاً من السماح لـ whisperx بتحديث PyTorch)
+          pip install nltk
+          
+          # ✅ تثبيت whisperx بدون deps (لحماية PyTorch)
           pip install --no-deps whisperx==3.1.1
           
           # تأكد PyTorch لم يتغيّر
@@ -217,7 +221,7 @@ jobs:
         run: npx playwright install chromium
 
       # ═══════════════════════════════════════════════════════════════
-      # 9. Cache WhisperX Models (✨ غيّرنا الـ key إلى v4)
+      # 9. Cache WhisperX Models
       # ═══════════════════════════════════════════════════════════════
       - name: 💾 Cache WhisperX models
         id: cache-whisperx
