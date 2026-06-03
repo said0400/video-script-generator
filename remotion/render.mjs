@@ -1,10 +1,12 @@
-// remotion/render.mjs — KCS + Per-Line Background + Whisper Sync
-// ✨ النسخة الكاملة المحسّنة:
-//    - خلفية تتماشى مع حجم النص (ليست مستطيل ثابت)
-//    - خلفية سوداء داكنة + نص أبيض
-//    - مزامنة دقيقة مع الصوت من Whisper word_timeline
+// remotion/render.mjs — KCS + Full Sentence Display + Whisper Sync
+// ✨ النسخة النهائية:
+//    - كل جملة من Excel تظهر كاملة (عدة سطور إن لزم)
+//    - حجم خط ديناميكي حسب طول الجملة
+//    - Karaoke effect (الكلمة الحالية ذهبية)
+//    - خلفية سوداء داكنة تتماشى مع كل سطر
+//    - الكلمات القوية: خلفية حمراء + ذهبي + وحدها
 //    - عنوان من Excel (أحمر ساطع + دائري)
-//    - الكلمات القوية: خلفية حمراء + لون أصفر
+//    - مزامنة دقيقة من Whisper
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync,
          symlinkSync, existsSync } from "fs";
@@ -57,13 +59,7 @@ console.log(`🎯 Word timeline: ${word_timeline.length} events | Aligned: ${ali
 // ═════════════════════════════════════════════════════════════════════════════
 
 const KCS = {
-  WORDS_PER_CHUNK_MAX: 4,
-  MAX_WORDS_PER_LINE: 3,
-  
-  NORMAL_SIZE_AR:  72,
-  NORMAL_SIZE_EN:  68,
-  
-  FADE_IN_FRAMES:  3,
+  FADE_IN_FRAMES: 3,
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -141,7 +137,6 @@ const esc = s => (s||"").toString()
 function buildWordTimeline() {
   const wordTimings = [];
   
-  // ✅ الأولوية 1: استخدام word_timeline من Whisper إذا متاح
   if (aligned && aligned.length > 0) {
     console.log("📝 Using Whisper word_timeline for precise sync");
     
@@ -162,7 +157,6 @@ function buildWordTimeline() {
           });
         }
       } else {
-        // الجملة بدون word-level timing - نقسّمها بالتساوي
         const sentenceWords = sentence.sentence.trim().split(/\s+/).filter(Boolean);
         const sStart = sentence.start;
         const sEnd = sentence.end;
@@ -181,7 +175,6 @@ function buildWordTimeline() {
       }
     }
   } else {
-    // ✅ Fallback: تقسيم متساوٍ بناءً على المدة الكلية
     console.log("⚠️  No Whisper timeline - using equal distribution");
     
     let totalWords = 0;
@@ -213,11 +206,12 @@ function buildWordTimeline() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 📦 BUILD CHUNKS FROM WORD TIMELINE
+// 📦 ✨ BUILD CHUNKS — جملة كاملة = chunk واحد
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildChunks(wordTimings) {
   const chunks = [];
+  let currentSentenceIdx = -1;
   let buffer = [];
   
   const flushBuffer = () => {
@@ -237,15 +231,18 @@ function buildChunks(wordTimings) {
   for (let i = 0; i < wordTimings.length; i++) {
     const wt = wordTimings[i];
     const isPower = isPowerWord(wt.word);
-    const isNewSentence = buffer.length > 0 && 
-                          buffer[buffer.length - 1].sentence_idx !== wt.sentence_idx;
+    const isNewSentence = currentSentenceIdx !== -1 && 
+                          currentSentenceIdx !== wt.sentence_idx;
     
+    // ✨ عند جملة جديدة: اطبع الـ buffer السابق
     if (isNewSentence) {
       flushBuffer();
     }
     
+    currentSentenceIdx = wt.sentence_idx;
+    
     if (isPower) {
-      // كلمة قوية → chunk منفصل
+      // ✨ كلمة قوية: اطبع ما قبلها + اعرضها وحدها
       flushBuffer();
       chunks.push({
         words: [wt.word],
@@ -256,34 +253,73 @@ function buildChunks(wordTimings) {
         sentence_idx: wt.sentence_idx,
       });
     } else {
+      // ✨ كلمة عادية: أضفها للجملة الحالية (بدون حد!)
       buffer.push(wt);
-      
-      if (buffer.length >= KCS.WORDS_PER_CHUNK_MAX) {
-        flushBuffer();
-      }
     }
   }
   
+  // اطبع آخر buffer
   flushBuffer();
   
-  console.log(`📦 Total chunks: ${chunks.length}`);
+  console.log(`📦 Total chunks: ${chunks.length} (full sentences + power words)`);
+  
+  // Debug: اعرض كل chunk
+  chunks.forEach((c, i) => {
+    const preview = c.words.slice(0, 5).join(" ");
+    const more = c.words.length > 5 ? `... (+${c.words.length - 5} words)` : "";
+    const tag = c.hasPower ? "🔥 POWER" : "📝 SENTENCE";
+    console.log(`   ${i+1}. [${tag}] ${preview}${more} (${c.start.toFixed(2)}s → ${c.end.toFixed(2)}s)`);
+  });
+  
   return chunks;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 📐 LINE SPLITTING
+// 📐 ✨ LINE SPLITTING — توزيع ذكي على عدة سطور
 // ═════════════════════════════════════════════════════════════════════════════
 
 function splitChunkIntoLines(words) {
-  if (words.length <= KCS.MAX_WORDS_PER_LINE) {
+  if (words.length <= 3) {
     return [words];
   }
-  const mid = Math.ceil(words.length / 2);
-  return [words.slice(0, mid), words.slice(mid)];
+  
+  if (words.length <= 6) {
+    const mid = Math.ceil(words.length / 2);
+    return [words.slice(0, mid), words.slice(mid)];
+  }
+  
+  if (words.length <= 9) {
+    const third = Math.ceil(words.length / 3);
+    return [
+      words.slice(0, third),
+      words.slice(third, third * 2),
+      words.slice(third * 2),
+    ];
+  }
+  
+  if (words.length <= 12) {
+    const quarter = Math.ceil(words.length / 4);
+    return [
+      words.slice(0, quarter),
+      words.slice(quarter, quarter * 2),
+      words.slice(quarter * 2, quarter * 3),
+      words.slice(quarter * 3),
+    ];
+  }
+  
+  // جمل طويلة جداً: 5 سطور
+  const fifth = Math.ceil(words.length / 5);
+  return [
+    words.slice(0, fifth),
+    words.slice(fifth, fifth * 2),
+    words.slice(fifth * 2, fifth * 3),
+    words.slice(fifth * 3, fifth * 4),
+    words.slice(fifth * 4),
+  ];
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎨 HTML BUILDER — خلفية تتماشى مع حجم النص (سوداء داكنة + أبيض)
+// 🎨 HTML BUILDER — جملة كاملة + خلفية تتماشى مع النص
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildKaraokeHTML(opts) {
@@ -310,10 +346,24 @@ function buildKaraokeHTML(opts) {
   // تحقق إذا الـ chunk يحتوي كلمة قوية واحدة فقط
   const showPowerWordSolo = chunk.hasPower && allWords.length === 1;
   
+  // ✨ حساب حجم الخط ديناميكياً حسب طول الجملة
+  let fontSize;
+  if (allWords.length <= 4) {
+    fontSize = ar ? 80 : 76;
+  } else if (allWords.length <= 8) {
+    fontSize = ar ? 68 : 64;
+  } else if (allWords.length <= 12) {
+    fontSize = ar ? 58 : 54;
+  } else if (allWords.length <= 16) {
+    fontSize = ar ? 50 : 46;
+  } else {
+    fontSize = ar ? 44 : 40;
+  }
+  
   let mainContentHTML = "";
   
   if (showPowerWordSolo) {
-    // 🟡 الكلمة القوية وحدها - خلفية حمراء + لون أصفر
+    // 🟡 الكلمة القوية وحدها
     mainContentHTML = `
       <div class="power-word-container">
         <div class="power-word-box">
@@ -322,7 +372,7 @@ function buildKaraokeHTML(opts) {
       </div>
     `;
   } else {
-    // 📝 النص العادي - خلفية تتماشى مع كل سطر
+    // 📝 ✨ الجملة الكاملة - كل الكلمات تظهر معاً
     const lines = splitChunkIntoLines(allWords);
     
     let wordCounter = 0;
@@ -331,24 +381,32 @@ function buildKaraokeHTML(opts) {
         const isCurrent = wordCounter === currentWordIdx;
         const isPast    = wordCounter < currentWordIdx;
         
+        // ✨ Karaoke effect
         let opacity;
-        if (isCurrent) opacity = 1.0;
-        else if (isPast) opacity = 0.85;
-        else opacity = 0.55;
+        let color;
+        if (isCurrent) {
+          opacity = 1.0;
+          color = "#FFD700";        // ⭐ ذهبي للكلمة الحالية
+        } else if (isPast) {
+          opacity = 1.0;
+          color = "#FFFFFF";        // أبيض للسابقة
+        } else {
+          opacity = 0.70;
+          color = "#CCCCCC";        // رمادي فاتح للقادمة
+        }
         
         wordCounter++;
         
-        return `<span class="word" style="opacity: ${opacity};">${esc(word)}</span>`;
+        return `<span class="word" style="opacity: ${opacity}; color: ${color};">${esc(word)}</span>`;
       }).join(" ");
       
-      // ✨ كل سطر بخلفيته الخاصة (تتماشى مع طول السطر)
       return `<div class="line-container">
         <span class="line-bg">${wordsHTML}</span>
       </div>`;
     }).join("");
     
     mainContentHTML = `
-      <div class="text-container">
+      <div class="text-container" style="font-size: ${fontSize}px;">
         ${linesHTML}
       </div>
     `;
@@ -396,7 +454,7 @@ function buildKaraokeHTML(opts) {
     }
     
     /* ════════════════════════════════════════════════════════════ */
-    /* ✨ العنوان - أنزل للأسفل + أحمر ساطع */
+    /* ✨ العنوان */
     /* ════════════════════════════════════════════════════════════ */
     .title-container{
       position:absolute;
@@ -438,7 +496,7 @@ function buildKaraokeHTML(opts) {
     }
     
     /* ════════════════════════════════════════════════════════════ */
-    /* 📝 ✨ النص العادي - خلفية تتماشى مع حجم السطر */
+    /* 📝 ✨ الجملة الكاملة - خلفية تتماشى مع كل سطر */
     /* ════════════════════════════════════════════════════════════ */
     .text-container{
       position:absolute;
@@ -457,31 +515,29 @@ function buildKaraokeHTML(opts) {
     .line-container{
       display:block;
       text-align:center;
-      margin-bottom:14px;
+      margin-bottom:10px;
     }
     
     .line-container:last-child{
       margin-bottom:0;
     }
     
-    /* ✨ الخلفية تتماشى مع طول النص (ليست عرض كامل) */
+    /* ✨ الخلفية تتماشى مع طول النص */
     .line-bg{
-      display:inline-block;          /* ⬅️ يأخذ حجم النص فقط */
-      background:rgba(0,0,0,0.92);   /* ⬛ خلفية سوداء داكنة */
-      padding:14px 32px;             /* ⬅️ padding متناسب */
-      border-radius:9999px;          /* ⭕ زوايا دائرية كاملة */
+      display:inline-block;
+      background:rgba(0,0,0,0.92);
+      padding:12px 28px;
+      border-radius:9999px;
       max-width:100%;
     }
     
     .word{
       font-family:${font};
-      font-size:${ar ? KCS.NORMAL_SIZE_AR : KCS.NORMAL_SIZE_EN}px;
       font-weight:900;
-      color:#FFFFFF;                 /* ⬜ أبيض ناصع */
-      line-height:1.2;
+      line-height:1.3;
       display:inline;
-      margin:0 6px;
-      transition:opacity 0.15s ease-out;
+      margin:0 5px;
+      transition:opacity 0.15s ease-out, color 0.15s ease-out;
     }
     
     /* ════════════════════════════════════════════════════════════ */
@@ -560,17 +616,13 @@ function buildKaraokeHTML(opts) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildFrameStateMap() {
-  // 1. بناء word timeline (من Whisper أو fallback)
   const wordTimings = buildWordTimeline();
-  
-  // 2. تجميع في chunks
   const chunks = buildChunks(wordTimings);
   
   if (chunks.length === 0) {
     return [];
   }
   
-  // 3. بناء الـ frame map
   const map = new Array(totalFrames).fill(null);
   
   for (let f = 0; f < totalFrames; f++) {
@@ -589,7 +641,6 @@ function buildFrameStateMap() {
       }
     }
     
-    // إذا لم نجد، استخدم آخر chunk
     if (!currentChunk) {
       if (t < chunks[0].start) {
         currentChunk = chunks[0];
@@ -934,7 +985,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log("\n🚀 Starting KCS Renderer + Per-Line BG + Whisper Sync\n");
+  console.log("\n🚀 Starting KCS Renderer + Full Sentence Display\n");
 
   const frameStateMap = buildFrameStateMap();
 
