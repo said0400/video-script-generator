@@ -115,31 +115,25 @@ jobs:
           cache: 'pip'
 
       # ═══════════════════════════════════════════════════════════════
-      # 3. ✨ Install PyTorch CPU
+      # 3. Install PyTorch CPU
       # ═══════════════════════════════════════════════════════════════
       - name: 🔥 Install PyTorch (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
-          
-          # PyTorch CPU
           pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          
           python -c "import torch; print(f'✅ PyTorch: {torch.__version__}')"
           python -c "import torchaudio; print(f'✅ TorchAudio: {torchaudio.__version__}')"
 
       # ═══════════════════════════════════════════════════════════════
-      # 4. ✨ Install WhisperX from GitHub (latest, compatible)
+      # 4. Install WhisperX from GitHub
       # ═══════════════════════════════════════════════════════════════
       - name: 📦 Install WhisperX (from GitHub)
         run: |
-          # Install WhisperX from GitHub (latest version)
           pip install git+https://github.com/m-bain/whisperX.git
-          
-          # تحقق
-          python -c "import whisperx; print(f'✅ WhisperX installed')"
+          python -c "import whisperx; print('✅ WhisperX installed')"
 
       # ═══════════════════════════════════════════════════════════════
-      # 5. Install Other Python Dependencies
+      # 5. Install Python Dependencies
       # ═══════════════════════════════════════════════════════════════
       - name: 📦 Install Python dependencies
         run: |
@@ -233,7 +227,7 @@ jobs:
           if [ "${{ steps.cache-whisperx.outputs.cache-hit }}" == 'true' ]; then
             echo "✅ Using cached WhisperX models (faster!)"
           else
-            echo "📥 Will download WhisperX models on first run"
+            echo "📥 Will download WhisperX models on first run (~2 GB)"
           fi
 
       # ═══════════════════════════════════════════════════════════════
