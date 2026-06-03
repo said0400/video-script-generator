@@ -287,7 +287,7 @@ def produce_audio(
 
     timeline, aligned = [], []
     try:
-        word_ts = get_word_timestamps(wav_path) if wav_path else []
+        word_ts = get_word_timestamps(wav_path, lang=lang) if wav_path else []
         timeline, aligned = build_word_timeline(sentences_clean, word_ts, real_dur)
         print(f"  ✅ Sync: {len(timeline)} events, {len(aligned)} segments")
     except Exception as e:
