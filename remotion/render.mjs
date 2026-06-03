@@ -1,12 +1,10 @@
-// remotion/render.mjs — KCS + Full Sentence Display + Whisper Sync
+// remotion/render.mjs — KCS + Per-Word Sync with WhisperX
 // ✨ النسخة النهائية:
-//    - كل جملة من Excel تظهر كاملة (عدة سطور إن لزم)
-//    - حجم خط ديناميكي حسب طول الجملة
-//    - Karaoke effect (الكلمة الحالية ذهبية)
-//    - خلفية سوداء داكنة تتماشى مع كل سطر
-//    - الكلمات القوية: خلفية حمراء + ذهبي + وحدها
+//    - مزامنة دقيقة مع كل كلمة (من WhisperX)
 //    - عنوان من Excel (أحمر ساطع + دائري)
-//    - مزامنة دقيقة من Whisper
+//    - خلفية سوداء داكنة + نص أبيض + Karaoke ذهبي
+//    - الكلمات القوية: خلفية حمراء + ذهبي (وحدها)
+//    - كل 3 ثوانٍ فيديو جديد + Zoom in
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync,
          symlinkSync, existsSync } from "fs";
@@ -206,7 +204,7 @@ function buildWordTimeline() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 📦 ✨ BUILD CHUNKS — جملة كاملة = chunk واحد
+// 📦 ✨ FIXED: BUILD CHUNKS — مزامنة دقيقة مع كل كلمة
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildChunks(wordTimings) {
@@ -253,7 +251,7 @@ function buildChunks(wordTimings) {
         sentence_idx: wt.sentence_idx,
       });
     } else {
-      // ✨ كلمة عادية: أضفها للجملة الحالية (بدون حد!)
+      // كلمة عادية: أضفها للجملة الحالية
       buffer.push(wt);
     }
   }
@@ -261,21 +259,12 @@ function buildChunks(wordTimings) {
   // اطبع آخر buffer
   flushBuffer();
   
-  console.log(`📦 Total chunks: ${chunks.length} (full sentences + power words)`);
-  
-  // Debug: اعرض كل chunk
-  chunks.forEach((c, i) => {
-    const preview = c.words.slice(0, 5).join(" ");
-    const more = c.words.length > 5 ? `... (+${c.words.length - 5} words)` : "";
-    const tag = c.hasPower ? "🔥 POWER" : "📝 SENTENCE";
-    console.log(`   ${i+1}. [${tag}] ${preview}${more} (${c.start.toFixed(2)}s → ${c.end.toFixed(2)}s)`);
-  });
-  
+  console.log(`📦 Total chunks: ${chunks.length}`);
   return chunks;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 📐 ✨ LINE SPLITTING — توزيع ذكي على عدة سطور
+// 📐 LINE SPLITTING — توزيع ذكي على عدة سطور
 // ═════════════════════════════════════════════════════════════════════════════
 
 function splitChunkIntoLines(words) {
@@ -307,7 +296,7 @@ function splitChunkIntoLines(words) {
     ];
   }
   
-  // جمل طويلة جداً: 5 سطور
+  // جمل طويلة: 5 سطور
   const fifth = Math.ceil(words.length / 5);
   return [
     words.slice(0, fifth),
@@ -372,7 +361,7 @@ function buildKaraokeHTML(opts) {
       </div>
     `;
   } else {
-    // 📝 ✨ الجملة الكاملة - كل الكلمات تظهر معاً
+    // 📝 الجملة الكاملة - كل الكلمات تظهر معاً
     const lines = splitChunkIntoLines(allWords);
     
     let wordCounter = 0;
@@ -612,7 +601,7 @@ function buildKaraokeHTML(opts) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎬 BUILD FRAME STATE MAP — مزامنة دقيقة من Whisper
+// 🎬 ✨ FIXED: BUILD FRAME STATE MAP — مزامنة دقيقة من Whisper word timings
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildFrameStateMap() {
@@ -628,19 +617,29 @@ function buildFrameStateMap() {
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
     
-    // ابحث عن الـ chunk الحالي
+    // ✨ ابحث عن الـ chunk الحالي بدقة باستخدام timings الفعلية
     let currentChunk = null;
     let currentChunkIdx = 0;
     
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
+      
+      // الـ chunk يبدأ في chunk.start وينتهي في chunk.end
       if (t >= chunk.start && t < chunk.end) {
+        currentChunk = chunk;
+        currentChunkIdx = i;
+        break;
+      }
+      
+      // إذا الوقت بين chunks، استخدم الـ chunk السابق
+      if (i < chunks.length - 1 && t >= chunk.end && t < chunks[i + 1].start) {
         currentChunk = chunk;
         currentChunkIdx = i;
         break;
       }
     }
     
+    // إذا لم نجد، استخدم آخر chunk أو أول chunk
     if (!currentChunk) {
       if (t < chunks[0].start) {
         currentChunk = chunks[0];
@@ -651,19 +650,24 @@ function buildFrameStateMap() {
       }
     }
     
-    // ابحث عن الكلمة الحالية داخل الـ chunk
+    // ✨ ابحث عن الكلمة الحالية بدقة باستخدام word timings
     let currentWordIdx = 0;
     for (let i = 0; i < currentChunk.wordTimings.length; i++) {
       const wt = currentChunk.wordTimings[i];
-      if (t >= wt.start && t < wt.end) {
+      
+      // الكلمة الحالية: الوقت بين start و end
+      if (t >= wt.start && t <= wt.end) {
         currentWordIdx = i;
         break;
-      } else if (t >= wt.end) {
+      }
+      
+      // إذا تجاوزنا الكلمة، حدّث المؤشر
+      if (t > wt.end) {
         currentWordIdx = i;
       }
     }
     
-    // Fade in
+    // Fade in بسيط في بداية كل chunk
     const chunkStartFrame = Math.floor(currentChunk.start * FPS);
     const framesSinceChunkStart = f - chunkStartFrame;
     const fadeProgress = Math.max(0, Math.min(framesSinceChunkStart / KCS.FADE_IN_FRAMES, 1.0));
@@ -678,14 +682,24 @@ function buildFrameStateMap() {
   }
   
   // إحصائيات
-  const sampleEvents = [0, Math.floor(totalFrames * 0.25), Math.floor(totalFrames * 0.5), Math.floor(totalFrames * 0.75)];
   console.log("\n📊 Sample sync points:");
+  const sampleEvents = [
+    0, 
+    Math.floor(totalFrames * 0.25), 
+    Math.floor(totalFrames * 0.5), 
+    Math.floor(totalFrames * 0.75)
+  ];
+  
   sampleEvents.forEach(f => {
     if (map[f]) {
       const t = (f / FPS).toFixed(2);
       const chunk = map[f].chunk;
-      const word = chunk.words[map[f].current_word_idx];
-      console.log(`   ${t}s → chunk ${map[f].chunk_idx} | word: "${word}"`);
+      const wordIdx = map[f].current_word_idx;
+      const word = chunk.words[wordIdx] || "?";
+      const wt = chunk.wordTimings[wordIdx];
+      if (wt) {
+        console.log(`   ${t}s → chunk ${map[f].chunk_idx} | word "${word}" (${wt.start.toFixed(2)}s-${wt.end.toFixed(2)}s)`);
+      }
     }
   });
   
@@ -985,7 +999,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log("\n🚀 Starting KCS Renderer + Full Sentence Display\n");
+  console.log("\n🚀 Starting KCS Renderer + Per-Word Sync\n");
 
   const frameStateMap = buildFrameStateMap();
 
