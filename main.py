@@ -7,8 +7,7 @@
   - Tags control voice tone
   - Clips = 3 seconds each (TikTok style)
   - HOOK video in first 3 seconds (shocking + zoom)
-  - ✨ NEW: Attractive title + emojis (top of video)
-  - ✨ NEW: Text backgrounds (black for normal, red for power words)
+  - WhisperX for precise word sync
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ from export        import export_all
 from thumb_gen     import generate_thumbnail_html
 from thumbnail     import render_thumbnails_batch
 from sync          import (get_audio_duration, get_word_timestamps,
-                            build_word_timeline, _duration_sync)
+                            build_word_timeline)
 from audio_manager import mix_voice_music_sfx
 from facebook      import (publish_to_facebook,
                             credentials_available, check_credentials)
@@ -144,7 +143,6 @@ def get_or_create_ai_data(record: dict, force_ai: bool = False) -> dict:
     if not force_ai and has_ai_cache(video_number):
         cached = get_ai_cache(video_number)
         if cached:
-            # ✨ تحقق من وجود البيانات الجديدة (للـ cache القديم)
             if cached.get("hook_keyword") and cached.get("attractive_title"):
                 print(f"\n  ♻️  Using cached AI data for #{video_number}")
                 return cached
@@ -195,7 +193,6 @@ def save_manifest(
 ) -> Path:
     manifest = {
         "title":         script_data["title"],
-        # ✨ NEW: Display title with emojis
         "display_title": script_data.get("display_title", script_data["title"]),
         "emoji_left":    script_data.get("emoji_left", "🔥"),
         "emoji_right":   script_data.get("emoji_right", "💥"),
@@ -287,15 +284,12 @@ def produce_audio(
 
     timeline, aligned = [], []
     try:
+        # ✅ مهم: تمرير اللغة لـ WhisperX
         word_ts = get_word_timestamps(wav_path, lang=lang) if wav_path else []
         timeline, aligned = build_word_timeline(sentences_clean, word_ts, real_dur)
         print(f"  ✅ Sync: {len(timeline)} events, {len(aligned)} segments")
     except Exception as e:
         print(f"  ⚠️  Sync error: {e}")
-        try:
-            timeline, aligned = _duration_sync(sentences_clean, real_dur)
-        except Exception:
-            pass
 
     clip_dur  = _clip_durations_from_aligned(aligned, real_dur, len(sentences_clean))
     mixed_out = f"{output_base}_audio_mixed.aac"
@@ -489,7 +483,6 @@ def process_video(
         print(f"\n  🇬🇧  English content:")
         print_tags_summary(en_tagged, lang="en")
     
-    # ✨ NEW: Show display title
     attractive = ai_data.get("attractive_title", {})
     if attractive:
         print(f"\n  📌 Display Title: {attractive.get('emoji_left', '🔥')} {attractive.get('title', '')} {attractive.get('emoji_right', '💥')}")
@@ -522,7 +515,6 @@ def process_video(
     
     primary_data = ar_data or en_data
     
-    # حساب عدد المقاطع
     total_duration = primary_data["estimated_seconds"]
     n_clips = max(1, int(total_duration / CLIP_DURATION))
     
@@ -530,7 +522,6 @@ def process_video(
     if hook_keyword:
         print(f"  🔥 HOOK keyword: '{hook_keyword}'")
     
-    # بناء قائمة keywords للمقاطع
     clip_keywords = []
     
     if hook_keyword:
@@ -695,7 +686,6 @@ def _build_script_data(record: dict, lang: str, ai_data: dict) -> dict:
         tag = sent.get("final_tag", DEFAULT_TAG)
         tags_summary[tag] = tags_summary.get(tag, 0) + 1
     
-    # ✨ NEW: استخدم العنوان المحسّن من AI
     attractive_title = ai_data.get("attractive_title") or {}
     display_title = attractive_title.get("title") or record["title"]
     emoji_left    = attractive_title.get("emoji_left", "🔥")
@@ -731,7 +721,6 @@ def _build_script_data(record: dict, lang: str, ai_data: dict) -> dict:
 def _display_script_only(record: dict, ai_data: dict) -> None:
     print(f"\n  📝 Script preview:")
     
-    # ✨ NEW: Show attractive title
     attractive = ai_data.get("attractive_title", {})
     if attractive:
         print(f"\n  📌 Display Title:")
@@ -834,7 +823,7 @@ def main() -> None:
     will_publish = _should_publish(args)
 
     print(f"\n{'═'*62}")
-    print(f"  🚀  Video Generator — VAS + AI + Title + Backgrounds")
+    print(f"  🚀  Video Generator — VAS + AI + WhisperX")
     print(f"{'═'*62}")
     print(f"  Input      : {args.input_file}")
     print(f"  Voice EN   : {args.voice_en}  |  AR: {args.voice_ar}")
