@@ -1,4 +1,4 @@
-name: 🎬 Motivational Video Generator (KCS + WhisperX)
+name: 🎬 Motivational Video Generator (WhisperX)
 
 on:
   workflow_dispatch:
@@ -115,46 +115,39 @@ jobs:
           cache: 'pip'
 
       # ═══════════════════════════════════════════════════════════════
-      # 3. ✨ Install PyTorch (CPU - COMPATIBLE versions)
+      # 3. ✨ Install PyTorch CPU
       # ═══════════════════════════════════════════════════════════════
-      - name: 🔥 Install PyTorch (CPU - COMPATIBLE versions)
+      - name: 🔥 Install PyTorch (CPU)
         run: |
-          pip install --upgrade pip
+          pip install --upgrade pip setuptools wheel
           
-          # ⚠️ مهم جداً: pin to old PyTorch that works with whisperx
-          pip install torch==2.0.1+cpu torchaudio==2.0.2+cpu \
-            --index-url https://download.pytorch.org/whl/cpu
+          # PyTorch CPU
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
           
           python -c "import torch; print(f'✅ PyTorch: {torch.__version__}')"
           python -c "import torchaudio; print(f'✅ TorchAudio: {torchaudio.__version__}')"
 
       # ═══════════════════════════════════════════════════════════════
-      # 4. ✨ Install Python Dependencies (whisperx with manual deps)
+      # 4. ✨ Install WhisperX from GitHub (latest, compatible)
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📦 Install WhisperX (from GitHub)
+        run: |
+          # Install WhisperX from GitHub (latest version)
+          pip install git+https://github.com/m-bain/whisperX.git
+          
+          # تحقق
+          python -c "import whisperx; print(f'✅ WhisperX installed')"
+
+      # ═══════════════════════════════════════════════════════════════
+      # 5. Install Other Python Dependencies
       # ═══════════════════════════════════════════════════════════════
       - name: 📦 Install Python dependencies
         run: |
-          # ✅ تثبيت requirements (بدون whisperx)
           pip install -r requirements.txt
-          
-          # ✅ تثبيت dependencies الخاصة بـ whisperx يدوياً
-          # (بدلاً من السماح لـ whisperx بتحديث PyTorch)
-          pip install nltk
-          
-          # ✅ تثبيت whisperx بدون deps (لحماية PyTorch)
-          pip install --no-deps whisperx==3.1.1
-          
-          # تأكد PyTorch لم يتغيّر
-          python -c "import torch; print(f'✅ PyTorch still: {torch.__version__}')"
-          python -c "import torchaudio; print(f'✅ TorchAudio still: {torchaudio.__version__}')"
-          
-          # Playwright
           python -m playwright install chromium
-          
-          # تحقق من whisperx
-          python -c "import whisperx; print('✅ WhisperX installed and working')"
 
       # ═══════════════════════════════════════════════════════════════
-      # 5. Setup Node.js
+      # 6. Setup Node.js
       # ═══════════════════════════════════════════════════════════════
       - name: 🟢 Setup Node.js 20
         if: ${{ inputs.script_only == 'false' }}
@@ -163,7 +156,7 @@ jobs:
           node-version: "20"
 
       # ═══════════════════════════════════════════════════════════════
-      # 6. Install Node Dependencies
+      # 7. Install Node Dependencies
       # ═══════════════════════════════════════════════════════════════
       - name: 📦 Install Node dependencies
         if: ${{ inputs.script_only == 'false' }}
@@ -171,7 +164,7 @@ jobs:
         run: npm install
 
       # ═══════════════════════════════════════════════════════════════
-      # 7. Install System Dependencies
+      # 8. Install System Dependencies
       # ═══════════════════════════════════════════════════════════════
       - name: 🔧 Install system dependencies
         if: ${{ inputs.script_only == 'false' }}
@@ -213,7 +206,7 @@ jobs:
           echo "✅ System dependencies installed"
 
       # ═══════════════════════════════════════════════════════════════
-      # 8. Install Playwright Chromium (Node)
+      # 9. Install Playwright Chromium (Node)
       # ═══════════════════════════════════════════════════════════════
       - name: 🌐 Install Playwright Chromium (Node)
         if: ${{ inputs.script_only == 'false' }}
@@ -221,7 +214,7 @@ jobs:
         run: npx playwright install chromium
 
       # ═══════════════════════════════════════════════════════════════
-      # 9. Cache WhisperX Models
+      # 10. Cache WhisperX Models
       # ═══════════════════════════════════════════════════════════════
       - name: 💾 Cache WhisperX models
         id: cache-whisperx
@@ -231,7 +224,7 @@ jobs:
             ~/.cache/whisperx
             ~/.cache/huggingface
             ~/.cache/torch
-          key: whisperx-models-medium-v4
+          key: whisperx-models-v5
           restore-keys: |
             whisperx-models-
 
@@ -240,11 +233,11 @@ jobs:
           if [ "${{ steps.cache-whisperx.outputs.cache-hit }}" == 'true' ]; then
             echo "✅ Using cached WhisperX models (faster!)"
           else
-            echo "📥 Will download WhisperX models on first run (~1.5 GB)"
+            echo "📥 Will download WhisperX models on first run"
           fi
 
       # ═══════════════════════════════════════════════════════════════
-      # 10. Restore SQLite Database (Resume)
+      # 11. Restore SQLite Database (Resume)
       # ═══════════════════════════════════════════════════════════════
       - name: 📥 Restore SQLite database (resume)
         uses: dawidd6/action-download-artifact@v6
@@ -254,7 +247,7 @@ jobs:
           search_artifacts: true
 
       # ═══════════════════════════════════════════════════════════════
-      # 11. Run Generator + Publish
+      # 12. Run Generator + Publish
       # ═══════════════════════════════════════════════════════════════
       - name: 🎬 Run generator + publish
         env:
@@ -289,7 +282,7 @@ jobs:
             $FLAGS
 
       # ═══════════════════════════════════════════════════════════════
-      # 12. Upload Final Videos (9:16)
+      # 13. Upload Final Videos (9:16)
       # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload final videos (9:16)
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
@@ -300,7 +293,7 @@ jobs:
           retention-days: 7
 
       # ═══════════════════════════════════════════════════════════════
-      # 13. Upload Additional Formats
+      # 14. Upload Additional Formats
       # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload additional formats
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
@@ -314,7 +307,7 @@ jobs:
           retention-days: 7
 
       # ═══════════════════════════════════════════════════════════════
-      # 14. Upload SRT Subtitles
+      # 15. Upload SRT Subtitles
       # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload SRT subtitles
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
@@ -325,7 +318,7 @@ jobs:
           retention-days: 30
 
       # ═══════════════════════════════════════════════════════════════
-      # 15. Upload Thumbnails
+      # 16. Upload Thumbnails
       # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload thumbnails
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
@@ -336,7 +329,7 @@ jobs:
           retention-days: 30
 
       # ═══════════════════════════════════════════════════════════════
-      # 16. Upload Audio (audio-only mode)
+      # 17. Upload Audio (audio-only mode)
       # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload audio
         if: ${{ inputs.no_video == 'true' && inputs.script_only == 'false' }}
@@ -347,7 +340,7 @@ jobs:
           retention-days: 7
 
       # ═══════════════════════════════════════════════════════════════
-      # 17. Save SQLite Database (Resume)
+      # 18. Save SQLite Database (Resume)
       # ═══════════════════════════════════════════════════════════════
       - name: 📤 Save SQLite database (resume)
         if: always()
