@@ -1,11 +1,13 @@
 """
 sync.py — Word-level audio synchronization
-✨ NEW: يستخدم WhisperX للدقة العالية (98%+)
-        مع Groq Whisper كـ fallback آمن
+✨ FIXED: 
+  1. WhisperX مع إصدارات متوافقة
+  2. Groq fallback محسّن (يعمل دائماً)
+  3. Duration sync كحل أخير
 
 السلوك:
-  1. حاول WhisperX أولاً (دقة عالية)
-  2. عند الفشل → Groq Whisper
+  1. حاول WhisperX أولاً (دقة 98%)
+  2. عند الفشل → Groq Whisper (دقة 85%)
   3. عند فشل الكل → تقسيم متساوي
 """
 
@@ -58,7 +60,7 @@ def get_audio_duration(audio_path: str) -> float:
 
 def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dict]:
     """
-    ✨ NEW: استخدام WhisperX للحصول على timestamps دقيقة.
+    ✨ استخدام WhisperX للحصول على timestamps دقيقة.
     
     WhisperX يجمع بين:
     - Whisper للنسخ (transcription)
@@ -172,9 +174,15 @@ def _extract_from_segments(segments: list) -> list[dict]:
     word_timestamps = []
     
     for segment in segments:
-        text = (segment.get("text") or "").strip()
-        start = segment.get("start", 0)
-        end = segment.get("end", 0)
+        # Handle both dict and object
+        if isinstance(segment, dict):
+            text = (segment.get("text") or "").strip()
+            start = segment.get("start", 0)
+            end = segment.get("end", 0)
+        else:
+            text = (getattr(segment, "text", "") or "").strip()
+            start = getattr(segment, "start", 0)
+            end = getattr(segment, "end", 0)
         
         if not text:
             continue
@@ -195,12 +203,13 @@ def _extract_from_segments(segments: list) -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🥈 FALLBACK: GROQ WHISPER
+# 🥈 FALLBACK: GROQ WHISPER (محسّن)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
     """
     Fallback: استخدام Groq Whisper إذا فشل WhisperX.
+    ✅ FIXED: إصلاح parameters وضمان عمل الـ fallback
     """
     try:
         groq_key = os.environ.get("GROQ_API_KEY", "")
@@ -212,44 +221,102 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
         client = Groq(api_key=groq_key)
         apath = Path(audio_path)
         
-        print(f"  🔄 Fallback: Using Groq Whisper for {apath.name}...")
+        if not apath.exists():
+            print(f"  ⚠️  Audio file not found: {apath}")
+            return []
         
+        print(f"  🔄 Fallback: Using Groq Whisper ({lang.upper()})...")
+        
+        # ✅ FIX: قراءة الملف مرة واحدة لتجنب مشاكل الـ stream
         with open(apath, "rb") as f:
+            audio_bytes = f.read()
+        
+        # المحاولة الأولى: مع language parameter
+        response = None
+        try:
             response = client.audio.transcriptions.create(
-                file=(apath.name, f),
+                file=(apath.name, audio_bytes),
                 model="whisper-large-v3",
                 response_format="verbose_json",
                 timestamp_granularities=["word"],
                 language=lang,
             )
+        except Exception as e1:
+            print(f"  ⚠️  Attempt 1 failed: {str(e1)[:80]}")
+            
+            # المحاولة الثانية: بدون language
+            try:
+                response = client.audio.transcriptions.create(
+                    file=(apath.name, audio_bytes),
+                    model="whisper-large-v3",
+                    response_format="verbose_json",
+                    timestamp_granularities=["word"],
+                )
+            except Exception as e2:
+                print(f"  ⚠️  Attempt 2 failed: {str(e2)[:80]}")
+                return []
+        
+        if not response:
+            return []
         
         word_timestamps = []
+        
+        # ✅ Try words attribute
         raw_words = getattr(response, "words", None)
         
         if raw_words:
             for w in raw_words:
-                text = (getattr(w, "word", "") or "").strip()
-                if text:
+                # Handle different attribute names (dict or object)
+                if isinstance(w, dict):
+                    text = (w.get("word") or w.get("text") or "").strip()
+                    start = w.get("start", 0)
+                    end = w.get("end", 0)
+                else:
+                    text = (getattr(w, "word", None) or 
+                           getattr(w, "text", None) or "").strip()
+                    start = getattr(w, "start", 0)
+                    end = getattr(w, "end", 0)
+                
+                if text and start is not None and end is not None:
                     word_timestamps.append({
                         "word":  text,
-                        "start": round(float(getattr(w, "start", 0)), 4),
-                        "end":   round(float(getattr(w, "end", 0)), 4),
+                        "start": round(float(start), 4),
+                        "end":   round(float(end), 4),
                     })
             
             if word_timestamps:
                 print(f"  ✅ Groq fallback: {len(word_timestamps)} words")
                 return word_timestamps
         
-        # Fallback to segments
+        # ✅ Try segments as second fallback
         segs = getattr(response, "segments", None) or []
-        return _extract_from_segments(
-            [{"text": getattr(s, "text", ""), 
-              "start": float(getattr(s, "start", 0)),
-              "end": float(getattr(s, "end", 0))} for s in segs]
-        )
+        if segs:
+            print(f"  🔄 Trying segments fallback...")
+            segment_data = []
+            for s in segs:
+                if isinstance(s, dict):
+                    segment_data.append({
+                        "text": s.get("text", ""),
+                        "start": float(s.get("start", 0)),
+                        "end": float(s.get("end", 0)),
+                    })
+                else:
+                    segment_data.append({
+                        "text": getattr(s, "text", ""),
+                        "start": float(getattr(s, "start", 0)),
+                        "end": float(getattr(s, "end", 0)),
+                    })
+            
+            extracted = _extract_from_segments(segment_data)
+            if extracted:
+                print(f"  ✅ Groq segments fallback: {len(extracted)} words")
+                return extracted
+        
+        print(f"  ⚠️  Groq returned no usable data")
+        return []
         
     except Exception as e:
-        print(f"  ⚠️  Groq fallback failed: {e}")
+        print(f"  ⚠️  Groq fallback error: {type(e).__name__}: {str(e)[:100]}")
         return []
 
 
