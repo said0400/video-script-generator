@@ -1,6 +1,6 @@
 """
 ai_enricher.py — Smart AI Assistant powered by Groq
-✨ يولّد كل شيء عدا النصوص الرئيسية (التي تأتي من Excel)
+✨ يولّد كل شيء عدا النصوص الرئيسية والعنوان (التي تأتي من Excel)
 
 الوظائف:
   1. تحليل المحتوى (نوع/مشاعر/شدة)
@@ -13,7 +13,9 @@ ai_enricher.py — Smart AI Assistant powered by Groq
   8. توليد Caption للنشر
   9. اقتراح Accent Colors
   10. توليد Hook Keyword (للفيديو الصادم في البداية)
-  11. ✨ NEW: توليد Attractive Title + Emojis
+
+✅ العنوان: يأتي من Excel كما هو (بدون Groq)
+✅ الإيموجي: ثابت افتراضي (🔥 ... 💥)
 
 السلوك عند الفشل: ⛔ توقف الفيديو نهائياً (لا قيم افتراضية)
 """
@@ -36,6 +38,10 @@ MODEL              = "llama-3.3-70b-versatile"
 MAX_RETRIES        = 3
 RETRY_DELAYS       = [2.0, 5.0, 10.0]
 RATE_LIMIT_WAIT    = 15.0
+
+# ✅ إيموجي افتراضي للعنوان (يمكن تغييرها هنا)
+DEFAULT_EMOJI_LEFT  = "🔥"
+DEFAULT_EMOJI_RIGHT = "💥"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -791,11 +797,9 @@ Your keyword:"""
         operation_name="Hook Keyword",
     )
     
-    # Clean response
     keyword = raw.strip().split("\n")[0].strip()
     keyword = keyword.strip('"').strip("'").strip()
     
-    # Remove common prefixes
     for prefix in ["keyword:", "answer:", "result:", "→", ":"]:
         if keyword.lower().startswith(prefix):
             keyword = keyword[len(prefix):].strip()
@@ -805,105 +809,6 @@ Your keyword:"""
     
     print(f"  ✅ Hook keyword: '{keyword}'")
     return keyword
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 1️⃣1️⃣ ✨ NEW: ATTRACTIVE TITLE + EMOJIS GENERATOR
-# ═════════════════════════════════════════════════════════════════════════════
-
-def generate_attractive_title(title: str, context: dict) -> dict:
-    """
-    ✨ NEW: توليد عنوان احترافي جذاب + إيموجيين مناسبين.
-    
-    Returns: {
-        "title":       "العنوان المحسّن",
-        "emoji_left":  "🔥",
-        "emoji_right": "💥",
-    }
-    """
-    if not title or not title.strip():
-        return {
-            "title": "محتوى مهم",
-            "emoji_left": "🔥",
-            "emoji_right": "💥",
-        }
-    
-    is_ar = bool(re.search(r"[\u0600-\u06FF]", title))
-    lang_name = "Arabic" if is_ar else "English"
-    
-    content_type = context.get('content_type', 'general')
-    emotion      = context.get('primary_emotion', 'curiosity')
-    
-    prompt = f"""You are a viral video title expert for TikTok/Reels.
-
-Original title: "{title}"
-Content type: {content_type}
-Emotion: {emotion}
-Language: {lang_name}
-
-Improve this title to be more attractive and clickbait-style.
-Also suggest 2 PERFECT emojis (one for left side, one for right side).
-
-Requirements:
-- Keep it SHORT (4-7 words max)
-- Make it INTRIGUING and EMOTIONAL
-- Match the {emotion} emotion
-- Use {lang_name} ONLY
-- Emojis should be RELEVANT to content (not generic)
-
-Examples of GOOD title transformations:
-- "كيف تقرأ الناس" → "اكتشف أسرار الناس الخفية"
-- "علامات الخيانة" → "5 علامات صادمة للخيانة"
-- "How to read people" → "Hidden Truths About People"
-
-Emoji examples by content:
-- relationships → 💔 💕 😢 🔥
-- psychology → 🧠 👁️ 🤯 🔮
-- success → 💎 🏆 🚀 ⚡
-- fear/warning → ⚠️ 🚨 😱 🔴
-- money → 💰 💸 📈 🤑
-
-Return ONLY valid JSON:
-{{
-  "title": "improved title here",
-  "emoji_left": "🔥",
-  "emoji_right": "💥"
-}}"""
-
-    raw = _call_groq(
-        prompt,
-        max_tokens=200,
-        temperature=0.7,
-        operation_name="Attractive Title",
-    )
-    
-    try:
-        data = _parse_json_response(raw, dict, "Attractive Title")
-        
-        result = {
-            "title": str(data.get("title", title)).strip()[:100],
-            "emoji_left": str(data.get("emoji_left", "🔥")).strip()[:4],
-            "emoji_right": str(data.get("emoji_right", "💥")).strip()[:4],
-        }
-        
-        # Validation
-        if not result["title"]:
-            result["title"] = title
-        if not result["emoji_left"]:
-            result["emoji_left"] = "🔥"
-        if not result["emoji_right"]:
-            result["emoji_right"] = "💥"
-        
-        print(f"  ✅ Title: {result['emoji_left']} {result['title']} {result['emoji_right']}")
-        return result
-        
-    except (AIEnrichmentError, Exception) as e:
-        print(f"  ⚠️  Title generation failed - using original")
-        return {
-            "title": title,
-            "emoji_left": "🔥",
-            "emoji_right": "💥",
-        }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -918,6 +823,9 @@ def enrich_record(
 ) -> dict:
     """
     تطبيق كل عمليات Groq على record واحد.
+    
+    ✅ العنوان يبقى كما هو من Excel
+    ✅ الإيموجي ثابت افتراضي
     
     Returns:
       dict كامل يحتوي على كل ما يحتاجه النظام
@@ -938,6 +846,7 @@ def enrich_record(
     if verbose:
         print(f"\n  🧠 AI Enrichment for: '{title[:50]}'")
         print(f"  {'─' * 50}")
+        print(f"  📌 Title from Excel: {DEFAULT_EMOJI_LEFT} {title} {DEFAULT_EMOJI_RIGHT}")
     
     # ── 1. Content Analysis ──────────────────────────────────────────────────
     analysis = analyze_content(title, ar_content, en_content)
@@ -1011,12 +920,17 @@ def enrich_record(
     # ── 10. Hook Keyword ─────────────────────────────────────────────────────
     hook_keyword = generate_hook_keyword(title, ar_content or en_content, analysis)
     
-    # ── 11. ✨ NEW: Attractive Title + Emojis ────────────────────────────────
-    attractive_title = generate_attractive_title(title, analysis)
+    # ── 11. ✅ Title + Emojis (من Excel + إيموجي افتراضي) ───────────────────
+    attractive_title = {
+        "title":       title,                  # ✅ العنوان من Excel كما هو
+        "emoji_left":  DEFAULT_EMOJI_LEFT,     # ✅ إيموجي ثابت
+        "emoji_right": DEFAULT_EMOJI_RIGHT,    # ✅ إيموجي ثابت
+    }
     
     if verbose:
         print(f"  {'─' * 50}")
-        print(f"  ✅ AI enrichment complete (11/11 operations)")
+        print(f"  ✅ AI enrichment complete (10/10 operations)")
+        print(f"  📌 Final title: {attractive_title['emoji_left']} {attractive_title['title']} {attractive_title['emoji_right']}")
     
     return {
         "analysis":             analysis,
@@ -1028,7 +942,7 @@ def enrich_record(
         "captions":             captions,
         "accent_colors":        accent_colors,
         "hook_keyword":         hook_keyword,
-        "attractive_title":     attractive_title,    # ✨ NEW
+        "attractive_title":     attractive_title,    # ✅ من Excel
         "ar_tagged":            ar_tagged,
         "en_tagged":            en_tagged,
     }
