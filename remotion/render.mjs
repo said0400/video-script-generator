@@ -1,8 +1,9 @@
 // remotion/render.mjs — KCS + Title + Power Word Backgrounds
 // ✨ النسخة الكاملة:
-//    - نص أبيض على خلفية سوداء
-//    - الكلمات القوية: لون أصفر على خلفية حمراء (وحدها)
-//    - عنوان احترافي في الأعلى مع إيموجي
+//    - نص أبيض على خلفية سوداء (دائرية)
+//    - الكلمات القوية: لون أصفر على خلفية حمراء (دائرية + وحدها)
+//    - عنوان من Excel مع إيموجي (أحمر ساطع + دائري)
+//    - العنوان أنزل للأسفل (قريب من الوسط)
 //    - كل مقطع 3 ثوانٍ + zoom in
 //    - HOOK في البداية بـ zoom قوي
 
@@ -23,9 +24,9 @@ const props = JSON.parse(readFileSync(manifestPath, "utf-8"));
 
 const {
   title,
-  display_title = title,        // ✨ NEW
-  emoji_left    = "🔥",          // ✨ NEW
-  emoji_right   = "💥",          // ✨ NEW
+  display_title = title,
+  emoji_left    = "🔥",
+  emoji_right   = "💥",
   sentences,
   audio,
   videos,
@@ -135,7 +136,6 @@ function chunkSentence(sentence) {
     const isPower = isPowerWord(word);
     
     if (isPower) {
-      // ✨ كلمة قوية → اعرضها وحدها
       flushBuffer();
       chunks.push({
         words: [word],
@@ -191,7 +191,7 @@ const esc = s => (s||"").toString()
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎨 HTML BUILDER — Title + Text Backgrounds
+// 🎨 HTML BUILDER — تصميم بسيط وأنيق (دائري)
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildKaraokeHTML(opts) {
@@ -217,17 +217,13 @@ function buildKaraokeHTML(opts) {
     : `"Inter","Helvetica Neue",Arial,sans-serif`;
   const titleDir = titleAr ? "rtl" : "ltr";
   
-  // ✨ هل الكلمة الحالية قوية؟
-  const currentWord = allWords[currentWordIdx];
-  const isCurrentWordPower = currentWord && isPowerWord(currentWord);
-  
-  // إذا الـ chunk يحتوي كلمة قوية واحدة فقط، اعرضها بأسلوب خاص
+  // تحقق إذا الـ chunk يحتوي كلمة قوية واحدة فقط
   const showPowerWordSolo = chunk.hasPower && allWords.length === 1;
   
   let mainContentHTML = "";
   
   if (showPowerWordSolo) {
-    // 🟡 الكلمة القوية وحدها - خلفية حمراء + لون أصفر
+    // 🟡 الكلمة القوية وحدها - خلفية حمراء + لون أصفر + دائرية
     mainContentHTML = `
       <div class="power-word-container">
         <div class="power-word-box">
@@ -236,7 +232,7 @@ function buildKaraokeHTML(opts) {
       </div>
     `;
   } else {
-    // 📝 النص العادي - خلفية سوداء + لون أبيض
+    // 📝 النص العادي - خلفية سوداء + لون أبيض + دائرية
     const lines = splitChunkIntoLines(allWords);
     
     let wordCounter = 0;
@@ -248,7 +244,7 @@ function buildKaraokeHTML(opts) {
         let opacity;
         if (isCurrent) opacity = 1.0;
         else if (isPast) opacity = 0.95;
-        else opacity = 0.55;
+        else opacity = 0.60;
         
         wordCounter++;
         
@@ -281,14 +277,14 @@ function buildKaraokeHTML(opts) {
       background:transparent;
     }
     
-    /* تدرج علوي وسفلي */
+    /* تدرج علوي وسفلي خفيف */
     .overlay-top{
       position:absolute;
       top:0;left:0;right:0;
       height:35%;
       background:linear-gradient(to bottom,
-        rgba(0,0,0,0.85) 0%,
-        rgba(0,0,0,0.4) 70%,
+        rgba(0,0,0,0.7) 0%,
+        rgba(0,0,0,0.3) 60%,
         transparent 100%
       );
       pointer-events:none;
@@ -300,8 +296,8 @@ function buildKaraokeHTML(opts) {
       bottom:0;left:0;right:0;
       height:45%;
       background:linear-gradient(to top,
-        rgba(0,0,0,0.85) 0%,
-        rgba(0,0,0,0.4) 60%,
+        rgba(0,0,0,0.7) 0%,
+        rgba(0,0,0,0.3) 60%,
         transparent 100%
       );
       pointer-events:none;
@@ -309,11 +305,11 @@ function buildKaraokeHTML(opts) {
     }
     
     /* ════════════════════════════════════════════════════════════ */
-    /* ✨ NEW: العنوان في الأعلى */
+    /* ✨ العنوان - أنزل للأسفل + أحمر ساطع + دائري */
     /* ════════════════════════════════════════════════════════════ */
     .title-container{
       position:absolute;
-      top:140px;
+      top:450px;                    /* ⬇️ أنزل للأسفل (قريب من المنتصف) */
       left:50%;
       transform:translateX(-50%);
       width:90%;
@@ -325,45 +321,38 @@ function buildKaraokeHTML(opts) {
     
     .title-box{
       display:inline-block;
-      background:linear-gradient(135deg, 
-        rgba(255,0,60,0.95) 0%,
-        rgba(200,0,40,0.95) 100%
-      );
-      padding:18px 40px;
-      border-radius:60px;
-      border:3px solid #FFFFFF;
+      background:#FF0000;           /* 🔴 أحمر ساطع نقي */
+      padding:22px 50px;
+      border-radius:9999px;         /* ⭕ كبسولة دائرية كاملة */
       box-shadow:
-        0 0 40px rgba(255,0,60,0.6),
-        0 8px 25px rgba(0,0,0,0.7);
+        0 0 50px rgba(255,0,0,0.7),
+        0 10px 30px rgba(0,0,0,0.5);
     }
     
     .title-text{
       font-family:${titleFont};
-      font-size:${titleAr ? "48px" : "44px"};
+      font-size:${titleAr ? "46px" : "42px"};
       font-weight:900;
       color:#FFFFFF;
-      text-shadow:
-        0 2px 8px rgba(0,0,0,0.8),
-        0 0 20px rgba(255,255,255,0.3);
       letter-spacing:${titleAr ? "0" : "-0.02em"};
       display:inline-flex;
       align-items:center;
-      gap:14px;
+      gap:16px;
       white-space:nowrap;
+      text-shadow:0 2px 6px rgba(0,0,0,0.4);
     }
     
     .title-emoji{
-      font-size:${titleAr ? "56px" : "52px"};
-      filter:drop-shadow(0 4px 8px rgba(0,0,0,0.5));
+      font-size:${titleAr ? "54px" : "50px"};
     }
     
     /* ════════════════════════════════════════════════════════════ */
-    /* 📝 النص العادي - خلفية سوداء + أبيض */
+    /* 📝 النص العادي - خلفية سوداء بسيطة + دائرية */
     /* ════════════════════════════════════════════════════════════ */
     .text-container{
       position:absolute;
       left:50%;
-      top:50%;
+      top:62%;                      /* ⬇️ أنزل قليلاً للأسفل */
       transform:translate(-50%, -50%);
       width:90%;
       max-width:960px;
@@ -375,20 +364,16 @@ function buildKaraokeHTML(opts) {
     
     .text-box{
       display:inline-block;
-      background:rgba(0,0,0,0.88);
-      padding:36px 52px;
-      border-radius:30px;
-      border:4px solid rgba(255,255,255,0.25);
-      box-shadow:
-        0 0 50px rgba(0,0,0,0.9),
-        0 20px 50px rgba(0,0,0,0.7);
+      background:rgba(0,0,0,0.82);  /* ⬛ خلفية سوداء بسيطة */
+      padding:28px 48px;
+      border-radius:9999px;         /* ⭕ كبسولة دائرية كاملة */
       max-width:100%;
     }
     
     .line{
       display:block;
       text-align:center;
-      margin-bottom:14px;
+      margin-bottom:10px;
     }
     
     .line:last-child{
@@ -402,22 +387,17 @@ function buildKaraokeHTML(opts) {
       color:#FFFFFF;
       line-height:1.3;
       display:inline-block;
-      margin:0 14px;
-      text-shadow:
-        0 4px 12px rgba(0,0,0,0.95),
-        2px 2px 0 rgba(0,0,0,0.8);
-      -webkit-text-stroke:2px rgba(0,0,0,0.9);
-      paint-order:stroke fill;
+      margin:0 12px;
       transition:opacity 0.15s ease-out;
     }
     
     /* ════════════════════════════════════════════════════════════ */
-    /* 🔥 الكلمة القوية وحدها - خلفية حمراء + أصفر */
+    /* 🔥 الكلمة القوية - خلفية حمراء ساطعة + ذهبي + دائرية */
     /* ════════════════════════════════════════════════════════════ */
     .power-word-container{
       position:absolute;
       left:50%;
-      top:50%;
+      top:62%;                      /* ⬇️ نفس مستوى النص العادي */
       transform:translate(-50%, -50%);
       direction:${dir};
       text-align:center;
@@ -427,36 +407,24 @@ function buildKaraokeHTML(opts) {
     
     .power-word-box{
       display:inline-block;
-      background:linear-gradient(135deg,
-        #FF003C 0%,
-        #C8001E 50%,
-        #FF003C 100%
-      );
-      padding:40px 80px;
-      border-radius:40px;
-      border:6px solid #FFD700;
+      background:#FF0000;           /* 🔴 أحمر ساطع نقي */
+      padding:36px 72px;
+      border-radius:9999px;         /* ⭕ كبسولة دائرية كاملة */
       box-shadow:
-        0 0 60px rgba(255,0,60,0.8),
-        0 0 120px rgba(255,215,0,0.4),
-        0 20px 50px rgba(0,0,0,0.9),
-        inset 0 0 30px rgba(255,255,255,0.1);
+        0 0 80px rgba(255,0,0,0.8),
+        0 15px 40px rgba(0,0,0,0.6);
       animation:powerPulse 0.4s ease-out;
     }
     
     .power-word-text{
       font-family:${font};
-      font-size:${ar ? "160px" : "150px"};
+      font-size:${ar ? "140px" : "130px"};
       font-weight:900;
-      color:#FFD700;
+      color:#FFD700;                /* 🟡 لون ذهبي */
       letter-spacing:${ar ? "0" : "-0.03em"};
-      text-shadow:
-        0 0 30px rgba(255,215,0,0.8),
-        0 0 60px rgba(255,215,0,0.5),
-        0 8px 20px rgba(0,0,0,1),
-        4px 4px 0 rgba(0,0,0,0.9);
-      -webkit-text-stroke:4px rgba(0,0,0,0.95);
-      paint-order:stroke fill;
       display:inline-block;
+      text-shadow:
+        0 4px 12px rgba(0,0,0,0.6);
     }
     
     @keyframes powerPulse {
@@ -464,8 +432,8 @@ function buildKaraokeHTML(opts) {
         transform:scale(0.7);
         opacity:0;
       }
-      50% {
-        transform:scale(1.1);
+      60% {
+        transform:scale(1.05);
         opacity:1;
       }
       100% {
@@ -479,7 +447,7 @@ function buildKaraokeHTML(opts) {
   <div class="overlay-top"></div>
   <div class="overlay-bottom"></div>
   
-  <!-- ✨ العنوان في الأعلى -->
+  <!-- ✨ العنوان من Excel (أحمر ساطع + دائري) -->
   <div class="title-container">
     <div class="title-box">
       <div class="title-text">
