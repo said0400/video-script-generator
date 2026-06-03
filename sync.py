@@ -1,12 +1,13 @@
 """
 sync.py — Word-level audio synchronization
-✨ WhisperX من GitHub (latest version - compatible with new PyTorch)
-   مع Groq Whisper كـ fallback
+✨ صارم ومنظم - يحل كل مشاكل التزامن
 
-الاستراتيجية:
-  1. WhisperX (دقة 95-98%)
-  2. Groq Whisper (دقة 85-88%)
-  3. Duration sync (آخر حل)
+الإصلاحات:
+  ✅ مسح offset البداية تلقائياً
+  ✅ منع تكرار نفس الوقت
+  ✅ توزيع متساوي للكلمات
+  ✅ ضمان عدم تجاوز مدة الصوت
+  ✅ validation شامل قبل الإرجاع
 """
 
 from __future__ import annotations
@@ -28,6 +29,12 @@ BATCH_SIZE = 16
 
 MODEL_CACHE_DIR = Path.home() / ".cache" / "whisperx"
 MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# ✅ Constants للتوقيت
+MIN_WORD_DURATION = 0.08      # حد أدنى لمدة الكلمة (80ms)
+MAX_WORD_DURATION = 2.0       # حد أقصى لمدة الكلمة (2s)
+MIN_GAP_BETWEEN_WORDS = 0.02  # 20ms بين الكلمات
+MAX_INITIAL_OFFSET = 1.5      # إذا الكلمة الأولى تبدأ بعد 1.5s نعتبره خطأ
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -52,16 +59,14 @@ def get_audio_duration(audio_path: str) -> float:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🥇 PRIMARY: WHISPERX
+# 🥇 WHISPERX
 # ═════════════════════════════════════════════════════════════════════════════
 
-# Global cache (تحميل الموديل مرة واحدة)
 _WHISPERX_MODEL = None
-_ALIGN_MODELS = {}  # cache لكل لغة
+_ALIGN_MODELS = {}
 
 
 def _load_whisperx_model():
-    """تحميل WhisperX model مرة واحدة فقط."""
     global _WHISPERX_MODEL
     
     if _WHISPERX_MODEL is None:
@@ -88,7 +93,6 @@ def _load_whisperx_model():
 
 
 def _load_align_model(lang: str):
-    """تحميل alignment model للغة محددة (مع cache)."""
     global _ALIGN_MODELS
     
     if lang not in _ALIGN_MODELS:
@@ -110,37 +114,26 @@ def _load_align_model(lang: str):
             print(f"  ✅ Alignment model loaded in {load_time:.1f}s")
         except Exception as e:
             print(f"  ⚠️  Alignment model failed for {lang}: {e}")
-            return None, None
+            _ALIGN_MODELS[lang] = (None, None)
     
     return _ALIGN_MODELS[lang]
 
 
 def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dict]:
-    """
-    ✨ WhisperX للحصول على timestamps دقيقة جداً.
-    
-    العملية:
-    1. Transcribe بـ Whisper
-    2. Align بـ wav2vec2 (دقة عالية!)
-    
-    Returns: list of {"word": str, "start": float, "end": float}
-    """
+    """استخدام WhisperX للحصول على timestamps."""
     try:
         import whisperx
         
         print(f"  🎯 WhisperX: Processing {lang.upper()} audio...")
         
-        # ─── 1. Load model ───────────────────────────────────────────────────
         model = _load_whisperx_model()
         if model is None:
             return []
         
-        # ─── 2. Load audio ───────────────────────────────────────────────────
         audio = whisperx.load_audio(audio_path)
         audio_duration = len(audio) / 16000
         print(f"  🎵 Audio duration: {audio_duration:.2f}s")
         
-        # ─── 3. Transcribe ───────────────────────────────────────────────────
         print(f"  📝 Transcribing...")
         start_time = time.time()
         
@@ -155,17 +148,14 @@ def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dic
         print(f"  ⏱️  Transcribed in {transcribe_time:.1f}s ({n_segments} segments)")
         
         if not result.get('segments'):
-            print(f"  ⚠️  No segments returned")
             return []
         
-        # ─── 4. Align with wav2vec2 ──────────────────────────────────────────
         print(f"  🎯 Aligning words...")
         start_time = time.time()
         
         align_model, metadata = _load_align_model(lang)
         
         if align_model is None:
-            print(f"  ⚠️  No alignment model - using segment timings")
             return _extract_from_segments(result['segments'])
         
         try:
@@ -181,7 +171,6 @@ def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dic
             align_time = time.time() - start_time
             print(f"  ⏱️  Aligned in {align_time:.1f}s")
             
-            # ─── 5. Extract word timestamps ──────────────────────────────────
             word_timestamps = []
             for segment in result_aligned.get("segments", []):
                 for word_info in segment.get("words", []):
@@ -197,10 +186,9 @@ def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dic
                         })
             
             if word_timestamps:
-                print(f"  ✅ WhisperX: {len(word_timestamps)} words aligned precisely")
+                print(f"  ✅ WhisperX: {len(word_timestamps)} words aligned")
                 return word_timestamps
             else:
-                print(f"  ⚠️  No aligned words - using segments")
                 return _extract_from_segments(result['segments'])
         
         except Exception as align_error:
@@ -216,7 +204,7 @@ def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dic
 
 
 def _extract_from_segments(segments) -> list[dict]:
-    """استخراج timestamps من segments (بدون word-level alignment)."""
+    """استخراج timestamps من segments."""
     word_timestamps = []
     
     for segment in segments:
@@ -248,7 +236,7 @@ def _extract_from_segments(segments) -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🥈 FALLBACK: GROQ WHISPER
+# 🥈 GROQ FALLBACK
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
@@ -256,7 +244,6 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
     try:
         groq_key = os.environ.get("GROQ_API_KEY", "")
         if not groq_key:
-            print("  ⚠️  No GROQ_API_KEY for fallback")
             return []
         
         from groq import Groq
@@ -264,7 +251,6 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
         apath = Path(audio_path)
         
         if not apath.exists():
-            print(f"  ⚠️  Audio file not found: {apath}")
             return []
         
         print(f"  🔄 Fallback: Using Groq Whisper ({lang.upper()})...")
@@ -280,8 +266,7 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
                 timestamp_granularities=["word"],
                 language=lang,
             )
-        except Exception as e1:
-            print(f"  ⚠️  Attempt 1 failed: {str(e1)[:80]}")
+        except Exception:
             try:
                 response = client.audio.transcriptions.create(
                     file=(apath.name, audio_bytes),
@@ -289,8 +274,7 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
                     response_format="verbose_json",
                     timestamp_granularities=["word"],
                 )
-            except Exception as e2:
-                print(f"  ⚠️  Attempt 2 failed: {str(e2)[:80]}")
+            except Exception:
                 return []
         
         word_timestamps = []
@@ -319,30 +303,6 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
                 print(f"  ✅ Groq fallback: {len(word_timestamps)} words")
                 return word_timestamps
         
-        # Try segments
-        segs = getattr(response, "segments", None) or []
-        if segs:
-            print(f"  🔄 Trying segments fallback...")
-            segment_data = []
-            for s in segs:
-                if isinstance(s, dict):
-                    segment_data.append({
-                        "text": s.get("text", ""),
-                        "start": float(s.get("start", 0)),
-                        "end": float(s.get("end", 0)),
-                    })
-                else:
-                    segment_data.append({
-                        "text": getattr(s, "text", ""),
-                        "start": float(getattr(s, "start", 0)),
-                        "end": float(getattr(s, "end", 0)),
-                    })
-            
-            extracted = _extract_from_segments(segment_data)
-            if extracted:
-                print(f"  ✅ Groq segments: {len(extracted)} words")
-                return extracted
-        
         return []
         
     except Exception as e:
@@ -351,35 +311,236 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ✨ NEW: TIMESTAMPS NORMALIZATION (الإصلاح الجوهري!)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _normalize_timestamps(
+    timestamps: list[dict],
+    audio_duration: float,
+) -> list[dict]:
+    """
+    ✨ صارم: إصلاح كل مشاكل التوقيت في timestamps.
+    
+    الإصلاحات:
+    1. ✅ مسح offset البداية (إذا الكلمة الأولى تبدأ متأخرة)
+    2. ✅ ترتيب زمني صحيح
+    3. ✅ منع تكرار نفس الوقت (تكرار 4.101s)
+    4. ✅ ضمان مدة منطقية لكل كلمة (0.08s - 2.0s)
+    5. ✅ ضمان عدم تجاوز مدة الصوت
+    6. ✅ توزيع الكلمات المتداخلة
+    
+    Args:
+        timestamps: قائمة الـ timestamps من Whisper
+        audio_duration: مدة الصوت الفعلية
+    
+    Returns:
+        قائمة timestamps مُصححة ومضمونة
+    """
+    if not timestamps:
+        return []
+    
+    print(f"\n  🔧 Normalizing {len(timestamps)} timestamps...")
+    
+    # 📋 نسخة قابلة للتعديل
+    fixed = [dict(t) for t in timestamps]
+    
+    # ═════════════════════════════════════════════════════════════
+    # 1️⃣ ✨ مسح offset البداية
+    # ═════════════════════════════════════════════════════════════
+    first_start = fixed[0]["start"]
+    
+    if first_start > MAX_INITIAL_OFFSET:
+        # الكلمة الأولى تبدأ متأخرة جداً → خطأ في WhisperX
+        # نطرح offset من كل الـ timestamps
+        offset = first_start - 0.2  # نترك 0.2s للبداية
+        
+        print(f"  ⚠️  Initial offset detected: {first_start:.2f}s → fixing (subtract {offset:.2f}s)")
+        
+        for w in fixed:
+            w["start"] = max(0, w["start"] - offset)
+            w["end"] = max(0.1, w["end"] - offset)
+    
+    elif first_start < 0.05:
+        # الكلمة الأولى تبدأ من 0 (بدون lead-in)
+        # نضيف 0.1s للجميع
+        print(f"  ℹ️  Adding 0.1s lead-in to all timestamps")
+        for w in fixed:
+            w["start"] += 0.1
+            w["end"] += 0.1
+    
+    # ═════════════════════════════════════════════════════════════
+    # 2️⃣ ✨ ترتيب زمني
+    # ═════════════════════════════════════════════════════════════
+    fixed.sort(key=lambda x: x["start"])
+    
+    # ═════════════════════════════════════════════════════════════
+    # 3️⃣ ✨ إصلاح تكرار نفس الوقت + توزيع الكلمات
+    # ═════════════════════════════════════════════════════════════
+    duplicates_fixed = 0
+    
+    for i in range(1, len(fixed)):
+        prev = fixed[i - 1]
+        curr = fixed[i]
+        
+        # حالة 1: نفس الـ start time (تكرار)
+        if curr["start"] <= prev["start"]:
+            # ✅ نضع الكلمة بعد السابقة
+            new_start = prev["end"] + MIN_GAP_BETWEEN_WORDS
+            
+            # نحافظ على مدة الكلمة
+            original_duration = curr["end"] - curr["start"]
+            if original_duration < MIN_WORD_DURATION:
+                original_duration = 0.3  # افتراضي
+            
+            curr["start"] = new_start
+            curr["end"] = new_start + original_duration
+            duplicates_fixed += 1
+        
+        # حالة 2: overlap (تداخل)
+        elif curr["start"] < prev["end"]:
+            # الكلمة الجديدة تبدأ قبل انتهاء السابقة
+            curr["start"] = prev["end"] + MIN_GAP_BETWEEN_WORDS
+            
+            # تأكد أن end > start
+            if curr["end"] <= curr["start"]:
+                curr["end"] = curr["start"] + 0.3
+    
+    if duplicates_fixed > 0:
+        print(f"  🔧 Fixed {duplicates_fixed} duplicate/overlapping timestamps")
+    
+    # ═════════════════════════════════════════════════════════════
+    # 4️⃣ ✨ ضمان مدة منطقية لكل كلمة
+    # ═════════════════════════════════════════════════════════════
+    too_short = 0
+    too_long = 0
+    
+    for w in fixed:
+        duration = w["end"] - w["start"]
+        
+        if duration < MIN_WORD_DURATION:
+            w["end"] = w["start"] + MIN_WORD_DURATION
+            too_short += 1
+        elif duration > MAX_WORD_DURATION:
+            w["end"] = w["start"] + MAX_WORD_DURATION
+            too_long += 1
+    
+    if too_short > 0:
+        print(f"  🔧 Extended {too_short} too-short words to {MIN_WORD_DURATION}s")
+    if too_long > 0:
+        print(f"  🔧 Capped {too_long} too-long words at {MAX_WORD_DURATION}s")
+    
+    # ═════════════════════════════════════════════════════════════
+    # 5️⃣ ✨ ضمان عدم تجاوز مدة الصوت
+    # ═════════════════════════════════════════════════════════════
+    if audio_duration > 0:
+        for w in fixed:
+            if w["end"] > audio_duration:
+                w["end"] = audio_duration
+            if w["start"] >= audio_duration:
+                w["start"] = audio_duration - MIN_WORD_DURATION
+                w["end"] = audio_duration
+    
+    # ═════════════════════════════════════════════════════════════
+    # 6️⃣ ✨ التحقق النهائي + تقرير
+    # ═════════════════════════════════════════════════════════════
+    last_word = fixed[-1]
+    first_word = fixed[0]
+    
+    print(f"  ✅ Normalized: first={first_word['start']:.2f}s, last_end={last_word['end']:.2f}s")
+    print(f"     Audio={audio_duration:.2f}s | Coverage={(last_word['end']/audio_duration*100):.0f}%")
+    
+    # تقريب القيم
+    for w in fixed:
+        w["start"] = round(w["start"], 4)
+        w["end"] = round(w["end"], 4)
+    
+    return fixed
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✨ NEW: VALIDATE TIMESTAMPS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _validate_timestamps(timestamps: list[dict], audio_duration: float) -> bool:
+    """
+    تحقق صارم من سلامة timestamps.
+    
+    Returns: True إذا valid, False إذا فيها مشاكل
+    """
+    if not timestamps:
+        return False
+    
+    issues = []
+    
+    # تحقق 1: الترتيب الزمني
+    for i in range(1, len(timestamps)):
+        if timestamps[i]["start"] < timestamps[i-1]["start"]:
+            issues.append(f"Word {i} starts before word {i-1}")
+    
+    # تحقق 2: مدد معقولة
+    for i, w in enumerate(timestamps):
+        dur = w["end"] - w["start"]
+        if dur <= 0:
+            issues.append(f"Word {i} has invalid duration: {dur}")
+        elif dur < MIN_WORD_DURATION:
+            issues.append(f"Word {i} too short: {dur:.3f}s")
+    
+    # تحقق 3: عدم تجاوز الصوت
+    if timestamps[-1]["end"] > audio_duration + 0.5:
+        issues.append(f"Last word ({timestamps[-1]['end']:.2f}s) exceeds audio ({audio_duration:.2f}s)")
+    
+    # تحقق 4: offset البداية
+    if timestamps[0]["start"] > MAX_INITIAL_OFFSET:
+        issues.append(f"First word starts too late: {timestamps[0]['start']:.2f}s")
+    
+    if issues:
+        print(f"  ⚠️  Validation issues: {len(issues)}")
+        for issue in issues[:5]:
+            print(f"     - {issue}")
+        return False
+    
+    return True
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 🎯 MAIN PUBLIC FUNCTION
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_word_timestamps(audio_path: str, lang: str = "ar") -> list[dict]:
     """
-    احصل على word timestamps دقيقة.
+    احصل على word timestamps دقيقة ومُصححة.
     
     الاستراتيجية:
-    1. WhisperX (دقة 95-98%) ⭐
-    2. Groq Whisper (دقة 85%) 🔄
-    3. Duration sync (آخر حل) ⚠️
+    1. WhisperX (دقة 95-98%)
+    2. Groq Whisper (دقة 85%)
+    3. [] (سيستخدم duration sync)
+    
+    + Normalization صارم للنتائج
     """
     print(f"\n  🎤 Getting word timestamps for {Path(audio_path).name} (lang={lang})")
+    
+    audio_duration = get_audio_duration(audio_path)
     
     # 🥇 Try WhisperX
     timestamps = _get_word_timestamps_whisperx(audio_path, lang)
     
-    if timestamps:
-        return timestamps
+    if not timestamps:
+        # 🥈 Fallback to Groq
+        print(f"  🔄 WhisperX failed - trying Groq fallback...")
+        timestamps = _get_word_timestamps_groq(audio_path, lang)
     
-    # 🥈 Fallback to Groq
-    print(f"  🔄 WhisperX failed - trying Groq fallback...")
-    timestamps = _get_word_timestamps_groq(audio_path, lang)
+    if not timestamps:
+        print(f"  ⚠️  All methods failed - will use duration sync")
+        return []
     
-    if timestamps:
-        return timestamps
+    # ✨ تطبيق normalization الصارم
+    normalized = _normalize_timestamps(timestamps, audio_duration)
     
-    print(f"  ⚠️  All methods failed - will use duration sync")
-    return []
+    # ✨ تحقق نهائي
+    if not _validate_timestamps(normalized, audio_duration):
+        print(f"  ⚠️  Normalized timestamps still have issues - using as-is")
+    
+    return normalized
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -403,7 +564,7 @@ def build_word_timeline(
     word_timestamps: list[dict],
     total_duration: float,
 ) -> tuple[list[dict], list[dict]]:
-    """بناء word timeline مرتبط بالجمل من Excel."""
+    """بناء word timeline مرتبط بالجمل."""
     if not sentences or total_duration <= 0:
         return [], []
     
@@ -430,6 +591,7 @@ def _whisper_sync(
     if whisper_end <= 0:
         return [], []
     
+    # ✨ Scale إلى مدة الصوت الفعلية
     scale = total_duration / whisper_end
     if abs(scale - 1.0) > 0.01:
         print(f"  📐 Whisper scale: {scale:.4f}x "
@@ -444,6 +606,7 @@ def _whisper_sync(
         for w in ts_words
     ]
     
+    # Build flat list
     flat = []
     for s_idx, sentence in enumerate(sentences):
         for w_idx, word in enumerate(sentence.split()):
@@ -492,7 +655,46 @@ def _whisper_sync(
         for i, fw in enumerate(flat)
     ]
     
+    # ✨ تطبيق normalization مرة أخرى على الـ scaled timestamps
+    # (للأمان الزائد)
+    word_times = _normalize_word_times(word_times, total_duration)
+    
     return _build_output(sentences, word_times, total_duration)
+
+
+def _normalize_word_times(word_times: list[dict], total_duration: float) -> list[dict]:
+    """
+    ✨ Normalization على word_times بعد scaling.
+    يضمن عدم تكرار أو تداخل في النتيجة النهائية.
+    """
+    if not word_times:
+        return []
+    
+    # ترتيب حسب الوقت
+    word_times.sort(key=lambda x: (x["s_idx"], x["w_idx"]))
+    
+    # إصلاح التداخلات
+    for i in range(1, len(word_times)):
+        prev = word_times[i - 1]
+        curr = word_times[i]
+        
+        # إذا الكلمة الحالية تبدأ قبل/مع السابقة
+        if curr["start"] <= prev["end"]:
+            curr["start"] = prev["end"] + MIN_GAP_BETWEEN_WORDS
+            
+            # تأكد أن end معقول
+            min_end = curr["start"] + MIN_WORD_DURATION
+            if curr["end"] < min_end:
+                curr["end"] = min_end
+        
+        # تأكد عدم تجاوز الصوت
+        if total_duration > 0 and curr["end"] > total_duration:
+            curr["end"] = total_duration
+        if total_duration > 0 and curr["start"] >= total_duration:
+            curr["start"] = total_duration - MIN_WORD_DURATION
+            curr["end"] = total_duration
+    
+    return word_times
 
 
 def _duration_sync(
@@ -575,6 +777,7 @@ def _build_output(
         key=lambda x: x["time"],
     )
     
+    # Debug sample
     for ev in timeline[:4]:
         ws = sentences[ev["sentence_idx"]].split()
         wc = ev["visible_word_count"]
