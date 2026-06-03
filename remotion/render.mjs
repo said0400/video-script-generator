@@ -1,8 +1,10 @@
-// remotion/render.mjs — KCS + Per-Word Background + Whisper Sync
+// remotion/render.mjs — KCS + Per-Line Background + Whisper Sync
 // ✨ النسخة الكاملة المحسّنة:
-//    - خلفية لكل كلمة على حدة (تتماشى مع النص)
+//    - خلفية تتماشى مع حجم النص (ليست مستطيل ثابت)
+//    - خلفية سوداء داكنة + نص أبيض
 //    - مزامنة دقيقة مع الصوت من Whisper word_timeline
 //    - عنوان من Excel (أحمر ساطع + دائري)
+//    - الكلمات القوية: خلفية حمراء + لون أصفر
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync,
          symlinkSync, existsSync } from "fs";
@@ -30,8 +32,8 @@ const {
   duration_s,
   power_words = [],
   accent_colors = [],
-  word_timeline = [],     // ✨ NEW: Whisper word timestamps
-  aligned = [],           // ✨ NEW: aligned sentences
+  word_timeline = [],
+  aligned = [],
   lang = "ar",
   clip_duration = 3.0,
   has_hook      = false,
@@ -56,7 +58,7 @@ console.log(`🎯 Word timeline: ${word_timeline.length} events | Aligned: ${ali
 
 const KCS = {
   WORDS_PER_CHUNK_MAX: 4,
-  MAX_WORDS_PER_LINE: 2,
+  MAX_WORDS_PER_LINE: 3,
   
   NORMAL_SIZE_AR:  72,
   NORMAL_SIZE_EN:  68,
@@ -133,18 +135,9 @@ const esc = s => (s||"").toString()
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎯 ✨ NEW: BUILD WORD-LEVEL TIMELINE FROM WHISPER
+// 🎯 BUILD WORD-LEVEL TIMELINE FROM WHISPER
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * يبني timeline دقيق لكل كلمة بناءً على بيانات Whisper.
- * 
- * Returns: [
- *   { word: "أنت", start: 0.0, end: 0.45, sentence_idx: 0, word_in_sentence: 0 },
- *   { word: "لا", start: 0.45, end: 0.70, sentence_idx: 0, word_in_sentence: 1 },
- *   ...
- * ]
- */
 function buildWordTimeline() {
   const wordTimings = [];
   
@@ -157,7 +150,6 @@ function buildWordTimeline() {
       const words = sentence.words || [];
       
       if (words.length > 0) {
-        // كل كلمة لها start/end من Whisper
         for (let wIdx = 0; wIdx < words.length; wIdx++) {
           const w = words[wIdx];
           wordTimings.push({
@@ -224,14 +216,6 @@ function buildWordTimeline() {
 // 📦 BUILD CHUNKS FROM WORD TIMELINE
 // ═════════════════════════════════════════════════════════════════════════════
 
-/**
- * يجمّع الكلمات في chunks مع الحفاظ على timing الدقيق.
- * 
- * قواعد التجميع:
- * - الكلمة القوية → chunk منفصل
- * - 3-4 كلمات عادية → chunk واحد
- * - chunks تبقى في نفس الجملة (لا تختلط جمل)
- */
 function buildChunks(wordTimings) {
   const chunks = [];
   let buffer = [];
@@ -299,7 +283,7 @@ function splitChunkIntoLines(words) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎨 HTML BUILDER — خلفية لكل كلمة (تتماشى مع النص)
+// 🎨 HTML BUILDER — خلفية تتماشى مع حجم النص (سوداء داكنة + أبيض)
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildKaraokeHTML(opts) {
@@ -338,7 +322,7 @@ function buildKaraokeHTML(opts) {
       </div>
     `;
   } else {
-    // 📝 النص العادي - ✨ خلفية لكل كلمة على حدة
+    // 📝 النص العادي - خلفية تتماشى مع كل سطر
     const lines = splitChunkIntoLines(allWords);
     
     let wordCounter = 0;
@@ -347,31 +331,20 @@ function buildKaraokeHTML(opts) {
         const isCurrent = wordCounter === currentWordIdx;
         const isPast    = wordCounter < currentWordIdx;
         
-        // مستوى الإضاءة
-        let bgOpacity;
-        let textOpacity;
-        if (isCurrent) {
-          bgOpacity = 0.92;       // أغمق للكلمة الحالية
-          textOpacity = 1.0;
-        } else if (isPast) {
-          bgOpacity = 0.75;       // متوسط للكلمات السابقة
-          textOpacity = 0.85;
-        } else {
-          bgOpacity = 0.5;        // أفتح للكلمات القادمة
-          textOpacity = 0.55;
-        }
+        let opacity;
+        if (isCurrent) opacity = 1.0;
+        else if (isPast) opacity = 0.85;
+        else opacity = 0.55;
         
         wordCounter++;
         
-        // ✨ كل كلمة في span منفصل مع خلفية خاصة
-        return `<span class="word-bubble" style="
-          background: rgba(0,0,0,${bgOpacity});
-        "><span class="word-text" style="
-          opacity: ${textOpacity};
-        ">${esc(word)}</span></span>`;
+        return `<span class="word" style="opacity: ${opacity};">${esc(word)}</span>`;
       }).join(" ");
       
-      return `<div class="line">${wordsHTML}</div>`;
+      // ✨ كل سطر بخلفيته الخاصة (تتماشى مع طول السطر)
+      return `<div class="line-container">
+        <span class="line-bg">${wordsHTML}</span>
+      </div>`;
     }).join("");
     
     mainContentHTML = `
@@ -423,7 +396,7 @@ function buildKaraokeHTML(opts) {
     }
     
     /* ════════════════════════════════════════════════════════════ */
-    /* ✨ العنوان */
+    /* ✨ العنوان - أنزل للأسفل + أحمر ساطع */
     /* ════════════════════════════════════════════════════════════ */
     .title-container{
       position:absolute;
@@ -465,7 +438,7 @@ function buildKaraokeHTML(opts) {
     }
     
     /* ════════════════════════════════════════════════════════════ */
-    /* 📝 النص العادي - ✨ كل كلمة بخلفية خاصة (تتماشى معها) */
+    /* 📝 ✨ النص العادي - خلفية تتماشى مع حجم السطر */
     /* ════════════════════════════════════════════════════════════ */
     .text-container{
       position:absolute;
@@ -480,33 +453,34 @@ function buildKaraokeHTML(opts) {
       opacity:${fadeProgress};
     }
     
-    .line{
+    /* ✨ Container لكل سطر */
+    .line-container{
       display:block;
       text-align:center;
       margin-bottom:14px;
-      line-height:1.5;
     }
     
-    .line:last-child{
+    .line-container:last-child{
       margin-bottom:0;
     }
     
-    /* ✨ Bubble لكل كلمة (تتماشى مع حجم النص) */
-    .word-bubble{
-      display:inline-block;
-      padding:12px 24px;            /* ⬅️ padding صغير يتماشى مع النص */
-      border-radius:9999px;         /* ⭕ كبسولة دائرية */
-      margin:0 4px 6px 4px;
-      transition:background 0.15s ease-out;
+    /* ✨ الخلفية تتماشى مع طول النص (ليست عرض كامل) */
+    .line-bg{
+      display:inline-block;          /* ⬅️ يأخذ حجم النص فقط */
+      background:rgba(0,0,0,0.92);   /* ⬛ خلفية سوداء داكنة */
+      padding:14px 32px;             /* ⬅️ padding متناسب */
+      border-radius:9999px;          /* ⭕ زوايا دائرية كاملة */
+      max-width:100%;
     }
     
-    .word-text{
+    .word{
       font-family:${font};
       font-size:${ar ? KCS.NORMAL_SIZE_AR : KCS.NORMAL_SIZE_EN}px;
       font-weight:900;
-      color:#FFFFFF;
-      line-height:1.0;
-      display:inline-block;
+      color:#FFFFFF;                 /* ⬜ أبيض ناصع */
+      line-height:1.2;
+      display:inline;
+      margin:0 6px;
       transition:opacity 0.15s ease-out;
     }
     
@@ -582,7 +556,7 @@ function buildKaraokeHTML(opts) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎬 ✨ NEW: BUILD FRAME STATE MAP — مزامنة دقيقة من Whisper
+// 🎬 BUILD FRAME STATE MAP — مزامنة دقيقة من Whisper
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildFrameStateMap() {
@@ -599,7 +573,6 @@ function buildFrameStateMap() {
   // 3. بناء الـ frame map
   const map = new Array(totalFrames).fill(null);
   
-  // ✨ لكل frame، احسب: ما الـ chunk الحالي؟ وما الكلمة الحالية داخله؟
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
     
@@ -961,7 +934,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log("\n🚀 Starting KCS Renderer + Per-Word BG + Whisper Sync\n");
+  console.log("\n🚀 Starting KCS Renderer + Per-Line BG + Whisper Sync\n");
 
   const frameStateMap = buildFrameStateMap();
 
