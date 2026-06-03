@@ -1,14 +1,12 @@
 """
 sync.py — Word-level audio synchronization
-✨ FIXED: 
-  1. WhisperX مع إصدارات متوافقة
-  2. Groq fallback محسّن (يعمل دائماً)
-  3. Duration sync كحل أخير
+✨ WhisperX من GitHub (latest version - compatible with new PyTorch)
+   مع Groq Whisper كـ fallback
 
-السلوك:
-  1. حاول WhisperX أولاً (دقة 98%)
-  2. عند الفشل → Groq Whisper (دقة 85%)
-  3. عند فشل الكل → تقسيم متساوي
+الاستراتيجية:
+  1. WhisperX (دقة 95-98%)
+  2. Groq Whisper (دقة 85-88%)
+  3. Duration sync (آخر حل)
 """
 
 from __future__ import annotations
@@ -23,12 +21,11 @@ from pathlib import Path
 # CONFIGURATION
 # ═════════════════════════════════════════════════════════════════════════════
 
-WHISPERX_MODEL = "medium"       # tiny | base | small | medium | large-v3
-WHISPERX_DEVICE = "cpu"         # cpu أو cuda
-COMPUTE_TYPE   = "int8"         # int8 للـ CPU (أسرع)
-BATCH_SIZE     = 16             # batch size للـ inference
+WHISPERX_MODEL = "medium"
+WHISPERX_DEVICE = "cpu"
+COMPUTE_TYPE = "int8"
+BATCH_SIZE = 16
 
-# Cache directory للموديل
 MODEL_CACHE_DIR = Path.home() / ".cache" / "whisperx"
 MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -55,69 +52,123 @@ def get_audio_duration(audio_path: str) -> float:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🥇 PRIMARY: WHISPERX (precise alignment)
+# 🥇 PRIMARY: WHISPERX
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dict]:
-    """
-    ✨ استخدام WhisperX للحصول على timestamps دقيقة.
+# Global cache (تحميل الموديل مرة واحدة)
+_WHISPERX_MODEL = None
+_ALIGN_MODELS = {}  # cache لكل لغة
+
+
+def _load_whisperx_model():
+    """تحميل WhisperX model مرة واحدة فقط."""
+    global _WHISPERX_MODEL
     
-    WhisperX يجمع بين:
-    - Whisper للنسخ (transcription)
-    - wav2vec2 للمحاذاة الدقيقة (alignment)
-    
-    Returns: list of {"word": str, "start": float, "end": float}
-    """
-    try:
-        print(f"  🎯 WhisperX: Loading model '{WHISPERX_MODEL}' for {lang.upper()}...")
-        
-        import whisperx
-        import torch
-        
-        # ─── Step 1: Load Whisper model ──────────────────────────────────────
-        start_time = time.time()
-        model = whisperx.load_model(
-            WHISPERX_MODEL,
-            device=WHISPERX_DEVICE,
-            compute_type=COMPUTE_TYPE,
-            language=lang,
-            download_root=str(MODEL_CACHE_DIR),
-        )
-        load_time = time.time() - start_time
-        print(f"  ⏱️  Model loaded in {load_time:.1f}s")
-        
-        # ─── Step 2: Load audio ──────────────────────────────────────────────
-        audio = whisperx.load_audio(audio_path)
-        audio_duration = len(audio) / 16000  # WhisperX uses 16kHz
-        print(f"  🎵 Audio duration: {audio_duration:.2f}s")
-        
-        # ─── Step 3: Transcribe ──────────────────────────────────────────────
-        print(f"  📝 Transcribing with Whisper...")
-        start_time = time.time()
-        result = model.transcribe(
-            audio,
-            batch_size=BATCH_SIZE,
-            language=lang,
-        )
-        transcribe_time = time.time() - start_time
-        print(f"  ⏱️  Transcribed in {transcribe_time:.1f}s ({len(result['segments'])} segments)")
-        
-        # Free memory
-        del model
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        # ─── Step 4: Align with wav2vec2 ─────────────────────────────────────
-        print(f"  🎯 Aligning words with wav2vec2...")
-        start_time = time.time()
-        
+    if _WHISPERX_MODEL is None:
         try:
+            import whisperx
+            
+            print(f"  📥 Loading WhisperX model '{WHISPERX_MODEL}' (first time)...")
+            start_time = time.time()
+            
+            _WHISPERX_MODEL = whisperx.load_model(
+                WHISPERX_MODEL,
+                device=WHISPERX_DEVICE,
+                compute_type=COMPUTE_TYPE,
+                download_root=str(MODEL_CACHE_DIR),
+            )
+            
+            load_time = time.time() - start_time
+            print(f"  ✅ WhisperX model loaded in {load_time:.1f}s")
+        except Exception as e:
+            print(f"  ❌ Failed to load WhisperX: {e}")
+            return None
+    
+    return _WHISPERX_MODEL
+
+
+def _load_align_model(lang: str):
+    """تحميل alignment model للغة محددة (مع cache)."""
+    global _ALIGN_MODELS
+    
+    if lang not in _ALIGN_MODELS:
+        try:
+            import whisperx
+            
+            print(f"  📥 Loading alignment model for {lang.upper()}...")
+            start_time = time.time()
+            
             align_model, metadata = whisperx.load_align_model(
                 language_code=lang,
                 device=WHISPERX_DEVICE,
                 model_dir=str(MODEL_CACHE_DIR),
             )
             
+            _ALIGN_MODELS[lang] = (align_model, metadata)
+            
+            load_time = time.time() - start_time
+            print(f"  ✅ Alignment model loaded in {load_time:.1f}s")
+        except Exception as e:
+            print(f"  ⚠️  Alignment model failed for {lang}: {e}")
+            return None, None
+    
+    return _ALIGN_MODELS[lang]
+
+
+def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dict]:
+    """
+    ✨ WhisperX للحصول على timestamps دقيقة جداً.
+    
+    العملية:
+    1. Transcribe بـ Whisper
+    2. Align بـ wav2vec2 (دقة عالية!)
+    
+    Returns: list of {"word": str, "start": float, "end": float}
+    """
+    try:
+        import whisperx
+        
+        print(f"  🎯 WhisperX: Processing {lang.upper()} audio...")
+        
+        # ─── 1. Load model ───────────────────────────────────────────────────
+        model = _load_whisperx_model()
+        if model is None:
+            return []
+        
+        # ─── 2. Load audio ───────────────────────────────────────────────────
+        audio = whisperx.load_audio(audio_path)
+        audio_duration = len(audio) / 16000
+        print(f"  🎵 Audio duration: {audio_duration:.2f}s")
+        
+        # ─── 3. Transcribe ───────────────────────────────────────────────────
+        print(f"  📝 Transcribing...")
+        start_time = time.time()
+        
+        result = model.transcribe(
+            audio,
+            batch_size=BATCH_SIZE,
+            language=lang,
+        )
+        
+        transcribe_time = time.time() - start_time
+        n_segments = len(result.get('segments', []))
+        print(f"  ⏱️  Transcribed in {transcribe_time:.1f}s ({n_segments} segments)")
+        
+        if not result.get('segments'):
+            print(f"  ⚠️  No segments returned")
+            return []
+        
+        # ─── 4. Align with wav2vec2 ──────────────────────────────────────────
+        print(f"  🎯 Aligning words...")
+        start_time = time.time()
+        
+        align_model, metadata = _load_align_model(lang)
+        
+        if align_model is None:
+            print(f"  ⚠️  No alignment model - using segment timings")
+            return _extract_from_segments(result['segments'])
+        
+        try:
             result_aligned = whisperx.align(
                 result["segments"],
                 align_model,
@@ -126,15 +177,11 @@ def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dic
                 device=WHISPERX_DEVICE,
                 return_char_alignments=False,
             )
+            
             align_time = time.time() - start_time
             print(f"  ⏱️  Aligned in {align_time:.1f}s")
             
-            # Free memory
-            del align_model
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            # ─── Step 5: Extract word timestamps ─────────────────────────────
+            # ─── 5. Extract word timestamps ──────────────────────────────────
             word_timestamps = []
             for segment in result_aligned.get("segments", []):
                 for word_info in segment.get("words", []):
@@ -153,28 +200,26 @@ def _get_word_timestamps_whisperx(audio_path: str, lang: str = "ar") -> list[dic
                 print(f"  ✅ WhisperX: {len(word_timestamps)} words aligned precisely")
                 return word_timestamps
             else:
-                print(f"  ⚠️  WhisperX: No aligned words found")
-                return []
-                
+                print(f"  ⚠️  No aligned words - using segments")
+                return _extract_from_segments(result['segments'])
+        
         except Exception as align_error:
             print(f"  ⚠️  Alignment failed: {align_error}")
-            # Fallback: استخدم segment-level من النتيجة الأولى
-            return _extract_from_segments(result.get("segments", []))
-        
+            return _extract_from_segments(result['segments'])
+    
     except ImportError as e:
-        print(f"  ⚠️  WhisperX not installed: {e}")
+        print(f"  ❌ WhisperX not installed: {e}")
         return []
     except Exception as e:
-        print(f"  ⚠️  WhisperX failed: {e}")
+        print(f"  ❌ WhisperX failed: {e}")
         return []
 
 
-def _extract_from_segments(segments: list) -> list[dict]:
+def _extract_from_segments(segments) -> list[dict]:
     """استخراج timestamps من segments (بدون word-level alignment)."""
     word_timestamps = []
     
     for segment in segments:
-        # Handle both dict and object
         if isinstance(segment, dict):
             text = (segment.get("text") or "").strip()
             start = segment.get("start", 0)
@@ -203,14 +248,11 @@ def _extract_from_segments(segments: list) -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🥈 FALLBACK: GROQ WHISPER (محسّن)
+# 🥈 FALLBACK: GROQ WHISPER
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
-    """
-    Fallback: استخدام Groq Whisper إذا فشل WhisperX.
-    ✅ FIXED: إصلاح parameters وضمان عمل الـ fallback
-    """
+    """Fallback: استخدام Groq Whisper."""
     try:
         groq_key = os.environ.get("GROQ_API_KEY", "")
         if not groq_key:
@@ -227,12 +269,9 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
         
         print(f"  🔄 Fallback: Using Groq Whisper ({lang.upper()})...")
         
-        # ✅ FIX: قراءة الملف مرة واحدة لتجنب مشاكل الـ stream
         with open(apath, "rb") as f:
             audio_bytes = f.read()
         
-        # المحاولة الأولى: مع language parameter
-        response = None
         try:
             response = client.audio.transcriptions.create(
                 file=(apath.name, audio_bytes),
@@ -243,8 +282,6 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
             )
         except Exception as e1:
             print(f"  ⚠️  Attempt 1 failed: {str(e1)[:80]}")
-            
-            # المحاولة الثانية: بدون language
             try:
                 response = client.audio.transcriptions.create(
                     file=(apath.name, audio_bytes),
@@ -256,17 +293,11 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
                 print(f"  ⚠️  Attempt 2 failed: {str(e2)[:80]}")
                 return []
         
-        if not response:
-            return []
-        
         word_timestamps = []
-        
-        # ✅ Try words attribute
         raw_words = getattr(response, "words", None)
         
         if raw_words:
             for w in raw_words:
-                # Handle different attribute names (dict or object)
                 if isinstance(w, dict):
                     text = (w.get("word") or w.get("text") or "").strip()
                     start = w.get("start", 0)
@@ -288,7 +319,7 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
                 print(f"  ✅ Groq fallback: {len(word_timestamps)} words")
                 return word_timestamps
         
-        # ✅ Try segments as second fallback
+        # Try segments
         segs = getattr(response, "segments", None) or []
         if segs:
             print(f"  🔄 Trying segments fallback...")
@@ -309,14 +340,13 @@ def _get_word_timestamps_groq(audio_path: str, lang: str = "ar") -> list[dict]:
             
             extracted = _extract_from_segments(segment_data)
             if extracted:
-                print(f"  ✅ Groq segments fallback: {len(extracted)} words")
+                print(f"  ✅ Groq segments: {len(extracted)} words")
                 return extracted
         
-        print(f"  ⚠️  Groq returned no usable data")
         return []
         
     except Exception as e:
-        print(f"  ⚠️  Groq fallback error: {type(e).__name__}: {str(e)[:100]}")
+        print(f"  ⚠️  Groq fallback error: {str(e)[:100]}")
         return []
 
 
@@ -329,27 +359,20 @@ def get_word_timestamps(audio_path: str, lang: str = "ar") -> list[dict]:
     احصل على word timestamps دقيقة.
     
     الاستراتيجية:
-    1. جرّب WhisperX (دقة عالية ~98%)
-    2. إذا فشل → Groq Whisper (دقة ~85%)
-    3. إذا فشل → return [] (سيستخدم duration sync)
-    
-    Args:
-        audio_path: مسار الملف الصوتي
-        lang: اللغة (ar/en) - مهم للدقة!
-    
-    Returns:
-        list of {"word": str, "start": float, "end": float}
+    1. WhisperX (دقة 95-98%) ⭐
+    2. Groq Whisper (دقة 85%) 🔄
+    3. Duration sync (آخر حل) ⚠️
     """
     print(f"\n  🎤 Getting word timestamps for {Path(audio_path).name} (lang={lang})")
     
-    # 🥇 Try WhisperX first
+    # 🥇 Try WhisperX
     timestamps = _get_word_timestamps_whisperx(audio_path, lang)
     
     if timestamps:
         return timestamps
     
-    # 🥈 Fallback to Groq Whisper
-    print(f"  🔄 WhisperX failed/empty - trying Groq fallback...")
+    # 🥈 Fallback to Groq
+    print(f"  🔄 WhisperX failed - trying Groq fallback...")
     timestamps = _get_word_timestamps_groq(audio_path, lang)
     
     if timestamps:
@@ -363,7 +386,7 @@ def get_word_timestamps(audio_path: str, lang: str = "ar") -> list[dict]:
 # WORD-TO-SENTENCE ALIGNMENT
 # ═════════════════════════════════════════════════════════════════════════════
 
-LEAD_IN   = 0.20
+LEAD_IN = 0.20
 TRAIL_OUT = 0.25
 
 
@@ -380,11 +403,7 @@ def build_word_timeline(
     word_timestamps: list[dict],
     total_duration: float,
 ) -> tuple[list[dict], list[dict]]:
-    """
-    بناء word timeline مرتبط بالجمل من Excel.
-    
-    Returns: (timeline, aligned_sentences)
-    """
+    """بناء word timeline مرتبط بالجمل من Excel."""
     if not sentences or total_duration <= 0:
         return [], []
     
@@ -407,7 +426,6 @@ def _whisper_sync(
     if not ts_words:
         return [], []
     
-    # Scale timestamps to real duration
     whisper_end = ts_words[-1]["end"]
     if whisper_end <= 0:
         return [], []
@@ -426,7 +444,6 @@ def _whisper_sync(
         for w in ts_words
     ]
     
-    # Build flat list of all words
     flat = []
     for s_idx, sentence in enumerate(sentences):
         for w_idx, word in enumerate(sentence.split()):
@@ -453,7 +470,6 @@ def _whisper_sync(
                 break
         matched.append(best if best is not None else max(cursor - 1, 0))
     
-    # Quality check
     quality = sum(
         1 for i, fw in enumerate(flat)
         if fw["clean"] == ts_clean[matched[i]]
@@ -524,7 +540,6 @@ def _build_output(
 ) -> tuple[list[dict], list[dict]]:
     """بناء aligned sentences و timeline events."""
     
-    # Aligned sentences
     aligned = []
     for s_idx, sentence in enumerate(sentences):
         sw = [wt for wt in word_times if wt["s_idx"] == s_idx]
@@ -548,7 +563,6 @@ def _build_output(
                 "words":    [],
             })
     
-    # Timeline events
     timeline = sorted(
         [
             {
@@ -561,7 +575,6 @@ def _build_output(
         key=lambda x: x["time"],
     )
     
-    # Debug sample
     for ev in timeline[:4]:
         ws = sentences[ev["sentence_idx"]].split()
         wc = ev["visible_word_count"]
