@@ -115,13 +115,19 @@ jobs:
           cache: 'pip'
 
       # ═══════════════════════════════════════════════════════════════
-      # 3. Install PyTorch CPU FIRST
+      # 3. ✨ FIX: Install PyTorch with COMPATIBLE version
       # ═══════════════════════════════════════════════════════════════
-      - name: 🔥 Install PyTorch (CPU only)
+      - name: 🔥 Install PyTorch (CPU - COMPATIBLE versions)
         run: |
           pip install --upgrade pip
-          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          echo "✅ PyTorch CPU installed"
+          
+          # ⚠️ مهم: استخدم torch 2.0.x المتوافق مع whisperx
+          pip install torch==2.0.1+cpu torchaudio==2.0.2+cpu \
+            --index-url https://download.pytorch.org/whl/cpu
+          
+          # تأكد من الإصدارات
+          python -c "import torch; print(f'✅ PyTorch: {torch.__version__}')"
+          python -c "import torchaudio; print(f'✅ TorchAudio: {torchaudio.__version__}')"
 
       # ═══════════════════════════════════════════════════════════════
       # 4. Install Python Dependencies
@@ -130,6 +136,9 @@ jobs:
         run: |
           pip install -r requirements.txt
           python -m playwright install chromium
+          
+          # تحقق من WhisperX
+          python -c "import whisperx; print(f'✅ WhisperX installed')"
 
       # ═══════════════════════════════════════════════════════════════
       # 5. Setup Node.js
@@ -199,7 +208,7 @@ jobs:
         run: npx playwright install chromium
 
       # ═══════════════════════════════════════════════════════════════
-      # 9. Cache WhisperX Models
+      # 9. Cache WhisperX Models (✨ غيّرنا الـ key إلى v3)
       # ═══════════════════════════════════════════════════════════════
       - name: 💾 Cache WhisperX models
         id: cache-whisperx
@@ -209,7 +218,7 @@ jobs:
             ~/.cache/whisperx
             ~/.cache/huggingface
             ~/.cache/torch
-          key: whisperx-models-medium-v2
+          key: whisperx-models-medium-v3
           restore-keys: |
             whisperx-models-
 
