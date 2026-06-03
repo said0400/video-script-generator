@@ -115,30 +115,39 @@ jobs:
           cache: 'pip'
 
       # ═══════════════════════════════════════════════════════════════
-      # 3. ✨ FIX: Install PyTorch with COMPATIBLE version
+      # 3. ✨ FIX: Install PyTorch (CPU - COMPATIBLE versions)
       # ═══════════════════════════════════════════════════════════════
       - name: 🔥 Install PyTorch (CPU - COMPATIBLE versions)
         run: |
           pip install --upgrade pip
           
-          # ⚠️ مهم: استخدم torch 2.0.x المتوافق مع whisperx
+          # ⚠️ مهم جداً: pin to old PyTorch that works with whisperx
           pip install torch==2.0.1+cpu torchaudio==2.0.2+cpu \
             --index-url https://download.pytorch.org/whl/cpu
           
-          # تأكد من الإصدارات
           python -c "import torch; print(f'✅ PyTorch: {torch.__version__}')"
           python -c "import torchaudio; print(f'✅ TorchAudio: {torchaudio.__version__}')"
 
       # ═══════════════════════════════════════════════════════════════
-      # 4. Install Python Dependencies
+      # 4. ✨ FIX: Install Dependencies (whisperx without deps)
       # ═══════════════════════════════════════════════════════════════
       - name: 📦 Install Python dependencies
         run: |
+          # ✅ تثبيت requirements (بدون whisperx)
           pip install -r requirements.txt
+          
+          # ✅ تثبيت whisperx بدون deps (لتجنب تحديث PyTorch)
+          pip install --no-deps whisperx==3.1.1
+          
+          # تأكد PyTorch لم يتغيّر
+          python -c "import torch; print(f'✅ PyTorch still: {torch.__version__}')"
+          python -c "import torchaudio; print(f'✅ TorchAudio still: {torchaudio.__version__}')"
+          
+          # Playwright
           python -m playwright install chromium
           
-          # تحقق من WhisperX
-          python -c "import whisperx; print(f'✅ WhisperX installed')"
+          # تحقق من whisperx
+          python -c "import whisperx; print('✅ WhisperX installed and working')"
 
       # ═══════════════════════════════════════════════════════════════
       # 5. Setup Node.js
@@ -208,7 +217,7 @@ jobs:
         run: npx playwright install chromium
 
       # ═══════════════════════════════════════════════════════════════
-      # 9. Cache WhisperX Models (✨ غيّرنا الـ key إلى v3)
+      # 9. Cache WhisperX Models (✨ غيّرنا الـ key إلى v4)
       # ═══════════════════════════════════════════════════════════════
       - name: 💾 Cache WhisperX models
         id: cache-whisperx
@@ -218,7 +227,7 @@ jobs:
             ~/.cache/whisperx
             ~/.cache/huggingface
             ~/.cache/torch
-          key: whisperx-models-medium-v3
+          key: whisperx-models-medium-v4
           restore-keys: |
             whisperx-models-
 
