@@ -30,13 +30,6 @@ on:
         type: choice
         options: [male_smooth, male_warm, female_clear, female_warm, neutral]
 
-      tone:
-        description: "🎨 Narration tone"
-        required: true
-        default: "energetic"
-        type: choice
-        options: [energetic, inspirational, emotional, calm]
-
       sfx_type:
         description: "🔊 Transition SFX"
         required: true
@@ -70,13 +63,6 @@ on:
         type: choice
         options: ["false", "true"]
 
-      ab_test:
-        description: "🔀 A/B test? (verbal_hook variant)"
-        required: true
-        default: "false"
-        type: choice
-        options: ["false", "true"]
-
       force:
         description: "⚡ Force re-render? (ignore resume)"
         required: true
@@ -91,7 +77,6 @@ on:
         type: choice
         options: ["false", "true"]
 
-      # ── Facebook Publishing ─────────────────────────────────────────────────
       publish_fb:
         description: "📘 Auto-publish to Facebook after render?"
         required: true
@@ -110,7 +95,7 @@ jobs:
   generate:
     name: 🎬 Generate + Publish
     runs-on: ubuntu-latest
-    timeout-minutes: 180  # ⬆️ زيد الوقت بسبب WhisperX
+    timeout-minutes: 180
 
     steps:
 
@@ -130,7 +115,7 @@ jobs:
           cache: 'pip'
 
       # ═══════════════════════════════════════════════════════════════
-      # 3. ✨ NEW: Install PyTorch CPU FIRST (مهم!)
+      # 3. Install PyTorch CPU FIRST
       # ═══════════════════════════════════════════════════════════════
       - name: 🔥 Install PyTorch (CPU only)
         run: |
@@ -164,7 +149,7 @@ jobs:
         run: npm install
 
       # ═══════════════════════════════════════════════════════════════
-      # 7. Install System Dependencies (✨ مع WhisperX deps)
+      # 7. Install System Dependencies
       # ═══════════════════════════════════════════════════════════════
       - name: 🔧 Install system dependencies
         if: ${{ inputs.script_only == 'false' }}
@@ -214,7 +199,7 @@ jobs:
         run: npx playwright install chromium
 
       # ═══════════════════════════════════════════════════════════════
-      # 9. ✨ NEW: Cache WhisperX Models
+      # 9. Cache WhisperX Models
       # ═══════════════════════════════════════════════════════════════
       - name: 💾 Cache WhisperX models
         id: cache-whisperx
@@ -247,7 +232,7 @@ jobs:
           search_artifacts: true
 
       # ═══════════════════════════════════════════════════════════════
-      # 11. Run the Generator
+      # 11. Run Generator + Publish
       # ═══════════════════════════════════════════════════════════════
       - name: 🎬 Run generator + publish
         env:
@@ -265,7 +250,6 @@ jobs:
 
           [ "${{ inputs.script_only }}" = "true" ] && FLAGS="$FLAGS --script-only"
           [ "${{ inputs.no_video }}"    = "true" ] && FLAGS="$FLAGS --no-video"
-          [ "${{ inputs.ab_test }}"     = "true" ] && FLAGS="$FLAGS --ab-test"
           [ "${{ inputs.force }}"       = "true" ] && FLAGS="$FLAGS --force"
           [ "${{ inputs.force_ai }}"    = "true" ] && FLAGS="$FLAGS --force-ai"
           [ "${{ inputs.publish_fb }}"  = "true" ] && FLAGS="$FLAGS --publish-fb --fb-lang ${{ inputs.fb_language }}"
@@ -276,7 +260,6 @@ jobs:
           python main.py "${{ inputs.scripts_file }}" \
             --voice-en     "${{ inputs.voice_en }}"    \
             --voice-ar     "${{ inputs.voice_ar }}"    \
-            --tone         "${{ inputs.tone }}"        \
             --music-volume "${{ inputs.music_volume }}" \
             --sfx-type     "${{ inputs.sfx_type }}"    \
             --formats      "${{ inputs.formats }}"     \
@@ -331,7 +314,7 @@ jobs:
           retention-days: 30
 
       # ═══════════════════════════════════════════════════════════════
-      # 16. Upload Audio (إذا كان audio-only mode)
+      # 16. Upload Audio (audio-only mode)
       # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload audio
         if: ${{ inputs.no_video == 'true' && inputs.script_only == 'false' }}
