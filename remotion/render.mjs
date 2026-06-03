@@ -1,10 +1,10 @@
-// remotion/render.mjs — Karaoke Cinematic System (KCS) + HOOK
+// remotion/render.mjs — KCS + Title + Power Word Backgrounds
 // ✨ النسخة الكاملة:
-//    - نص فقط + ألوان للكلمات القوية
-//    - فلاتر سينمائية
-//    - كل مقطع 3 ثوانٍ (TikTok style)
-//    - 🔥 HOOK في أول 3 ثوانٍ (zoom قوي + flash)
-//    - ✅ Zoom in على كل المقاطع
+//    - نص أبيض على خلفية سوداء
+//    - الكلمات القوية: لون أصفر على خلفية حمراء (وحدها)
+//    - عنوان احترافي في الأعلى مع إيموجي
+//    - كل مقطع 3 ثوانٍ + zoom in
+//    - HOOK في البداية بـ zoom قوي
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync,
          symlinkSync, existsSync } from "fs";
@@ -23,6 +23,9 @@ const props = JSON.parse(readFileSync(manifestPath, "utf-8"));
 
 const {
   title,
+  display_title = title,        // ✨ NEW
+  emoji_left    = "🔥",          // ✨ NEW
+  emoji_right   = "💥",          // ✨ NEW
   sentences,
   audio,
   videos,
@@ -32,7 +35,6 @@ const {
   word_timeline = [],
   aligned = [],
   lang = "ar",
-  // ✨ NEW
   clip_duration = 3.0,
   has_hook      = false,
   hook_keyword  = "",
@@ -46,6 +48,7 @@ const safeOut = outputPath.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").sli
 const TMP     = `/tmp/vsg_${safeOut}`;
 mkdirSync(TMP, { recursive: true });
 
+console.log(`📌 Display Title: ${emoji_left} ${display_title} ${emoji_right}`);
 console.log(`🎬 Clip duration: ${clip_duration}s | Hook: ${has_hook ? "YES (🔥 " + hook_keyword + ")" : "NO"}`);
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -53,18 +56,13 @@ console.log(`🎬 Clip duration: ${clip_duration}s | Hook: ${has_hook ? "YES (�
 // ═════════════════════════════════════════════════════════════════════════════
 
 const KCS = {
-  WORDS_PER_CHUNK_MIN: 3,
   WORDS_PER_CHUNK_MAX: 4,
   MAX_WORDS_PER_LINE: 2,
   
   NORMAL_SIZE_AR:  78,
   NORMAL_SIZE_EN:  74,
-  POWER_SIZE_AR:   110,
-  POWER_SIZE_EN:   105,
   
   FADE_IN_FRAMES:  4,
-  LINE_HEIGHT:     1.4,
-  WORD_GAP:        18,
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -78,10 +76,6 @@ const DEFAULT_COLORS = [
 const POWER_COLORS = (accent_colors && accent_colors.length >= 2)
   ? accent_colors
   : DEFAULT_COLORS;
-
-function getPowerColorForSentence(sIdx) {
-  return POWER_COLORS[sIdx % POWER_COLORS.length];
-}
 
 console.log(`🎨 Power colors: ${POWER_COLORS.slice(0, 4).join(", ")}`);
 
@@ -117,7 +111,7 @@ function isPowerWord(word) {
 console.log(`🔥 Power Words (${power_words.length}): ${power_words.slice(0, 8).join(", ")}${power_words.length > 8 ? "..." : ""}`);
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 📦 CHUNKING
+// 📦 CHUNKING — فصل الكلمات القوية وحدها
 // ═════════════════════════════════════════════════════════════════════════════
 
 function chunkSentence(sentence) {
@@ -125,31 +119,37 @@ function chunkSentence(sentence) {
   if (words.length === 0) return [];
   
   const chunks = [];
-  let i = 0;
+  let buffer = [];
   
-  while (i < words.length) {
-    const remaining = words.length - i;
-    let chunkSize;
-    
-    if (remaining <= KCS.WORDS_PER_CHUNK_MAX) {
-      chunkSize = remaining;
-    } else if (remaining <= KCS.WORDS_PER_CHUNK_MAX + 1) {
-      chunkSize = KCS.WORDS_PER_CHUNK_MIN;
-    } else {
-      const slice = words.slice(i, i + KCS.WORDS_PER_CHUNK_MAX);
-      const hasPower = slice.some(w => isPowerWord(w));
-      chunkSize = hasPower ? 3 : 4;
+  const flushBuffer = () => {
+    if (buffer.length > 0) {
+      chunks.push({
+        words: [...buffer],
+        hasPower: false,
+      });
+      buffer = [];
     }
+  };
+  
+  for (const word of words) {
+    const isPower = isPowerWord(word);
     
-    const chunkWords = words.slice(i, i + chunkSize);
-    chunks.push({
-      words: chunkWords,
-      hasPower: chunkWords.some(w => isPowerWord(w)),
-    });
-    
-    i += chunkSize;
+    if (isPower) {
+      // ✨ كلمة قوية → اعرضها وحدها
+      flushBuffer();
+      chunks.push({
+        words: [word],
+        hasPower: true,
+      });
+    } else {
+      buffer.push(word);
+      if (buffer.length >= KCS.WORDS_PER_CHUNK_MAX) {
+        flushBuffer();
+      }
+    }
   }
   
+  flushBuffer();
   return chunks;
 }
 
@@ -161,12 +161,8 @@ function splitChunkIntoLines(words) {
   if (words.length <= KCS.MAX_WORDS_PER_LINE) {
     return [words];
   }
-  
   const mid = Math.ceil(words.length / 2);
-  return [
-    words.slice(0, mid),
-    words.slice(mid),
-  ];
+  return [words.slice(0, mid), words.slice(mid)];
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -195,14 +191,13 @@ const esc = s => (s||"").toString()
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎨 HTML BUILDER — Karaoke Style
+// 🎨 HTML BUILDER — Title + Text Backgrounds
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildKaraokeHTML(opts) {
   const {
     chunk,
     currentWordIdx,
-    accent,
     fadeProgress,
     sentenceIdx,
     totalSentences,
@@ -215,75 +210,62 @@ function buildKaraokeHTML(opts) {
     ? `"Noto Naskh Arabic","Amiri",serif`
     : `"Inter","Helvetica Neue",Arial,sans-serif`;
   
-  const lines = splitChunkIntoLines(allWords);
+  // العنوان
+  const titleAr = isArabicText(display_title);
+  const titleFont = titleAr
+    ? `"Noto Naskh Arabic","Amiri",serif`
+    : `"Inter","Helvetica Neue",Arial,sans-serif`;
+  const titleDir = titleAr ? "rtl" : "ltr";
   
-  let wordCounter = 0;
-  const linesHTML = lines.map(lineWords => {
-    const wordsHTML = lineWords.map(word => {
-      const isCurrent = wordCounter === currentWordIdx;
-      const isPast    = wordCounter < currentWordIdx;
-      const isPower   = isPowerWord(word);
+  // ✨ هل الكلمة الحالية قوية؟
+  const currentWord = allWords[currentWordIdx];
+  const isCurrentWordPower = currentWord && isPowerWord(currentWord);
+  
+  // إذا الـ chunk يحتوي كلمة قوية واحدة فقط، اعرضها بأسلوب خاص
+  const showPowerWordSolo = chunk.hasPower && allWords.length === 1;
+  
+  let mainContentHTML = "";
+  
+  if (showPowerWordSolo) {
+    // 🟡 الكلمة القوية وحدها - خلفية حمراء + لون أصفر
+    mainContentHTML = `
+      <div class="power-word-container">
+        <div class="power-word-box">
+          <span class="power-word-text">${esc(allWords[0])}</span>
+        </div>
+      </div>
+    `;
+  } else {
+    // 📝 النص العادي - خلفية سوداء + لون أبيض
+    const lines = splitChunkIntoLines(allWords);
+    
+    let wordCounter = 0;
+    const linesHTML = lines.map(lineWords => {
+      const wordsHTML = lineWords.map(word => {
+        const isCurrent = wordCounter === currentWordIdx;
+        const isPast    = wordCounter < currentWordIdx;
+        
+        let opacity;
+        if (isCurrent) opacity = 1.0;
+        else if (isPast) opacity = 0.95;
+        else opacity = 0.55;
+        
+        wordCounter++;
+        
+        return `<span class="word" style="opacity: ${opacity};">${esc(word)}</span>`;
+      }).join(" ");
       
-      const fontSize = isPower
-        ? (ar ? `${KCS.POWER_SIZE_AR}px` : `${KCS.POWER_SIZE_EN}px`)
-        : (ar ? `${KCS.NORMAL_SIZE_AR}px` : `${KCS.NORMAL_SIZE_EN}px`);
-      
-      let color;
-      let opacity;
-      let textShadow;
-      
-      if (isCurrent) {
-        if (isPower) {
-          color = accent;
-          textShadow = `
-            0 0 30px ${accent},
-            0 0 60px ${accent}cc,
-            0 0 90px ${accent}88,
-            0 6px 25px rgba(0,0,0,1),
-            4px 4px 0 rgba(0,0,0,0.9)
-          `;
-        } else {
-          color = "#FFFFFF";
-          textShadow = `
-            0 0 25px rgba(255,255,255,0.6),
-            0 6px 20px rgba(0,0,0,1),
-            3px 3px 0 rgba(0,0,0,0.9)
-          `;
-        }
-        opacity = 1;
-      } else if (isPast) {
-        color = isPower ? accent : "#FFFFFF";
-        opacity = isPower ? 0.95 : 0.85;
-        textShadow = isPower
-          ? `0 0 15px ${accent}aa, 0 4px 15px rgba(0,0,0,0.9), 2px 2px 0 rgba(0,0,0,0.8)`
-          : `0 4px 15px rgba(0,0,0,0.9), 2px 2px 0 rgba(0,0,0,0.8)`;
-      } else {
-        color = isPower ? `${accent}` : "#FFFFFF";
-        opacity = isPower ? 0.55 : 0.40;
-        textShadow = `0 4px 12px rgba(0,0,0,0.85), 2px 2px 0 rgba(0,0,0,0.7)`;
-      }
-      
-      const stroke = isPower ? "4px" : "3px";
-      
-      wordCounter++;
-      
-      return `<span class="word" style="
-        font-size: ${fontSize};
-        color: ${color};
-        opacity: ${opacity};
-        text-shadow: ${textShadow};
-        -webkit-text-stroke: ${stroke} rgba(0,0,0,0.95);
-        paint-order: stroke fill;
-        font-weight: 900;
-        line-height: ${KCS.LINE_HEIGHT};
-        display: inline-block;
-        margin: 0 ${KCS.WORD_GAP / 2}px;
-        transition: all 0.15s ease-out;
-      ">${esc(word)}</span>`;
+      return `<div class="line">${wordsHTML}</div>`;
     }).join("");
     
-    return `<div class="line">${wordsHTML}</div>`;
-  }).join("");
+    mainContentHTML = `
+      <div class="text-container">
+        <div class="text-box">
+          ${linesHTML}
+        </div>
+      </div>
+    `;
+  }
   
   return `<!DOCTYPE html>
 <html lang="${ar?"ar":"en"}">
@@ -299,13 +281,14 @@ function buildKaraokeHTML(opts) {
       background:transparent;
     }
     
+    /* تدرج علوي وسفلي */
     .overlay-top{
       position:absolute;
       top:0;left:0;right:0;
-      height:30%;
+      height:35%;
       background:linear-gradient(to bottom,
-        rgba(0,0,0,0.75) 0%,
-        rgba(0,0,0,0.3) 60%,
+        rgba(0,0,0,0.85) 0%,
+        rgba(0,0,0,0.4) 70%,
         transparent 100%
       );
       pointer-events:none;
@@ -315,17 +298,68 @@ function buildKaraokeHTML(opts) {
     .overlay-bottom{
       position:absolute;
       bottom:0;left:0;right:0;
-      height:50%;
+      height:45%;
       background:linear-gradient(to top,
-        rgba(0,0,0,0.90) 0%,
-        rgba(0,0,0,0.6) 40%,
-        rgba(0,0,0,0.2) 80%,
+        rgba(0,0,0,0.85) 0%,
+        rgba(0,0,0,0.4) 60%,
         transparent 100%
       );
       pointer-events:none;
       z-index:1;
     }
     
+    /* ════════════════════════════════════════════════════════════ */
+    /* ✨ NEW: العنوان في الأعلى */
+    /* ════════════════════════════════════════════════════════════ */
+    .title-container{
+      position:absolute;
+      top:140px;
+      left:50%;
+      transform:translateX(-50%);
+      width:90%;
+      max-width:980px;
+      direction:${titleDir};
+      text-align:center;
+      z-index:20;
+    }
+    
+    .title-box{
+      display:inline-block;
+      background:linear-gradient(135deg, 
+        rgba(255,0,60,0.95) 0%,
+        rgba(200,0,40,0.95) 100%
+      );
+      padding:18px 40px;
+      border-radius:60px;
+      border:3px solid #FFFFFF;
+      box-shadow:
+        0 0 40px rgba(255,0,60,0.6),
+        0 8px 25px rgba(0,0,0,0.7);
+    }
+    
+    .title-text{
+      font-family:${titleFont};
+      font-size:${titleAr ? "48px" : "44px"};
+      font-weight:900;
+      color:#FFFFFF;
+      text-shadow:
+        0 2px 8px rgba(0,0,0,0.8),
+        0 0 20px rgba(255,255,255,0.3);
+      letter-spacing:${titleAr ? "0" : "-0.02em"};
+      display:inline-flex;
+      align-items:center;
+      gap:14px;
+      white-space:nowrap;
+    }
+    
+    .title-emoji{
+      font-size:${titleAr ? "56px" : "52px"};
+      filter:drop-shadow(0 4px 8px rgba(0,0,0,0.5));
+    }
+    
+    /* ════════════════════════════════════════════════════════════ */
+    /* 📝 النص العادي - خلفية سوداء + أبيض */
+    /* ════════════════════════════════════════════════════════════ */
     .text-container{
       position:absolute;
       left:50%;
@@ -339,10 +373,22 @@ function buildKaraokeHTML(opts) {
       opacity:${fadeProgress};
     }
     
+    .text-box{
+      display:inline-block;
+      background:rgba(0,0,0,0.88);
+      padding:36px 52px;
+      border-radius:30px;
+      border:4px solid rgba(255,255,255,0.25);
+      box-shadow:
+        0 0 50px rgba(0,0,0,0.9),
+        0 20px 50px rgba(0,0,0,0.7);
+      max-width:100%;
+    }
+    
     .line{
       display:block;
       text-align:center;
-      margin-bottom:8px;
+      margin-bottom:14px;
     }
     
     .line:last-child{
@@ -350,7 +396,82 @@ function buildKaraokeHTML(opts) {
     }
     
     .word{
-      vertical-align:middle;
+      font-family:${font};
+      font-size:${ar ? KCS.NORMAL_SIZE_AR : KCS.NORMAL_SIZE_EN}px;
+      font-weight:900;
+      color:#FFFFFF;
+      line-height:1.3;
+      display:inline-block;
+      margin:0 14px;
+      text-shadow:
+        0 4px 12px rgba(0,0,0,0.95),
+        2px 2px 0 rgba(0,0,0,0.8);
+      -webkit-text-stroke:2px rgba(0,0,0,0.9);
+      paint-order:stroke fill;
+      transition:opacity 0.15s ease-out;
+    }
+    
+    /* ════════════════════════════════════════════════════════════ */
+    /* 🔥 الكلمة القوية وحدها - خلفية حمراء + أصفر */
+    /* ════════════════════════════════════════════════════════════ */
+    .power-word-container{
+      position:absolute;
+      left:50%;
+      top:50%;
+      transform:translate(-50%, -50%);
+      direction:${dir};
+      text-align:center;
+      z-index:10;
+      opacity:${fadeProgress};
+    }
+    
+    .power-word-box{
+      display:inline-block;
+      background:linear-gradient(135deg,
+        #FF003C 0%,
+        #C8001E 50%,
+        #FF003C 100%
+      );
+      padding:40px 80px;
+      border-radius:40px;
+      border:6px solid #FFD700;
+      box-shadow:
+        0 0 60px rgba(255,0,60,0.8),
+        0 0 120px rgba(255,215,0,0.4),
+        0 20px 50px rgba(0,0,0,0.9),
+        inset 0 0 30px rgba(255,255,255,0.1);
+      animation:powerPulse 0.4s ease-out;
+    }
+    
+    .power-word-text{
+      font-family:${font};
+      font-size:${ar ? "160px" : "150px"};
+      font-weight:900;
+      color:#FFD700;
+      letter-spacing:${ar ? "0" : "-0.03em"};
+      text-shadow:
+        0 0 30px rgba(255,215,0,0.8),
+        0 0 60px rgba(255,215,0,0.5),
+        0 8px 20px rgba(0,0,0,1),
+        4px 4px 0 rgba(0,0,0,0.9);
+      -webkit-text-stroke:4px rgba(0,0,0,0.95);
+      paint-order:stroke fill;
+      display:inline-block;
+    }
+    
+    @keyframes powerPulse {
+      0% {
+        transform:scale(0.7);
+        opacity:0;
+      }
+      50% {
+        transform:scale(1.1);
+        opacity:1;
+      }
+      100% {
+        transform:scale(1);
+        opacity:1;
+      }
     }
   </style>
 </head>
@@ -358,9 +479,18 @@ function buildKaraokeHTML(opts) {
   <div class="overlay-top"></div>
   <div class="overlay-bottom"></div>
   
-  <div class="text-container">
-    ${linesHTML}
+  <!-- ✨ العنوان في الأعلى -->
+  <div class="title-container">
+    <div class="title-box">
+      <div class="title-text">
+        <span class="title-emoji">${emoji_left}</span>
+        <span>${esc(display_title)}</span>
+        <span class="title-emoji">${emoji_right}</span>
+      </div>
+    </div>
   </div>
+  
+  ${mainContentHTML}
 </body>
 </html>`;
 }
@@ -426,7 +556,6 @@ function buildFrameStateMap(realDur) {
       chunk_idx:        chunkIdx,
       chunk:            chunk,
       current_word_idx: currentWordIdx,
-      accent:           getPowerColorForSentence(chunk.sentence_idx),
       fade_progress:    fadeProgress,
       sentence_idx:     chunk.sentence_idx,
     };
@@ -453,12 +582,11 @@ async function renderAllPNGs(page, frameStateMap) {
     }
   }
   
-  console.log(`  📸 ${uniqueStates.size} unique states (Karaoke)`);
+  console.log(`  📸 ${uniqueStates.size} unique states`);
   
   const initHtml = buildKaraokeHTML({
     chunk:           { words: ["تحميل"], hasPower: false },
     currentWordIdx:  0,
-    accent:          POWER_COLORS[0],
     fadeProgress:    1.0,
     sentenceIdx:     0,
     totalSentences:  1,
@@ -475,7 +603,6 @@ async function renderAllPNGs(page, frameStateMap) {
     const html = buildKaraokeHTML({
       chunk:           state.chunk,
       currentWordIdx:  state.current_word_idx,
-      accent:          state.accent,
       fadeProgress:    state.fade_progress,
       sentenceIdx:     state.sentence_idx,
       totalSentences:  sentences.length,
@@ -530,12 +657,11 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎬 ✅ PROCESS BACKGROUND — Zoom In على كل المقاطع + HOOK خاص
+// 🎬 PROCESS BACKGROUND — Zoom In + HOOK
 // ═════════════════════════════════════════════════════════════════════════════
 
 function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   
-  // ✅ خطوة 1: احصل على مدة الفيديو الأصلي
   const probeResult = spawnSync("ffprobe", [
     "-v", "error",
     "-show_entries", "format=duration",
@@ -548,7 +674,6 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   const hookTag = isHook ? "🔥 HOOK" : "";
   console.log(`     [bg ${idx}] ${hookTag} source: ${sourceDuration.toFixed(2)}s | need: ${duration.toFixed(2)}s`);
   
-  // ✅ خطوة 2: قرر استراتيجية الفيديو
   let inputArgs;
   
   if (sourceDuration >= duration + 0.5) {
@@ -559,37 +684,30 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
     inputArgs = ["-stream_loop", "-1", "-i", videoPath];
   }
   
-  // ✅ خطوة 3: ZOOM IN على كل المقاطع
-  // الـ HOOK: zoom قوي (من 1.0 إلى 1.4)
-  // المقاطع العادية: zoom ناعم (من 1.0 إلى 1.15)
+  // Zoom in
   const startScale = 1.0;
   const endScale   = isHook ? 1.4 : 1.15;
   const scaleStep  = (endScale - startScale) / duration;
   
-  // scale يكبر مع الوقت (مع trunc للحصول على أرقام زوجية)
   const zoomFilter = 
     `scale=w='trunc((iw*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':` +
     `h='trunc((ih*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':` +
     `eval=frame`;
   
-  // ✅ خطوة 4: فلاتر سينمائية
   const cinematicFilters = [
     "curves=r='0/0 0.3/0.25 0.7/0.78 1/0.92':g='0/0 0.3/0.27 0.7/0.80 1/0.95':b='0/0.05 0.3/0.32 0.7/0.85 1/1.0'",
     "hue=s=0.85",
     isHook 
-      ? "eq=contrast=1.20:brightness=0.00:saturation=1.05"   // HOOK: تباين أعلى
+      ? "eq=contrast=1.20:brightness=0.00:saturation=1.05"
       : "eq=contrast=1.10:brightness=-0.02:saturation=0.95",
     "vignette=PI/4.5",
     "unsharp=5:5:0.6:5:5:0.0",
   ].join(",");
   
-  // ✅ خطوة 5: fade in/out
-  // HOOK: بدون fade in (دخول فوري)
   const fadeFilter = isHook
     ? `fade=t=out:st=${(duration - 0.2).toFixed(3)}:d=0.2`
     : `fade=t=in:st=0:d=0.3,fade=t=out:st=${(duration - 0.3).toFixed(3)}:d=0.3`;
   
-  // ✅ بناء filter chain النهائي
   const videoFilter = 
     `${zoomFilter},` +
     `crop=${WIDTH}:${HEIGHT}:(iw-${WIDTH})/2:(ih-${HEIGHT})/2,` +
@@ -597,7 +715,6 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
     `${cinematicFilters},` +
     `${fadeFilter}`;
   
-  // ✅ تشغيل ffmpeg
   const r = spawnSync("ffmpeg", [
     "-y",
     ...inputArgs,
@@ -606,7 +723,7 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
     "-r", String(FPS),
     "-c:v", "libx264",
     "-preset", "fast",
-    "-crf", isHook ? "18" : "20",     // HOOK: جودة أعلى
+    "-crf", isHook ? "18" : "20",
     "-pix_fmt", "yuv420p",
     "-an",
     outPath,
@@ -614,36 +731,29 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   
   if (r.status !== 0) {
     console.error(`     [bg ${idx}] FAILED:`, r.stderr.toString().slice(-300));
-    console.error(`     [bg ${idx}] Trying basic fallback...`);
     
-    // Fallback: بدون zoom، فقط scale + crop
     const basicFilter = 
       `scale=${Math.round(WIDTH * 1.1)}:${Math.round(HEIGHT * 1.1)}:force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1,${cinematicFilters},${fadeFilter}`;
     
     const r2 = spawnSync("ffmpeg", [
-      "-y",
-      "-stream_loop", "-1",
+      "-y", "-stream_loop", "-1",
       "-i", videoPath,
       "-t", duration.toFixed(3),
       "-vf", basicFilter,
       "-r", String(FPS),
-      "-c:v", "libx264",
-      "-preset", "fast",
-      "-crf", "22",
-      "-pix_fmt", "yuv420p",
-      "-an",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+      "-pix_fmt", "yuv420p", "-an",
       outPath,
     ], { stdio: ["ignore", "pipe", "pipe"] });
     
     if (r2.status !== 0) {
-      console.error("❌ Background processing failed completely");
-      console.error(r2.stderr.toString().slice(-300));
+      console.error("❌ Background failed");
       process.exit(1);
     }
   }
   
-  console.log(`     [bg ${idx}] ✅ rendered with zoom ${startScale}→${endScale}`);
+  console.log(`     [bg ${idx}] ✅ zoom ${startScale}→${endScale}`);
   return outPath;
 }
 
@@ -675,7 +785,6 @@ function overlayOnBackground(bgMp4, captionMov, outPath) {
 function xfadeConcat(clipPaths, clipDurations) {
   if (clipPaths.length === 1) return clipPaths[0];
   
-  // انتقالات سلسة بين المقاطع
   const TRANSITIONS = ["fade", "fadeblack", "dissolve", "wiperight", "slideleft"];
   const XFADE = 0.35;
   
@@ -707,10 +816,6 @@ function xfadeConcat(clipPaths, clipDurations) {
   return outPath;
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 🎵 ✅ MERGE AUDIO — يحافظ على حركة الفيديو
-// ═════════════════════════════════════════════════════════════════════════════
-
 function mergeAudio(videoPath, audioPath, outPath) {
   const aDur = probeDuration(audioPath);
   const vDur = probeDuration(videoPath);
@@ -718,29 +823,20 @@ function mergeAudio(videoPath, audioPath, outPath) {
   
   let finalVideo = videoPath;
   
-  // ✅ إذا الفيديو أقصر من الصوت، نعمل loop بدل tpad
   if (vDur < aDur - 0.3) {
-    console.log(`⚠️  Video shorter than audio by ${(aDur - vDur).toFixed(2)}s - looping video...`);
-    
+    console.log(`⚠️  Video shorter - looping...`);
     const looped = `${TMP}/video_looped.mp4`;
     const r = spawnSync("ffmpeg", [
-      "-y",
-      "-stream_loop", "-1",
+      "-y", "-stream_loop", "-1",
       "-i", videoPath,
       "-t", aDur.toFixed(3),
-      "-c:v", "libx264",
-      "-preset", "fast",
-      "-crf", "22",
-      "-pix_fmt", "yuv420p",
-      "-an",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+      "-pix_fmt", "yuv420p", "-an",
       looped,
     ], { stdio: ["ignore", "pipe", "pipe"] });
     
     if (r.status === 0) {
       finalVideo = looped;
-      console.log(`  ✅ Video looped to ${aDur.toFixed(2)}s`);
-    } else {
-      console.error(`  ⚠️  Loop failed, using original`);
     }
   }
   
@@ -768,7 +864,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log("\n🚀 Starting KCS Renderer (Karaoke Cinematic System + HOOK)\n");
+  console.log("\n🚀 Starting KCS Renderer + Title + Power BG\n");
 
   const frameStateMap = buildFrameStateMap(effectiveDuration);
 
@@ -791,7 +887,6 @@ async function main() {
   await browser.close();
   console.log(`✅ ${pngCache.size} PNGs done\n`);
 
-  // ✨ NEW: حساب عدد المقاطع بناءً على المدة الإجمالية و clip_duration
   const totalClips = Math.max(1, Math.floor(effectiveDuration / clip_duration));
   const actualClipDuration = effectiveDuration / totalClips;
   
@@ -799,7 +894,7 @@ async function main() {
   console.log(`🎥 Available videos: ${videos.length}`);
   
   if (has_hook && videos.length > 0) {
-    console.log(`🔥 First clip will use HOOK video with strong zoom (1.0→1.4)`);
+    console.log(`🔥 First clip = HOOK with strong zoom (1.0→1.4)`);
   }
   
   const finalClips = [], clipDurations = [];
@@ -814,13 +909,7 @@ async function main() {
     const startF    = Math.floor(clipStart * FPS);
     const clipMap   = frameStateMap.slice(startF, startF + nFrames);
     
-    // ✨ NEW: هل هذا المقطع هو الـ HOOK؟
     const isHook = (i === 0 && has_hook);
-    
-    // ✨ NEW: اختيار الفيديو
-    // المقطع 0 → فيديو 0 (HOOK)
-    // المقطع 1 → فيديو 1
-    // إذا انتهت الفيديوهات، نُعيد من البداية
     const videoIdx = i % videos.length;
     const videoSrc = videos[videoIdx];
     
@@ -841,7 +930,7 @@ async function main() {
     process.stdout.write("✓\n");
   }
 
-  console.log(`\n✨ Concatenating with smooth transitions...`);
+  console.log(`\n✨ Concatenating...`);
   const dissolved = xfadeConcat(finalClips, clipDurations);
 
   console.log("🎵 Merging audio...");
