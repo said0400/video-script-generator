@@ -5,19 +5,17 @@ ai_enricher.py — Smart AI Assistant powered by Groq
 ✨ يدعم 3 لغات (AR, FR, EN) بشكل صحيح
 
 الوظائف:
-  1. تحليل المحتوى (نوع/مشاعر/شدة)
-  2. اقتراح Tags للجمل بدون tags
-  3. توليد Power Words (AR + FR + EN)
-  4. توليد Visual Keywords (للفيديوهات)
-  5. توليد Pattern Interrupts
-  6. توليد Engagement Questions
-  7. توليد Hashtags
-  8. توليد Caption للنشر
-  9. اقتراح Accent Colors
+  1.  تحليل المحتوى (نوع/مشاعر/شدة)
+  2.  اقتراح Tags للجمل بدون tags
+  3.  توليد Power Words
+  4.  توليد Visual Keywords
+  5.  توليد Pattern Interrupts
+  6.  توليد Engagement Questions
+  7.  توليد Hashtags
+  8.  توليد Caption للنشر
+  9.  اقتراح Accent Colors
   10. توليد Hook Keyword
   11. العنوان + إيموجي (من Excel مباشرة)
-
-السلوك عند الفشل: ⛔ توقف الفيديو نهائياً
 """
 
 from __future__ import annotations
@@ -26,6 +24,7 @@ import json
 import os
 import re
 import time
+
 from groq import Groq
 
 from tags_parser import VALID_TAG_NAMES, DEFAULT_TAG
@@ -42,7 +41,7 @@ RATE_LIMIT_WAIT = 2.0
 DEFAULT_EMOJI_LEFT  = "🔥"
 DEFAULT_EMOJI_RIGHT = "💥"
 
-LANG_NAMES = {
+LANG_NAMES: dict[str, str] = {
     "ar": "Arabic",
     "fr": "French",
     "en": "English",
@@ -62,13 +61,13 @@ class AIEnrichmentError(Exception):
 # GROQ API KEY ROTATION
 # ═════════════════════════════════════════════════════════════════════════════
 
-_groq_key_idx = 0
-_GROQ_KEYS: list[str] = []
+_groq_key_idx: int       = 0
+_GROQ_KEYS:    list[str] = []
 
 
 def _load_groq_keys() -> list[str]:
     """تحميل كل مفاتيح Groq من البيئة."""
-    keys = []
+    keys: list[str] = []
     main = os.environ.get("GROQ_API_KEY", "").strip()
     if main:
         keys.append(main)
@@ -131,7 +130,6 @@ def _call_groq(
     """استدعاء Groq مع retry + key rotation."""
     global _GROQ_KEYS
 
-    # تحميل المفاتيح إذا لم تُحمَّل بعد
     if not _GROQ_KEYS:
         _GROQ_KEYS = _load_groq_keys()
 
@@ -141,7 +139,7 @@ def _call_groq(
         else MAX_RETRIES
     )
 
-    last_error = None
+    last_error: str | None = None
 
     for attempt in range(total_attempts):
         try:
@@ -153,10 +151,10 @@ def _call_groq(
             client = _get_client()
 
             resp = client.chat.completions.create(
-                model=MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
+                model       = MODEL,
+                messages    = [{"role": "user", "content": prompt}],
+                temperature = temperature,
+                max_tokens  = max_tokens,
             )
 
             content = resp.choices[0].message.content
@@ -176,10 +174,12 @@ def _call_groq(
                 continue
 
             if attempt < total_attempts - 1:
-                wait = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+                wait = RETRY_DELAYS[
+                    min(attempt, len(RETRY_DELAYS) - 1)
+                ]
                 print(
                     f"  ⚠️  Error: {err_str[:80]} "
-                    f"- retrying in {wait}s..."
+                    f"— retrying in {wait}s..."
                 )
                 _rotate_groq_key()
                 time.sleep(wait)
@@ -188,7 +188,8 @@ def _call_groq(
 
     raise AIEnrichmentError(
         f"❌ {operation_name} FAILED after {total_attempts} attempts.\n"
-        f"   Last error: {last_error[:200] if last_error else 'unknown'}\n"
+        f"   Last error: "
+        f"{last_error[:200] if last_error else 'unknown'}\n"
         f"   Video render will STOP."
     )
 
@@ -226,9 +227,9 @@ def _parse_json_response(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def analyze_content(
-    title:      str,
-    content:    str,
-    lang:       str = "ar",
+    title:   str,
+    content: str,
+    lang:    str = "ar",
 ) -> dict:
     """تحليل المحتوى وفهم طبيعته."""
     lang_name = LANG_NAMES.get(lang, "Arabic")
@@ -261,20 +262,25 @@ Rules:
 
     raw  = _call_groq(
         prompt,
-        max_tokens=400,
-        temperature=0.3,
-        operation_name="Content Analysis",
+        max_tokens     = 400,
+        temperature    = 0.3,
+        operation_name = "Content Analysis",
     )
     data = _parse_json_response(raw, dict, "Content Analysis")
 
-    required = ["content_type", "primary_emotion", "intensity", "tone"]
+    required = [
+        "content_type", "primary_emotion",
+        "intensity", "tone",
+    ]
     for field in required:
         if field not in data:
             raise AIEnrichmentError(
                 f"❌ Content Analysis missing field: {field}"
             )
 
-    data["intensity"] = max(1, min(10, int(data.get("intensity", 7))))
+    data["intensity"] = max(
+        1, min(10, int(data.get("intensity", 7)))
+    )
 
     print(
         f"  ✅ Analysis: {data['content_type']} | "
@@ -324,13 +330,13 @@ Example: ["intrigue","desire","confident"]"""
 
     raw  = _call_groq(
         prompt,
-        max_tokens=200,
-        temperature=0.5,
-        operation_name=f"Tag Suggestion ({lang.upper()})",
+        max_tokens     = 200,
+        temperature    = 0.5,
+        operation_name = f"Tag Suggestion ({lang.upper()})",
     )
     tags = _parse_json_response(raw, list, "Tag Suggestion")
 
-    cleaned_tags = []
+    cleaned_tags: list[str] = []
     for tag in tags[:len(sentences_needing_tags)]:
         tag = str(tag).strip().lower()
         if tag in VALID_TAG_NAMES:
@@ -338,7 +344,9 @@ Example: ["intrigue","desire","confident"]"""
         else:
             from tags_parser import auto_correct_tag
             corrected, _ = auto_correct_tag(tag)
-            cleaned_tags.append(corrected if corrected else DEFAULT_TAG)
+            cleaned_tags.append(
+                corrected if corrected else DEFAULT_TAG
+            )
 
     while len(cleaned_tags) < len(sentences_needing_tags):
         cleaned_tags.append(DEFAULT_TAG)
@@ -385,19 +393,24 @@ Example: ["word1","word2","word3",...]"""
 
     raw   = _call_groq(
         prompt,
-        max_tokens=300,
-        temperature=0.6,
-        operation_name=f"Power Words ({lang.upper()})",
+        max_tokens     = 300,
+        temperature    = 0.6,
+        operation_name = f"Power Words ({lang.upper()})",
     )
     words = _parse_json_response(raw, list, "Power Words")
 
-    seen   : set[str] = set()
-    result : list[str] = []
+    seen:   set[str]  = set()
+    result: list[str] = []
 
     for w in words[:count]:
         if isinstance(w, str):
             w = w.strip()
-            if w and w.lower() not in seen and len(w) >= 2 and " " not in w:
+            if (
+                w and
+                w.lower() not in seen and
+                len(w) >= 2 and
+                " " not in w
+            ):
                 result.append(w)
                 seen.add(w.lower())
 
@@ -441,8 +454,8 @@ Video title: "{title}"
 Content type: {content_type}
 Emotion: {emotion}
 
-For each sentence, suggest 3 VISUAL search terms (English only, 2-5 words each)
-for Pexels/Pixabay stock footage.
+For each sentence, suggest 3 VISUAL search terms
+(English only, 2-5 words each) for Pexels/Pixabay stock footage.
 
 GOOD: "person looking through window", "couple arguing tension"
 BAD:  "success", "freedom", "life"
@@ -455,9 +468,9 @@ Format: [["kw1","kw2","kw3"],...]"""
 
     raw      = _call_groq(
         prompt,
-        max_tokens=1500,
-        temperature=0.5,
-        operation_name="Visual Keywords",
+        max_tokens     = 1500,
+        temperature    = 0.5,
+        operation_name = "Visual Keywords",
     )
     keywords = _parse_json_response(raw, list, "Visual Keywords")
 
@@ -476,7 +489,11 @@ Format: [["kw1","kw2","kw3"],...]"""
 
     for i in range(n):
         if i < len(keywords) and isinstance(keywords[i], list):
-            row = [str(k).strip() for k in keywords[i] if str(k).strip()]
+            row = [
+                str(k).strip()
+                for k in keywords[i]
+                if str(k).strip()
+            ]
         else:
             row = []
 
@@ -505,7 +522,8 @@ def generate_pattern_interrupts(
     emotion      = context.get("primary_emotion", "curiosity")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
 
-    prompt = f"""Generate {count} SHORT pattern interrupt phrases in {lang_name} AND English.
+    prompt = f"""Generate {count} SHORT pattern interrupt phrases \
+in {lang_name} AND English.
 
 Title: "{title}" | Type: {content_type} | Emotion: {emotion}
 
@@ -516,9 +534,9 @@ Return ONLY JSON:
 
     raw  = _call_groq(
         prompt,
-        max_tokens=500,
-        temperature=0.8,
-        operation_name="Pattern Interrupts",
+        max_tokens     = 500,
+        temperature    = 0.8,
+        operation_name = "Pattern Interrupts",
     )
     data = _parse_json_response(raw, dict, "Pattern Interrupts")
 
@@ -567,7 +585,8 @@ def generate_engagement_questions(
     content_type = context.get("content_type", "general")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
 
-    prompt = f"""Generate {count} SHORT engagement questions in {lang_name} AND English.
+    prompt = f"""Generate {count} SHORT engagement questions \
+in {lang_name} AND English.
 
 Title: "{title}" | Type: {content_type}
 
@@ -578,14 +597,18 @@ Return ONLY JSON:
 
     raw  = _call_groq(
         prompt,
-        max_tokens=500,
-        temperature=0.8,
-        operation_name="Engagement Questions",
+        max_tokens     = 500,
+        temperature    = 0.8,
+        operation_name = "Engagement Questions",
     )
-    data = _parse_json_response(raw, dict, "Engagement Questions")
+    data = _parse_json_response(
+        raw, dict, "Engagement Questions"
+    )
 
     if "ar" not in data or "en" not in data:
-        raise AIEnrichmentError("Engagement Questions: missing keys")
+        raise AIEnrichmentError(
+            "Engagement Questions: missing keys"
+        )
 
     result = {
         "ar": [
@@ -627,20 +650,21 @@ def generate_hashtags(
     content_type = context.get("content_type", "general")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
 
-    prompt = f"""Generate {count} hashtags per language in {lang_name} AND English.
+    prompt = f"""Generate {count} hashtags per language \
+in {lang_name} AND English.
 
 Title: "{title}" | Type: {content_type}
 
-Rules: start with #, underscores instead of spaces, no spaces in hashtag.
+Rules: start with #, underscores instead of spaces, no spaces.
 
 Return ONLY JSON:
 {{"ar": ["#tag1",...], "en": ["#tag1",...]}}"""
 
     raw  = _call_groq(
         prompt,
-        max_tokens=600,
-        temperature=0.6,
-        operation_name="Hashtags",
+        max_tokens     = 600,
+        temperature    = 0.6,
+        operation_name = "Hashtags",
     )
     data = _parse_json_response(raw, dict, "Hashtags")
 
@@ -648,7 +672,7 @@ Return ONLY JSON:
         raise AIEnrichmentError("Hashtags: missing keys")
 
     def clean_tags(tags: list) -> list[str]:
-        result = []
+        result: list[str] = []
         for tag in tags:
             tag = str(tag).strip()
             if not tag:
@@ -689,7 +713,8 @@ def generate_captions(
     ar_tags   = " ".join(hashtags.get("ar", [])[:10])
     en_tags   = " ".join(hashtags.get("en", [])[:10])
 
-    prompt = f"""Write a professional Facebook caption in {lang_name} AND English.
+    prompt = f"""Write a professional Facebook caption \
+in {lang_name} AND English.
 
 Title: "{title}"
 Type: {context.get('content_type')}
@@ -704,16 +729,16 @@ Rules:
 - Call-to-action
 - Use emojis
 - 5-7 lines total
-- NO hashtags in caption
+- NO hashtags in caption body
 
 Return ONLY JSON:
 {{"ar": "caption here", "en": "caption here"}}"""
 
     raw  = _call_groq(
         prompt,
-        max_tokens=800,
-        temperature=0.7,
-        operation_name="Captions",
+        max_tokens     = 800,
+        temperature    = 0.7,
+        operation_name = "Captions",
     )
     data = _parse_json_response(raw, dict, "Captions")
 
@@ -735,7 +760,8 @@ Return ONLY JSON:
 
     print(
         f"  ✅ Captions: "
-        f"AR({len(result['ar'])} chars) | EN({len(result['en'])} chars)"
+        f"AR({len(result['ar'])} chars) | "
+        f"EN({len(result['en'])} chars)"
     )
     return result
 
@@ -758,9 +784,9 @@ Example: ["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
 
     raw    = _call_groq(
         prompt,
-        max_tokens=200,
-        temperature=0.6,
-        operation_name="Accent Colors",
+        max_tokens     = 200,
+        temperature    = 0.6,
+        operation_name = "Accent Colors",
     )
     colors = _parse_json_response(raw, list, "Accent Colors")
 
@@ -804,7 +830,8 @@ def generate_hook_keyword(
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "curiosity")
 
-    prompt = f"""Suggest ONE powerful visual keyword for the FIRST 3 seconds of this video.
+    prompt = f"""Suggest ONE powerful visual keyword \
+for the FIRST 3 seconds of this video.
 
 Title: "{title[:100]}"
 Type: {content_type} | Emotion: {emotion}
@@ -820,9 +847,9 @@ Example: crying woman eyes closeup"""
 
     raw     = _call_groq(
         prompt,
-        max_tokens=50,
-        temperature=0.8,
-        operation_name="Hook Keyword",
+        max_tokens     = 50,
+        temperature    = 0.8,
+        operation_name = "Hook Keyword",
     )
     keyword = raw.strip().split("\n")[0].strip()
     keyword = keyword.strip('"').strip("'").strip()
@@ -843,17 +870,22 @@ Example: crying woman eyes closeup"""
 # ═════════════════════════════════════════════════════════════════════════════
 
 def enrich_record(
-    record:    dict,
-    lang:      str        = "ar",
-    tagged:    list[dict] = None,
-    verbose:   bool       = True,
+    record:  dict,
+    lang:    str             = "ar",
+    tagged:  list[dict] | None = None,
+    verbose: bool            = True,
 ) -> dict:
     """
     تطبيق كل عمليات Groq على record واحد.
 
-    ✅ يدعم AR, FR, EN بشكل صحيح
-    ✅ العنوان يبقى كما هو من Excel
-    ✅ الإيموجي ثابت افتراضي
+    Args:
+        record:  dict يحتوي على: number, title, content
+        lang:    اللغة (ar, fr, en)
+        tagged:  قائمة الجمل المُصنَّفة (اختياري)
+        verbose: طباعة التقدم
+
+    Returns:
+        dict يحتوي على كل البيانات المُولَّدة
     """
     title   = record.get("title", "")
     content = record.get("content", "").strip()
@@ -862,26 +894,30 @@ def enrich_record(
         raise AIEnrichmentError("Cannot enrich: title is empty")
 
     if not content:
-        raise AIEnrichmentError(
-            "Cannot enrich: content is empty"
-        )
+        raise AIEnrichmentError("Cannot enrich: content is empty")
 
     lang_name = LANG_NAMES.get(lang, "Arabic")
 
     if verbose:
-        print(f"\n  🧠 AI Enrichment for: '{title[:50]}' ({lang_name})")
+        print(
+            f"\n  🧠 AI Enrichment for: "
+            f"'{title[:50]}' ({lang_name})"
+        )
         print(f"  {'─' * 50}")
         print(
             f"  📌 Title: "
             f"{DEFAULT_EMOJI_LEFT} {title} {DEFAULT_EMOJI_RIGHT}"
         )
 
-    # ── 1. Content Analysis ──────────────────────────────────────────────
+    # ── 1. Content Analysis ──────────────────────────────────────────────────
     analysis = analyze_content(title, content, lang)
 
-    # ── 2. Suggest tags ──────────────────────────────────────────────────
+    # ── 2. Suggest tags ──────────────────────────────────────────────────────
     if tagged:
-        tags_needed = [s for s in tagged if s["final_tag"] is None]
+        tags_needed = [
+            s for s in tagged
+            if s["final_tag"] is None
+        ]
         if tags_needed:
             suggested = suggest_tags_for_sentences(
                 tags_needed, analysis, lang
@@ -893,10 +929,10 @@ def enrich_record(
                     f"[{suggested[i]}] {sent['text']}"
                 )
 
-    # ── 3. Power Words ───────────────────────────────────────────────────
+    # ── 3. Power Words ───────────────────────────────────────────────────────
     power_words = generate_power_words(content, analysis, lang)
 
-    # ── 4. Visual Keywords ───────────────────────────────────────────────
+    # ── 4. Visual Keywords ───────────────────────────────────────────────────
     sentences_for_keywords = (
         [s["text"] for s in tagged]
         if tagged
@@ -906,31 +942,33 @@ def enrich_record(
         sentences_for_keywords, title, analysis
     )
 
-    # ── 5. Pattern Interrupts ────────────────────────────────────────────
+    # ── 5. Pattern Interrupts ────────────────────────────────────────────────
     interrupts = generate_pattern_interrupts(
         title, content, analysis, lang
     )
 
-    # ── 6. Engagement Questions ──────────────────────────────────────────
+    # ── 6. Engagement Questions ──────────────────────────────────────────────
     questions = generate_engagement_questions(
         title, content, analysis, lang
     )
 
-    # ── 7. Hashtags ──────────────────────────────────────────────────────
-    hashtags = generate_hashtags(title, content, analysis, lang)
+    # ── 7. Hashtags ──────────────────────────────────────────────────────────
+    hashtags = generate_hashtags(
+        title, content, analysis, lang
+    )
 
-    # ── 8. Captions ──────────────────────────────────────────────────────
+    # ── 8. Captions ──────────────────────────────────────────────────────────
     captions = generate_captions(
         title, content, analysis, hashtags, lang
     )
 
-    # ── 9. Accent Colors ─────────────────────────────────────────────────
+    # ── 9. Accent Colors ─────────────────────────────────────────────────────
     accent_colors = suggest_accent_colors(analysis)
 
-    # ── 10. Hook Keyword ─────────────────────────────────────────────────
+    # ── 10. Hook Keyword ─────────────────────────────────────────────────────
     hook_keyword = generate_hook_keyword(title, content, analysis)
 
-    # ── 11. Title + Emojis ───────────────────────────────────────────────
+    # ── 11. Title + Emojis ───────────────────────────────────────────────────
     attractive_title = {
         "title":       title,
         "emoji_left":  DEFAULT_EMOJI_LEFT,
