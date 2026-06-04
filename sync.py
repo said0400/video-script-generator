@@ -71,6 +71,10 @@ def detect_speech_start(audio_path: str) -> float:
 
         if matches:
             speech_start = float(matches[0])
+            # ✅ FIX: تجاهل offset صغير جداً — لا يستحق التصحيح
+            if speech_start < 0.05:
+                print(f"  🎯 Speech starts at: {speech_start:.3f}s (ignored, too small)")
+                return 0.0
             print(f"  🎯 Speech starts at: {speech_start:.3f}s")
             return speech_start
         else:
@@ -153,7 +157,7 @@ def extract_transcript_from_audio(audio_path: str, lang: str = "ar") -> dict:
     """
     print(f"\n  🎤 Extracting transcript from {Path(audio_path).name} (lang={lang})")
 
-    audio_duration = get_audio_duration(audio_path)
+    audio_duration      = get_audio_duration(audio_path)
     speech_start_offset = detect_speech_start(audio_path)
 
     result = _extract_whisperx_full(
@@ -177,10 +181,10 @@ def extract_transcript_from_audio(audio_path: str, lang: str = "ar") -> dict:
 
 
 def _extract_whisperx_full(
-    audio_path:           str,
-    lang:                 str,
-    audio_duration:       float,
-    speech_start_offset:  float = 0.0,
+    audio_path:          str,
+    lang:                str,
+    audio_duration:      float,
+    speech_start_offset: float = 0.0,
 ) -> dict:
     """استخراج كامل من WhisperX مع تطبيق offset إجباري."""
 
@@ -316,20 +320,27 @@ def _extract_whisperx_full(
             print(f"  ⚠️  No sentences extracted")
             return result
 
-        # ✨ تطبيق offset
-        all_words_flat = _apply_speech_offset(
-            all_words_flat,
-            speech_start_offset,
-            audio_duration,
-        )
-
-        # ✨ Normalize (مع تجاوز offset check إذا طبّقنا speech offset)
-        skip_check = (speech_start_offset > 0.01)
-        all_words_flat = _normalize_word_timestamps(
-            all_words_flat,
-            audio_duration,
-            skip_offset_check=skip_check,
-        )
+        # ✅ FIX: تطبيق offset مرة واحدة فقط
+        # speech_start_offset > 0.05 لأن detect_speech_start تتجاهل أقل من 0.05
+        if speech_start_offset > 0.05:
+            all_words_flat = _apply_speech_offset(
+                all_words_flat,
+                speech_start_offset,
+                audio_duration,
+            )
+            # ✅ FIX: skip_offset_check دائماً True بعد _apply_speech_offset
+            all_words_flat = _normalize_word_timestamps(
+                all_words_flat,
+                audio_duration,
+                skip_offset_check=True,
+            )
+        else:
+            # لا offset — normalize عادي بدون skip
+            all_words_flat = _normalize_word_timestamps(
+                all_words_flat,
+                audio_duration,
+                skip_offset_check=False,
+            )
 
         # إعادة بناء aligned
         aligned_normalized = []
@@ -385,9 +396,9 @@ def _extract_whisperx_full(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _apply_speech_offset(
-    words:                list[dict],
-    speech_start_offset:  float,
-    audio_duration:       float,
+    words:               list[dict],
+    speech_start_offset: float,
+    audio_duration:      float,
 ) -> list[dict]:
     """
     الحل الإجباري لمشكلة سبق النص للصوت.
@@ -399,7 +410,7 @@ def _apply_speech_offset(
 
     fixed = []
     for w in words:
-        fw = dict(w)
+        fw          = dict(w)
         fw["start"] = round(w["start"] + speech_start_offset, 4)
         fw["end"]   = round(w["end"]   + speech_start_offset, 4)
 
@@ -411,8 +422,8 @@ def _apply_speech_offset(
 
         fixed.append(fw)
 
-    before = words[0]["start"]   if words  else 0
-    after  = fixed[0]["start"]   if fixed  else 0
+    before = words[0]["start"] if words else 0
+    after  = fixed[0]["start"] if fixed else 0
     print(f"  📊 First word: {before:.3f}s → {after:.3f}s")
 
     return fixed
@@ -429,7 +440,7 @@ def _normalize_word_timestamps(
 ) -> list[dict]:
     """
     إصلاح كل مشاكل التوقيت.
-    
+
     skip_offset_check: إذا True، نتخطى إصلاح offset البداية
                       (نستخدمه عندما _apply_speech_offset تم تطبيقه)
     """
@@ -464,7 +475,7 @@ def _normalize_word_timestamps(
                 duration = 0.3
             curr["start"] = prev["end"] + MIN_GAP_BETWEEN_WORDS
             curr["end"]   = curr["start"] + duration
-            duplicates += 1
+            duplicates   += 1
 
     if duplicates > 0:
         print(f"  🔧 Fixed {duplicates} overlapping timestamps")
@@ -486,10 +497,10 @@ def _normalize_word_timestamps(
     # ── 4. لا يتجاوز الصوت ──
     if audio_duration > 0:
         for w in fixed:
-            if w["end"]   > audio_duration:
-                w["end"]   = audio_duration
+            if w["end"] > audio_duration:
+                w["end"] = audio_duration
             if w["start"] >= audio_duration:
-                w["start"] = audio_duration - MIN_WORD_DURATION
+                w["start"] = max(0, audio_duration - MIN_WORD_DURATION)
                 w["end"]   = audio_duration
 
     # ── 5. تقريب ──
@@ -531,7 +542,7 @@ def build_word_timeline(
 
         if abs(len(word_timestamps) - total_words_in_sentences) <= 5:
             word_times = []
-            ts_idx = 0
+            ts_idx     = 0
 
             for s_idx, sentence in enumerate(sentences):
                 for w_idx, word in enumerate(sentence.split()):
@@ -556,7 +567,7 @@ def _duration_sync(sentences, total_duration):
     LEAD_IN   = 0.20
     TRAIL_OUT = 0.25
 
-    usable     = max(total_duration - LEAD_IN - TRAIL_OUT, total_duration * 0.85)
+    usable      = max(total_duration - LEAD_IN - TRAIL_OUT, total_duration * 0.85)
     total_words = sum(len(s.split()) for s in sentences)
 
     if total_words == 0:
