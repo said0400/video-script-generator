@@ -1,6 +1,11 @@
 """
 Read video scripts from Excel (.xlsx) or CSV.
-✨ NEW: مبسّط جداً — 4 أعمدة فقط (number, title, ar_content, en_content)
+✨ يدعم 3 أنواع ملفات:
+  - videos_ar.xlsx (number, title, ar_content)
+  - videos_fr.xlsx (number, title, fr_content)
+  - videos_en.xlsx (number, title, en_content)
+  - أو ملف موحد (number, title, ar_content, en_content, fr_content)
+
 ✨ يدعم Emotional Tags في المحتوى
 """
 import csv
@@ -12,16 +17,29 @@ from tags_parser import (split_into_tagged_sentences, strip_tags_from_text,
                           VALID_TAGS)
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 📋 ONLY 4 COLUMNS REQUIRED
+# COLUMN ALIASES (يدعم أسماء أعمدة متعددة)
 # ═════════════════════════════════════════════════════════════════════════════
 
 COLUMN_ALIASES: dict[str, list[str]] = {
     "number":     ["number", "num", "no", "id", "video_number", "رقم", "#"],
-    "title":      ["title", "name", "video_title", "subject", "عنوان"],
-    "ar_content": ["ar_content", "arabic", "ar", "arabic_content", 
-                   "عربي", "محتوى_عربي", "النص_العربي"],
+    "title":      ["title", "name", "video_title", "subject", "عنوان",
+                   "titre"],  # ✨ فرنسي
+    
+    # ── Arabic ────────────────────────────────────────────────────────────────
+    "ar_content": ["ar_content", "arabic", "ar", "arabic_content",
+                   "عربي", "محتوى_عربي", "النص_العربي", "content_ar"],
+    
+    # ── English ───────────────────────────────────────────────────────────────
     "en_content": ["en_content", "english", "en", "english_content",
-                   "انجليزي", "محتوى_انجليزي", "النص_الانجليزي"],
+                   "انجليزي", "محتوى_انجليزي", "content_en"],
+    
+    # ── French ────────────────────────────────────────────────────────────────
+    "fr_content": ["fr_content", "french", "fr", "french_content",
+                   "فرنسي", "محتوى_فرنسي", "contenu", "contenu_fr",
+                   "texte", "texte_fr"],
+    
+    # ── Generic content (لملفات بعمود واحد) ──────────────────────────────────
+    "content":    ["content", "text", "script", "محتوى", "النص"],
 }
 
 
@@ -41,10 +59,16 @@ def _detect_columns(headers: list[str]) -> dict[str, int]:
                 break
 
     # Positional fallback
-    positions = {"number": 0, "title": 1, "ar_content": 2, "en_content": 3}
-    for field, idx in positions.items():
-        if field not in col_map and len(headers) > idx:
-            col_map[field] = idx
+    if "number" not in col_map and len(headers) > 0:
+        col_map["number"] = 0
+    if "title" not in col_map and len(headers) > 1:
+        col_map["title"] = 1
+    
+    # ✨ إذا وجدنا "content" عام ولم نجد content محدد باللغة
+    if "content" in col_map:
+        for lang_key in ["ar_content", "en_content", "fr_content"]:
+            if lang_key not in col_map:
+                col_map[lang_key] = col_map["content"]
 
     return col_map
 
@@ -58,22 +82,35 @@ def _safe(row, idx: int) -> str:
 
 
 def _row_to_dict(row, col_map: dict[str, int]) -> dict:
-    return {
-        field: _safe(row, col_map[field]) if field in col_map else ""
-        for field in COLUMN_ALIASES
-    }
+    result = {}
+    for field in COLUMN_ALIASES:
+        if field in col_map:
+            result[field] = _safe(row, col_map[field])
+        else:
+            result[field] = ""
+    return result
 
 
 def _is_valid(record: dict) -> bool:
-    return bool(
-        record["title"].strip()
-        and (record["en_content"].strip() or record["ar_content"].strip())
-        and _normalize(record["number"]) not in ("number", "num", "رقم", "#", "id", "")
+    """تحقق أن السجل صالح (يحتوي على عنوان ومحتوى)."""
+    has_title = bool(record.get("title", "").strip())
+    
+    has_content = bool(
+        record.get("ar_content", "").strip() or
+        record.get("en_content", "").strip() or
+        record.get("fr_content", "").strip() or
+        record.get("content", "").strip()
     )
+    
+    has_valid_number = _normalize(record.get("number", "")) not in (
+        "number", "num", "رقم", "#", "id", ""
+    )
+    
+    return has_title and has_content and has_valid_number
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🏷️ TAGGED SENTENCES PROCESSING
+# TAGGED SENTENCES PROCESSING
 # ═════════════════════════════════════════════════════════════════════════════
 
 def process_tagged_content(content: str, lang: str = "ar") -> list[dict]:
@@ -83,11 +120,11 @@ def process_tagged_content(content: str, lang: str = "ar") -> list[dict]:
     Returns: list of dicts:
       [
         {
-          "raw_tag":    "intrigue",       # الـ tag الأصلي من Excel
-          "final_tag":  "intrigue",       # بعد التصحيح
-          "tag_source": "exact_match",    # كيف تم الحصول عليه
+          "raw_tag":    "intrigue",
+          "final_tag":  "intrigue",
+          "tag_source": "exact_match",
           "text":       "النص بدون tag",
-          "text_with_tag": "[intrigue] النص...",  # للـ TTS
+          "text_with_tag": "[intrigue] النص...",
           "line":       1,
         },
         ...
@@ -105,29 +142,25 @@ def process_tagged_content(content: str, lang: str = "ar") -> list[dict]:
         text    = sent["text"]
         line    = sent["line"]
         
-        # تصحيح tag
         if raw_tag:
             corrected, reason = auto_correct_tag(raw_tag)
             
             if corrected:
                 final_tag = corrected
-                tag_source = reason  # exact_match / case_fixed / spelling_fixed
+                tag_source = reason
             else:
-                # Tag غير معروف نهائياً - سيُعالج بـ AI
-                final_tag = None  # سيُملأ من Groq
+                final_tag = None
                 tag_source = "needs_ai"
         else:
-            # لا يوجد tag - سيُعالج بـ AI
             final_tag = None
             tag_source = "needs_ai"
         
         clean_text = strip_tags_from_text(text)
         
-        # إذا كان لدينا final_tag، اصنع text_with_tag
         if final_tag:
             text_with_tag = f"[{final_tag}] {clean_text}"
         else:
-            text_with_tag = clean_text  # سيُحدّث لاحقاً بعد Groq
+            text_with_tag = clean_text
         
         processed.append({
             "raw_tag":       raw_tag,
@@ -142,15 +175,14 @@ def process_tagged_content(content: str, lang: str = "ar") -> list[dict]:
 
 
 def split_into_sentences(text: str, lang: str = "en") -> list[str]:
-    """
-    تقسيم نص إلى جمل (للاستخدام مع نصوص نظيفة بدون tags).
-    يُستخدم للـ render حيث نريد جمل قصيرة.
-    """
+    """تقسيم نص إلى جمل (للاستخدام مع نصوص بدون tags)."""
     if not text or not text.strip():
         return []
 
     if lang == "ar":
         parts = re.split(r"(?<=[.!?؟\u06D4])\s+|\n+", text.strip())
+    elif lang == "fr":
+        parts = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
     else:
         parts = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
 
@@ -167,7 +199,7 @@ def split_into_sentences(text: str, lang: str = "en") -> list[str]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 📖 READ FILES
+# READ FILES
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _read_excel(path: Path) -> list[dict]:
@@ -184,7 +216,9 @@ def _read_excel(path: Path) -> list[dict]:
 
     headers = [str(c) if c is not None else "" for c in rows[0]]
     col_map = _detect_columns(headers)
-    print(f"  📊 Detected columns: {list(col_map.keys())}")
+    
+    detected = sorted(col_map.keys())
+    print(f"  📊 Detected {len(detected)} columns: {', '.join(detected[:8])}...")
 
     scripts = []
     for idx, row in enumerate(rows[1:], start=2):
@@ -206,7 +240,10 @@ def _read_csv(path: Path) -> list[dict]:
         if not headers:
             return []
         col_map = _detect_columns(headers)
-        print(f"  📊 Detected columns: {list(col_map.keys())}")
+        
+        detected = sorted(col_map.keys())
+        print(f"  📊 Detected {len(detected)} columns: {', '.join(detected[:8])}...")
+        
         for idx, row in enumerate(reader, start=2):
             if not any(c.strip() for c in row):
                 continue
@@ -219,6 +256,14 @@ def _read_csv(path: Path) -> list[dict]:
 
 
 def read_scripts(file_path: str) -> list[dict]:
+    """
+    قراءة ملف سكريبتات.
+    
+    يدعم:
+    - Excel (.xlsx, .xls)
+    - CSV (.csv)
+    - أي هيكلة أعمدة (يكتشف تلقائياً)
+    """
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
@@ -233,23 +278,34 @@ def read_scripts(file_path: str) -> list[dict]:
     return scripts
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# VALIDATION
+# ═════════════════════════════════════════════════════════════════════════════
+
 def validate_scripts(scripts: list[dict]) -> tuple[list[dict], list[str]]:
     """التحقق من صحة السكريبتات."""
     valid, errors = [], []
+    
     for s in scripts:
         errs = []
         
-        has_ar = bool(s["ar_content"].strip())
-        has_en = bool(s["en_content"].strip())
+        has_ar = bool(s.get("ar_content", "").strip())
+        has_en = bool(s.get("en_content", "").strip())
+        has_fr = bool(s.get("fr_content", "").strip())
+        has_generic = bool(s.get("content", "").strip())
         
-        if not has_ar and not has_en:
-            errs.append(f"  #{s['number']} '{s['title']}': no content (AR or EN required)")
+        if not has_ar and not has_en and not has_fr and not has_generic:
+            errs.append(f"  #{s['number']} '{s['title']}': no content found")
         else:
-            # تحقق من وجود tags
-            for lang_key, lang_name in [("ar_content", "AR"), ("en_content", "EN")]:
+            # تحقق من tags
+            for lang_key, lang_name in [
+                ("ar_content", "AR"),
+                ("en_content", "EN"),
+                ("fr_content", "FR"),
+                ("content", "CONTENT"),
+            ]:
                 content = s.get(lang_key, "")
                 if content.strip():
-                    # عدد الـ tags
                     tags_found = re.findall(r'\[([a-zA-Z_]+)\]', content)
                     if not tags_found:
                         errs.append(
@@ -257,15 +313,19 @@ def validate_scripts(scripts: list[dict]) -> tuple[list[dict], list[str]]:
                             f"no [tags] found - AI will add them"
                         )
         
-        if errs and not has_ar and not has_en:
+        if errs and not has_ar and not has_en and not has_fr and not has_generic:
             errors.extend(errs)
         else:
             if errs:
-                errors.extend(errs)  # warnings only
+                errors.extend(errs)
             valid.append(s)
     
     return valid, errors
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SUMMARY
+# ═════════════════════════════════════════════════════════════════════════════
 
 def print_scripts_summary(scripts: list[dict]) -> None:
     print("\n" + "═" * 65)
@@ -273,14 +333,24 @@ def print_scripts_summary(scripts: list[dict]) -> None:
     print("═" * 65)
     
     for s in scripts:
-        prev = (s["ar_content"] or s["en_content"] or "")[:60].replace("\n", " ")
+        # ابحث عن أي محتوى متاح
+        content = (
+            s.get("ar_content", "") or
+            s.get("en_content", "") or
+            s.get("fr_content", "") or
+            s.get("content", "") or
+            ""
+        )
+        prev = content[:58].replace("\n", " ")
         
-        has_ar  = bool(s["ar_content"].strip())
-        has_en  = bool(s["en_content"].strip())
+        has_ar = bool(s.get("ar_content", "").strip())
+        has_en = bool(s.get("en_content", "").strip())
+        has_fr = bool(s.get("fr_content", "").strip())
         
-        # عد الـ tags
+        # عدّ الـ tags
         ar_tags = len(re.findall(r'\[[a-zA-Z_]+\]', s.get("ar_content", "")))
         en_tags = len(re.findall(r'\[[a-zA-Z_]+\]', s.get("en_content", "")))
+        fr_tags = len(re.findall(r'\[[a-zA-Z_]+\]', s.get("fr_content", "")))
         
         print(f"  #{s['number']:>3}  {s['title'][:50]}")
         print(f"       {prev}...")
@@ -288,6 +358,15 @@ def print_scripts_summary(scripts: list[dict]) -> None:
         flags = []
         if has_ar: flags.append(f"🇸🇦 AR ({ar_tags} tags)")
         if has_en: flags.append(f"🇬🇧 EN ({en_tags} tags)")
+        if has_fr: flags.append(f"🇫🇷 FR ({fr_tags} tags)")
+        
+        # إذا لم نجد أي lang محدد، ابحث عن content عام
+        if not flags:
+            generic = s.get("content", "").strip()
+            if generic:
+                g_tags = len(re.findall(r'\[[a-zA-Z_]+\]', generic))
+                flags.append(f"📝 Content ({g_tags} tags)")
+        
         if flags:
             print(f"       {' | '.join(flags)}")
     
