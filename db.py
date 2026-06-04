@@ -4,9 +4,9 @@ db.py — SQLite database for VSG
   - تتبع الفيديوهات المستخدمة
   - Resume system (استئناف من حيث توقف)
   - AI cache
-  - ✨ NEW: تتبع النشر لكل لغة (AR, FR, EN)
-  - ✨ NEW: Auto-next (الفيديو التالي غير المنشور)
-  - ✨ NEW: Loop (إعادة من البداية عند انتهاء المحتوى)
+  - تتبع النشر لكل لغة (AR, FR, EN)
+  - Auto-next (الفيديو التالي غير المنشور)
+  - Loop (إعادة من البداية عند انتهاء المحتوى)
 """
 
 from __future__ import annotations
@@ -16,15 +16,24 @@ import sqlite3
 import threading
 from pathlib import Path
 
-DB_PATH = Path("vsg.db")
+BASE_DIR = Path(__file__).parent.resolve()
+DB_PATH  = BASE_DIR / "vsg.db"
 
 _local      = threading.local()
 _write_lock = threading.Lock()
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# CONNECTION
+# ═════════════════════════════════════════════════════════════════════════════
+
 def _conn() -> sqlite3.Connection:
     if not hasattr(_local, "conn") or _local.conn is None:
-        c = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=30.0)
+        c = sqlite3.connect(
+            str(DB_PATH),
+            check_same_thread=False,
+            timeout=30.0,
+        )
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA synchronous=NORMAL")
@@ -35,6 +44,7 @@ def _conn() -> sqlite3.Connection:
 
 
 def close_thread_conn() -> None:
+    """إغلاق connection الـ thread الحالي."""
     if hasattr(_local, "conn") and _local.conn:
         try:
             _local.conn.close()
@@ -48,63 +58,61 @@ def close_thread_conn() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def init_db() -> None:
+    """إنشاء الجداول إذا لم تكن موجودة + تطبيق migrations."""
     with _write_lock:
         with _conn() as c:
             c.executescript("""
                 CREATE TABLE IF NOT EXISTS used_videos (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_id  TEXT NOT NULL,
-                    source     TEXT NOT NULL DEFAULT 'pixabay',
-                    keyword    TEXT,
-                    used_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id TEXT    NOT NULL,
+                    source    TEXT    NOT NULL DEFAULT 'pixabay',
+                    keyword   TEXT,
+                    used_at   TEXT    DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(source_id, source)
                 );
 
                 CREATE TABLE IF NOT EXISTS renders (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    video_number TEXT NOT NULL,
-                    lang         TEXT NOT NULL,
-                    status       TEXT NOT NULL DEFAULT 'pending',
+                    video_number TEXT    NOT NULL,
+                    lang         TEXT    NOT NULL,
+                    status       TEXT    NOT NULL DEFAULT 'pending',
                     output_path  TEXT,
                     duration_s   REAL,
                     error        TEXT,
                     published    INTEGER DEFAULT 0,
-                    created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_at   TEXT DEFAULT CURRENT_TIMESTAMP,
+                    created_at   TEXT    DEFAULT CURRENT_TIMESTAMP,
+                    updated_at   TEXT    DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(video_number, lang)
                 );
 
                 CREATE TABLE IF NOT EXISTS scripts (
                     video_number TEXT PRIMARY KEY,
                     title        TEXT,
-                    en_sentences INTEGER DEFAULT 0,
-                    ar_sentences INTEGER DEFAULT 0,
-                    en_words     INTEGER DEFAULT 0,
-                    ar_words     INTEGER DEFAULT 0,
-                    saved_at     TEXT DEFAULT CURRENT_TIMESTAMP
+                    sentences    INTEGER DEFAULT 0,
+                    words        INTEGER DEFAULT 0,
+                    lang         TEXT    DEFAULT 'ar',
+                    saved_at     TEXT    DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS ai_cache (
-                    cache_key    TEXT PRIMARY KEY,
-                    title        TEXT,
-                    analysis     TEXT,
-                    power_words  TEXT,
-                    visual_keywords TEXT,
-                    pattern_interrupts TEXT,
+                    cache_key            TEXT PRIMARY KEY,
+                    lang                 TEXT NOT NULL DEFAULT 'ar',
+                    title                TEXT,
+                    analysis             TEXT,
+                    power_words          TEXT,
+                    visual_keywords      TEXT,
+                    pattern_interrupts   TEXT,
                     engagement_questions TEXT,
-                    hashtags     TEXT,
-                    captions     TEXT,
-                    accent_colors TEXT,
-                    hook_keyword TEXT,
-                    attractive_title TEXT,
-                    ar_tagged    TEXT,
-                    en_tagged    TEXT,
-                    fr_tagged    TEXT,
-                    created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_at   TEXT DEFAULT CURRENT_TIMESTAMP
+                    hashtags             TEXT,
+                    captions             TEXT,
+                    accent_colors        TEXT,
+                    hook_keyword         TEXT,
+                    attractive_title     TEXT,
+                    tagged               TEXT,
+                    created_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at           TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
-                /* ✨ NEW: تتبع النشر لكل لغة */
                 CREATE TABLE IF NOT EXISTS publish_tracker (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_number TEXT NOT NULL,
@@ -113,54 +121,74 @@ def init_db() -> None:
                     UNIQUE(video_number, lang)
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_used      ON used_videos(source_id, source);
-                CREATE INDEX IF NOT EXISTS idx_renders    ON renders(video_number, lang);
-                CREATE INDEX IF NOT EXISTS idx_status     ON renders(status);
-                CREATE INDEX IF NOT EXISTS idx_ai_cache   ON ai_cache(cache_key);
-                CREATE INDEX IF NOT EXISTS idx_publish    ON publish_tracker(video_number, lang);
+                CREATE INDEX IF NOT EXISTS idx_used_videos
+                    ON used_videos(source_id, source);
+                CREATE INDEX IF NOT EXISTS idx_renders
+                    ON renders(video_number, lang);
+                CREATE INDEX IF NOT EXISTS idx_renders_status
+                    ON renders(status);
+                CREATE INDEX IF NOT EXISTS idx_ai_cache
+                    ON ai_cache(cache_key);
+                CREATE INDEX IF NOT EXISTS idx_publish
+                    ON publish_tracker(video_number, lang);
+                CREATE INDEX IF NOT EXISTS idx_publish_lang
+                    ON publish_tracker(lang);
             """)
 
-            # Migrations
-            try:
-                c.execute("ALTER TABLE renders ADD COLUMN published INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                c.execute("ALTER TABLE ai_cache ADD COLUMN fr_tagged TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                c.execute("ALTER TABLE ai_cache ADD COLUMN hook_keyword TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                c.execute("ALTER TABLE ai_cache ADD COLUMN attractive_title TEXT")
-            except sqlite3.OperationalError:
-                pass
+            # ── Migrations (للمشاريع القديمة) ─────────────────────────
+            _run_migrations(c)
+
+
+def _run_migrations(c: sqlite3.Connection) -> None:
+    """تطبيق migrations بأمان."""
+    migrations = [
+        "ALTER TABLE renders ADD COLUMN published INTEGER DEFAULT 0",
+        "ALTER TABLE ai_cache ADD COLUMN lang TEXT NOT NULL DEFAULT 'ar'",
+        "ALTER TABLE ai_cache ADD COLUMN tagged TEXT",
+        "ALTER TABLE scripts ADD COLUMN lang TEXT DEFAULT 'ar'",
+        "ALTER TABLE scripts ADD COLUMN sentences INTEGER DEFAULT 0",
+        "ALTER TABLE scripts ADD COLUMN words INTEGER DEFAULT 0",
+    ]
+    for sql in migrations:
+        try:
+            c.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # العمود موجود مسبقاً
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # USED VIDEOS
 # ═════════════════════════════════════════════════════════════════════════════
 
-def is_video_used(source_id: str, source: str = "pixabay") -> bool:
+def is_video_used(
+    source_id: str,
+    source:    str = "pixabay",
+) -> bool:
     return _conn().execute(
         "SELECT 1 FROM used_videos WHERE source_id=? AND source=?",
         (str(source_id), source),
     ).fetchone() is not None
 
 
-def mark_video_used(source_id: str, keyword: str, source: str = "pixabay") -> None:
+def mark_video_used(
+    source_id: str,
+    keyword:   str,
+    source:    str = "pixabay",
+) -> None:
     with _write_lock:
         with _conn() as c:
             c.execute(
-                "INSERT OR IGNORE INTO used_videos (source_id, source, keyword) VALUES (?,?,?)",
+                """INSERT OR IGNORE INTO used_videos
+                   (source_id, source, keyword)
+                   VALUES (?, ?, ?)""",
                 (str(source_id), source, keyword),
             )
 
 
 def get_used_count() -> int:
-    return _conn().execute("SELECT COUNT(*) FROM used_videos").fetchone()[0]
+    return _conn().execute(
+        "SELECT COUNT(*) FROM used_videos"
+    ).fetchone()[0]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -169,18 +197,24 @@ def get_used_count() -> int:
 
 def is_render_done(video_number: str, lang: str) -> bool:
     row = _conn().execute(
-        "SELECT status, output_path FROM renders WHERE video_number=? AND lang=?",
+        """SELECT status, output_path
+           FROM renders
+           WHERE video_number=? AND lang=?""",
         (str(video_number), lang),
     ).fetchone()
+
     if not row or row["status"] != "done":
         return False
+
     output = row["output_path"]
     return bool(output and Path(output).exists())
 
 
 def get_render_output(video_number: str, lang: str) -> str | None:
     row = _conn().execute(
-        "SELECT output_path FROM renders WHERE video_number=? AND lang=? AND status='done'",
+        """SELECT output_path
+           FROM renders
+           WHERE video_number=? AND lang=? AND status='done'""",
         (str(video_number), lang),
     ).fetchone()
     return row["output_path"] if row else None
@@ -190,52 +224,67 @@ def mark_render_start(video_number: str, lang: str) -> None:
     with _write_lock:
         with _conn() as c:
             c.execute(
-                """INSERT INTO renders (video_number, lang, status, updated_at)
-                   VALUES (?,?,'running',CURRENT_TIMESTAMP)
+                """INSERT INTO renders
+                       (video_number, lang, status, updated_at)
+                   VALUES (?, ?, 'running', CURRENT_TIMESTAMP)
                    ON CONFLICT(video_number, lang) DO UPDATE SET
-                   status='running', error=NULL, updated_at=CURRENT_TIMESTAMP""",
+                       status     = 'running',
+                       error      = NULL,
+                       updated_at = CURRENT_TIMESTAMP""",
                 (str(video_number), lang),
             )
 
 
 def mark_render_done(
     video_number: str,
-    lang: str,
-    output_path: str,
-    duration: float,
+    lang:         str,
+    output_path:  str,
+    duration:     float,
 ) -> None:
     with _write_lock:
         with _conn() as c:
             c.execute(
-                """INSERT INTO renders (video_number, lang, status, output_path, duration_s, updated_at)
-                   VALUES (?,?,'done',?,?,CURRENT_TIMESTAMP)
+                """INSERT INTO renders
+                       (video_number, lang, status,
+                        output_path, duration_s, updated_at)
+                   VALUES (?, ?, 'done', ?, ?, CURRENT_TIMESTAMP)
                    ON CONFLICT(video_number, lang) DO UPDATE SET
-                   status='done', output_path=excluded.output_path,
-                   duration_s=excluded.duration_s, updated_at=CURRENT_TIMESTAMP""",
+                       status      = 'done',
+                       output_path = excluded.output_path,
+                       duration_s  = excluded.duration_s,
+                       updated_at  = CURRENT_TIMESTAMP""",
                 (str(video_number), lang, output_path, duration),
             )
 
 
-def mark_render_failed(video_number: str, lang: str, error: str) -> None:
+def mark_render_failed(
+    video_number: str,
+    lang:         str,
+    error:        str,
+) -> None:
     with _write_lock:
         with _conn() as c:
             c.execute(
-                """INSERT INTO renders (video_number, lang, status, error, updated_at)
-                   VALUES (?,?,'failed',?,CURRENT_TIMESTAMP)
+                """INSERT INTO renders
+                       (video_number, lang, status, error, updated_at)
+                   VALUES (?, ?, 'failed', ?, CURRENT_TIMESTAMP)
                    ON CONFLICT(video_number, lang) DO UPDATE SET
-                   status='failed', error=excluded.error, updated_at=CURRENT_TIMESTAMP""",
+                       status     = 'failed',
+                       error      = excluded.error,
+                       updated_at = CURRENT_TIMESTAMP""",
                 (str(video_number), lang, error[:500]),
             )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✨ PUBLISHING TRACKER (لكل لغة)
+# PUBLISHING TRACKER
 # ═════════════════════════════════════════════════════════════════════════════
 
 def is_published(video_number: str, lang: str) -> bool:
     """هل تم نشر هذا الفيديو لهذه اللغة؟"""
     row = _conn().execute(
-        "SELECT 1 FROM publish_tracker WHERE video_number=? AND lang=?",
+        """SELECT 1 FROM publish_tracker
+           WHERE video_number=? AND lang=?""",
         (str(video_number), lang),
     ).fetchone()
     return row is not None
@@ -246,14 +295,18 @@ def mark_published(video_number: str, lang: str) -> None:
     with _write_lock:
         with _conn() as c:
             c.execute(
-                """INSERT OR IGNORE INTO publish_tracker (video_number, lang)
-                   VALUES (?,?)""",
+                """INSERT OR IGNORE INTO publish_tracker
+                   (video_number, lang)
+                   VALUES (?, ?)""",
                 (str(video_number), lang),
             )
 
 
-def mark_video_published_for_lang(video_number: str, lang: str) -> None:
-    """✨ Alias لـ mark_published — يُستخدم في main.py."""
+def mark_video_published_for_lang(
+    video_number: str,
+    lang:         str,
+) -> None:
+    """Alias لـ mark_published."""
     mark_published(video_number, lang)
 
 
@@ -267,49 +320,45 @@ def get_published_count(lang: str) -> int:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✨ AUTO-NEXT (الفيديو التالي غير المنشور)
+# AUTO-NEXT
 # ═════════════════════════════════════════════════════════════════════════════
 
-def get_next_video_number(lang: str, available_numbers: list[str]) -> str | None:
+def get_next_video_number(
+    lang:              str,
+    available_numbers: list[str],
+) -> str | None:
     """
-    ✨ احصل على رقم الفيديو التالي الذي لم يُنشر بعد لهذه اللغة.
-    
-    Args:
-        lang: اللغة (ar, fr, en)
-        available_numbers: أرقام الفيديوهات المتاحة في Excel
-    
+    احصل على رقم الفيديو التالي الذي لم يُنشر بعد لهذه اللغة.
+
     Returns:
         رقم الفيديو التالي، أو None إذا كلها مُنشرة (يحتاج loop)
     """
     if not available_numbers:
         return None
-    
-    # احصل على كل الأرقام المنشورة
+
     rows = _conn().execute(
         "SELECT video_number FROM publish_tracker WHERE lang=?",
         (lang,),
     ).fetchall()
-    
-    published_numbers = {str(row["video_number"]) for row in rows}
-    
-    # ابحث عن أول رقم غير منشور (بالترتيب)
+
+    published = {str(row["video_number"]) for row in rows}
+
     for num in available_numbers:
-        if str(num) not in published_numbers:
+        if str(num) not in published:
             return str(num)
-    
-    # كل الأرقام منشورة → يحتاج loop
+
     return None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✨ LOOP (إعادة من البداية)
+# LOOP
 # ═════════════════════════════════════════════════════════════════════════════
 
 def reset_published_for_lang(lang: str) -> int:
     """
-    ✨ إعادة تعيين كل الفيديوهات المنشورة لهذه اللغة.
+    إعادة تعيين كل الفيديوهات المنشورة لهذه اللغة.
     يُستخدم عند الـ loop (إعادة من البداية).
-    
+
     Returns: عدد السجلات المحذوفة
     """
     with _write_lock:
@@ -319,8 +368,11 @@ def reset_published_for_lang(lang: str) -> int:
                 (lang,),
             )
             count = c.total_changes
-    
-    print(f"  🔄 Reset {lang.upper()} publish tracker — ready to loop!")
+
+    print(
+        f"  🔄 Reset {lang.upper()} publish tracker "
+        f"— ready to loop!"
+    )
     return count
 
 
@@ -332,31 +384,37 @@ def get_pending_publish(lang: str | None = None) -> list[dict]:
     """أرجع الفيديوهات المنتهية التي لم تُنشر بعد."""
     if lang:
         rows = _conn().execute(
-            """SELECT r.video_number, r.lang, r.output_path 
+            """SELECT r.video_number, r.lang, r.output_path
                FROM renders r
-               WHERE r.status='done' 
-               AND r.output_path IS NOT NULL
-               AND NOT EXISTS (
-                   SELECT 1 FROM publish_tracker p 
-                   WHERE p.video_number = r.video_number AND p.lang = r.lang
-               )
-               AND r.lang = ?""",
+               WHERE r.status      = 'done'
+                 AND r.output_path IS NOT NULL
+                 AND r.lang        = ?
+                 AND NOT EXISTS (
+                     SELECT 1 FROM publish_tracker p
+                     WHERE p.video_number = r.video_number
+                       AND p.lang         = r.lang
+                 )""",
             (lang,),
         ).fetchall()
     else:
         rows = _conn().execute(
-            """SELECT r.video_number, r.lang, r.output_path 
+            """SELECT r.video_number, r.lang, r.output_path
                FROM renders r
-               WHERE r.status='done' 
-               AND r.output_path IS NOT NULL
-               AND NOT EXISTS (
-                   SELECT 1 FROM publish_tracker p 
-                   WHERE p.video_number = r.video_number AND p.lang = r.lang
-               )""",
+               WHERE r.status      = 'done'
+                 AND r.output_path IS NOT NULL
+                 AND NOT EXISTS (
+                     SELECT 1 FROM publish_tracker p
+                     WHERE p.video_number = r.video_number
+                       AND p.lang         = r.lang
+                 )""",
         ).fetchall()
 
     return [
-        {"video_number": r["video_number"], "lang": r["lang"], "output_path": r["output_path"]}
+        {
+            "video_number": r["video_number"],
+            "lang":         r["lang"],
+            "output_path":  r["output_path"],
+        }
         for r in rows
         if r["output_path"] and Path(r["output_path"]).exists()
     ]
@@ -368,28 +426,23 @@ def get_pending_publish(lang: str | None = None) -> list[dict]:
 
 def save_script_meta(
     video_number: str,
-    title: str,
-    en_data: dict,
-    ar_data: dict | None = None,
+    title:        str,
+    lang:         str,
+    sentences:    int,
+    words:        int,
 ) -> None:
     with _write_lock:
         with _conn() as c:
             c.execute(
-                """INSERT INTO scripts (video_number, title, en_sentences, ar_sentences, en_words, ar_words)
-                   VALUES (?,?,?,?,?,?)
+                """INSERT INTO scripts
+                       (video_number, title, lang, sentences, words)
+                   VALUES (?, ?, ?, ?, ?)
                    ON CONFLICT(video_number) DO UPDATE SET
-                   title=excluded.title,
-                   en_sentences=excluded.en_sentences,
-                   ar_sentences=excluded.ar_sentences,
-                   en_words=excluded.en_words,
-                   ar_words=excluded.ar_words""",
-                (
-                    str(video_number), title,
-                    len(en_data.get("sentences", [])) if en_data else 0,
-                    len(ar_data.get("sentences", [])) if ar_data else 0,
-                    en_data.get("word_count", 0) if en_data else 0,
-                    ar_data.get("word_count", 0) if ar_data else 0,
-                ),
+                       title     = excluded.title,
+                       lang      = excluded.lang,
+                       sentences = excluded.sentences,
+                       words     = excluded.words""",
+                (str(video_number), title, lang, sentences, words),
             )
 
 
@@ -410,25 +463,25 @@ def get_ai_cache(cache_key: str) -> dict | None:
         "SELECT * FROM ai_cache WHERE cache_key=?",
         (str(cache_key),),
     ).fetchone()
-    
+
     if not row:
         return None
-    
+
     def safe_json(s):
         try:
             return json.loads(s) if s else None
         except (json.JSONDecodeError, TypeError):
             return None
-    
-    # Safe column access
-    def safe_col(name, default=""):
+
+    def safe_col(name: str, default=""):
         try:
             return row[name]
         except (IndexError, KeyError):
             return default
-    
+
     return {
         "cache_key":            safe_col("cache_key"),
+        "lang":                 safe_col("lang", "ar"),
         "title":                safe_col("title"),
         "analysis":             safe_json(safe_col("analysis")),
         "power_words":          safe_json(safe_col("power_words")),
@@ -440,45 +493,54 @@ def get_ai_cache(cache_key: str) -> dict | None:
         "accent_colors":        safe_json(safe_col("accent_colors")),
         "hook_keyword":         safe_col("hook_keyword", ""),
         "attractive_title":     safe_json(safe_col("attractive_title")),
-        "ar_tagged":            safe_json(safe_col("ar_tagged")),
-        "en_tagged":            safe_json(safe_col("en_tagged")),
-        "fr_tagged":            safe_json(safe_col("fr_tagged", None)),
+        "tagged":               safe_json(safe_col("tagged")),
         "created_at":           safe_col("created_at"),
         "updated_at":           safe_col("updated_at"),
     }
 
 
-def save_ai_cache(cache_key: str, title: str, enriched: dict) -> None:
-    def to_json(obj):
-        return json.dumps(obj, ensure_ascii=False) if obj else None
-    
+def save_ai_cache(
+    cache_key: str,
+    title:     str,
+    lang:      str,
+    enriched:  dict,
+) -> None:
+    def to_json(obj) -> str | None:
+        return (
+            json.dumps(obj, ensure_ascii=False)
+            if obj is not None
+            else None
+        )
+
     with _write_lock:
         with _conn() as c:
             c.execute(
                 """INSERT INTO ai_cache (
-                    cache_key, title, analysis, power_words, visual_keywords,
-                    pattern_interrupts, engagement_questions, hashtags,
-                    captions, accent_colors, hook_keyword, attractive_title,
-                    ar_tagged, en_tagged, fr_tagged
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       cache_key, lang, title,
+                       analysis, power_words, visual_keywords,
+                       pattern_interrupts, engagement_questions,
+                       hashtags, captions, accent_colors,
+                       hook_keyword, attractive_title, tagged
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(cache_key) DO UPDATE SET
-                   title=excluded.title,
-                   analysis=excluded.analysis,
-                   power_words=excluded.power_words,
-                   visual_keywords=excluded.visual_keywords,
-                   pattern_interrupts=excluded.pattern_interrupts,
-                   engagement_questions=excluded.engagement_questions,
-                   hashtags=excluded.hashtags,
-                   captions=excluded.captions,
-                   accent_colors=excluded.accent_colors,
-                   hook_keyword=excluded.hook_keyword,
-                   attractive_title=excluded.attractive_title,
-                   ar_tagged=excluded.ar_tagged,
-                   en_tagged=excluded.en_tagged,
-                   fr_tagged=excluded.fr_tagged,
-                   updated_at=CURRENT_TIMESTAMP""",
+                       lang                 = excluded.lang,
+                       title                = excluded.title,
+                       analysis             = excluded.analysis,
+                       power_words          = excluded.power_words,
+                       visual_keywords      = excluded.visual_keywords,
+                       pattern_interrupts   = excluded.pattern_interrupts,
+                       engagement_questions = excluded.engagement_questions,
+                       hashtags             = excluded.hashtags,
+                       captions             = excluded.captions,
+                       accent_colors        = excluded.accent_colors,
+                       hook_keyword         = excluded.hook_keyword,
+                       attractive_title     = excluded.attractive_title,
+                       tagged               = excluded.tagged,
+                       updated_at           = CURRENT_TIMESTAMP""",
                 (
-                    str(cache_key), title,
+                    str(cache_key),
+                    lang,
+                    title,
                     to_json(enriched.get("analysis")),
                     to_json(enriched.get("power_words")),
                     to_json(enriched.get("visual_keywords")),
@@ -489,9 +551,7 @@ def save_ai_cache(cache_key: str, title: str, enriched: dict) -> None:
                     to_json(enriched.get("accent_colors")),
                     enriched.get("hook_keyword", ""),
                     to_json(enriched.get("attractive_title")),
-                    to_json(enriched.get("ar_tagged")),
-                    to_json(enriched.get("en_tagged")),
-                    to_json(enriched.get("fr_tagged")),
+                    to_json(enriched.get("tagged")),
                 ),
             )
 
@@ -500,7 +560,10 @@ def clear_ai_cache(cache_key: str | None = None) -> int:
     with _write_lock:
         with _conn() as c:
             if cache_key:
-                c.execute("DELETE FROM ai_cache WHERE cache_key=?", (str(cache_key),))
+                c.execute(
+                    "DELETE FROM ai_cache WHERE cache_key=?",
+                    (str(cache_key),),
+                )
             else:
                 c.execute("DELETE FROM ai_cache")
             return c.total_changes
@@ -512,39 +575,47 @@ def show_ai_cache(cache_key: str | None = None) -> None:
         if not cache:
             print(f"\n  ❌ No cache for key: {cache_key}")
             return
-        
+
         print(f"\n  {'═' * 60}")
         print(f"  📦 AI Cache: {cache_key}")
         print(f"  {'═' * 60}")
-        
+
         if cache.get("analysis"):
             a = cache["analysis"]
-            print(f"  📊 Type: {a.get('content_type')} | Emotion: {a.get('primary_emotion')}")
-        
+            print(
+                f"  📊 Type: {a.get('content_type')} | "
+                f"Emotion: {a.get('primary_emotion')}"
+            )
+
         if cache.get("hook_keyword"):
             print(f"  🔥 Hook: '{cache['hook_keyword']}'")
-        
+
+        print(f"  🌐 Lang: {cache.get('lang', 'ar').upper()}")
         print(f"  {'═' * 60}\n")
+
     else:
         rows = _conn().execute(
-            "SELECT cache_key, title, created_at FROM ai_cache ORDER BY cache_key"
+            """SELECT cache_key, lang, title, created_at
+               FROM ai_cache
+               ORDER BY cache_key"""
         ).fetchall()
-        
+
         if not rows:
             print("\n  📭 AI Cache is empty\n")
             return
-        
-        print(f"\n  {'═' * 70}")
+
+        print(f"\n  {'═' * 75}")
         print(f"  📦 AI Cache ({len(rows)} entries)")
-        print(f"  {'═' * 70}")
-        
+        print(f"  {'═' * 75}")
+
         for r in rows:
             key   = str(r["cache_key"])[:20]
-            title = (r["title"] or "")[:35]
+            lang  = str(r["lang"] or "ar").upper()[:3]
+            title = (r["title"] or "")[:32]
             date  = (r["created_at"] or "")[:19]
-            print(f"  {key:<20} {title:<35} {date}")
-        
-        print(f"  {'═' * 70}\n")
+            print(f"  {key:<20} {lang:<4} {title:<32} {date}")
+
+        print(f"  {'═' * 75}\n")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -552,20 +623,28 @@ def show_ai_cache(cache_key: str | None = None) -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def print_db_summary() -> None:
-    c = _conn()
-    used   = c.execute("SELECT COUNT(*) FROM used_videos").fetchone()[0]
-    done   = c.execute("SELECT COUNT(*) FROM renders WHERE status='done'").fetchone()[0]
-    failed = c.execute("SELECT COUNT(*) FROM renders WHERE status='failed'").fetchone()[0]
-    cached = c.execute("SELECT COUNT(*) FROM ai_cache").fetchone()[0]
-    
-    # Published per language
+    c      = _conn()
+    used   = c.execute(
+        "SELECT COUNT(*) FROM used_videos"
+    ).fetchone()[0]
+    done   = c.execute(
+        "SELECT COUNT(*) FROM renders WHERE status='done'"
+    ).fetchone()[0]
+    failed = c.execute(
+        "SELECT COUNT(*) FROM renders WHERE status='failed'"
+    ).fetchone()[0]
+    cached = c.execute(
+        "SELECT COUNT(*) FROM ai_cache"
+    ).fetchone()[0]
+
     pub_ar = get_published_count("ar")
     pub_fr = get_published_count("fr")
     pub_en = get_published_count("en")
-    
+
     print(
         f"  📊 DB: {used} videos used | "
         f"{done} renders ✅ | {failed} failed ❌ | "
         f"AI cached: {cached}\n"
-        f"  📘 Published: AR:{pub_ar} | FR:{pub_fr} | EN:{pub_en}"
+        f"  📘 Published: "
+        f"AR:{pub_ar} | FR:{pub_fr} | EN:{pub_en}"
     )
