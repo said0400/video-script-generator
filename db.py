@@ -1,8 +1,12 @@
 """
 db.py — SQLite database for VSG
-Tracks: used videos, render progress, script metadata, AI cache.
-
-✨ NEW: attractive_title column in ai_cache
+✨ يدعم:
+  - تتبع الفيديوهات المستخدمة
+  - Resume system (استئناف من حيث توقف)
+  - AI cache
+  - ✨ NEW: تتبع النشر لكل لغة (AR, FR, EN)
+  - ✨ NEW: Auto-next (الفيديو التالي غير المنشور)
+  - ✨ NEW: Loop (إعادة من البداية عند انتهاء المحتوى)
 """
 
 from __future__ import annotations
@@ -39,13 +43,6 @@ def close_thread_conn() -> None:
         _local.conn = None
 
 
-def _normalize_lang_col(lang: str) -> str:
-    base_lang = lang.split("_")[0]
-    if base_lang not in ("ar", "en"):
-        base_lang = "en"
-    return f"published_{base_lang}"
-
-
 # ═════════════════════════════════════════════════════════════════════════════
 # SCHEMA
 # ═════════════════════════════════════════════════════════════════════════════
@@ -71,8 +68,7 @@ def init_db() -> None:
                     output_path  TEXT,
                     duration_s   REAL,
                     error        TEXT,
-                    published_ar INTEGER DEFAULT 0,
-                    published_en INTEGER DEFAULT 0,
+                    published    INTEGER DEFAULT 0,
                     created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at   TEXT DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(video_number, lang)
@@ -85,13 +81,11 @@ def init_db() -> None:
                     ar_sentences INTEGER DEFAULT 0,
                     en_words     INTEGER DEFAULT 0,
                     ar_words     INTEGER DEFAULT 0,
-                    ar_tags_json TEXT,
-                    en_tags_json TEXT,
                     saved_at     TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS ai_cache (
-                    video_number TEXT PRIMARY KEY,
+                    cache_key    TEXT PRIMARY KEY,
                     title        TEXT,
                     analysis     TEXT,
                     power_words  TEXT,
@@ -105,38 +99,40 @@ def init_db() -> None:
                     attractive_title TEXT,
                     ar_tagged    TEXT,
                     en_tagged    TEXT,
+                    fr_tagged    TEXT,
                     created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
                     updated_at   TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
+                /* ✨ NEW: تتبع النشر لكل لغة */
+                CREATE TABLE IF NOT EXISTS publish_tracker (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_number TEXT NOT NULL,
+                    lang         TEXT NOT NULL,
+                    published_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(video_number, lang)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_used      ON used_videos(source_id, source);
-                CREATE INDEX IF NOT EXISTS idx_renders   ON renders(video_number, lang);
-                CREATE INDEX IF NOT EXISTS idx_status    ON renders(status);
-                CREATE INDEX IF NOT EXISTS idx_ai_cache  ON ai_cache(video_number);
+                CREATE INDEX IF NOT EXISTS idx_renders    ON renders(video_number, lang);
+                CREATE INDEX IF NOT EXISTS idx_status     ON renders(status);
+                CREATE INDEX IF NOT EXISTS idx_ai_cache   ON ai_cache(cache_key);
+                CREATE INDEX IF NOT EXISTS idx_publish    ON publish_tracker(video_number, lang);
             """)
 
             # Migrations
             try:
-                c.execute("ALTER TABLE renders ADD COLUMN published_ar INTEGER DEFAULT 0")
+                c.execute("ALTER TABLE renders ADD COLUMN published INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
             try:
-                c.execute("ALTER TABLE renders ADD COLUMN published_en INTEGER DEFAULT 0")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                c.execute("ALTER TABLE scripts ADD COLUMN ar_tags_json TEXT")
-            except sqlite3.OperationalError:
-                pass
-            try:
-                c.execute("ALTER TABLE scripts ADD COLUMN en_tags_json TEXT")
+                c.execute("ALTER TABLE ai_cache ADD COLUMN fr_tagged TEXT")
             except sqlite3.OperationalError:
                 pass
             try:
                 c.execute("ALTER TABLE ai_cache ADD COLUMN hook_keyword TEXT")
             except sqlite3.OperationalError:
                 pass
-            # ✨ NEW
             try:
                 c.execute("ALTER TABLE ai_cache ADD COLUMN attractive_title TEXT")
             except sqlite3.OperationalError:
@@ -233,45 +229,130 @@ def mark_render_failed(video_number: str, lang: str, error: str) -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PUBLISHING
+# ✨ PUBLISHING TRACKER (لكل لغة)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def is_published(video_number: str, lang: str) -> bool:
-    col = _normalize_lang_col(lang)
+    """هل تم نشر هذا الفيديو لهذه اللغة؟"""
     row = _conn().execute(
-        f"SELECT {col} FROM renders WHERE video_number=? AND lang=?",
+        "SELECT 1 FROM publish_tracker WHERE video_number=? AND lang=?",
         (str(video_number), lang),
     ).fetchone()
-    return bool(row and row[0])
+    return row is not None
 
 
 def mark_published(video_number: str, lang: str) -> None:
-    col = _normalize_lang_col(lang)
+    """سجّل أن هذا الفيديو نُشر لهذه اللغة."""
     with _write_lock:
         with _conn() as c:
             c.execute(
-                f"""UPDATE renders SET {col}=1, updated_at=CURRENT_TIMESTAMP
-                    WHERE video_number=? AND lang=?""",
+                """INSERT OR IGNORE INTO publish_tracker (video_number, lang)
+                   VALUES (?,?)""",
                 (str(video_number), lang),
             )
 
 
+def mark_video_published_for_lang(video_number: str, lang: str) -> None:
+    """✨ Alias لـ mark_published — يُستخدم في main.py."""
+    mark_published(video_number, lang)
+
+
+def get_published_count(lang: str) -> int:
+    """عدد الفيديوهات المنشورة لهذه اللغة."""
+    row = _conn().execute(
+        "SELECT COUNT(*) FROM publish_tracker WHERE lang=?",
+        (lang,),
+    ).fetchone()
+    return row[0] if row else 0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✨ AUTO-NEXT (الفيديو التالي غير المنشور)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def get_next_video_number(lang: str, available_numbers: list[str]) -> str | None:
+    """
+    ✨ احصل على رقم الفيديو التالي الذي لم يُنشر بعد لهذه اللغة.
+    
+    Args:
+        lang: اللغة (ar, fr, en)
+        available_numbers: أرقام الفيديوهات المتاحة في Excel
+    
+    Returns:
+        رقم الفيديو التالي، أو None إذا كلها مُنشرة (يحتاج loop)
+    """
+    if not available_numbers:
+        return None
+    
+    # احصل على كل الأرقام المنشورة
+    rows = _conn().execute(
+        "SELECT video_number FROM publish_tracker WHERE lang=?",
+        (lang,),
+    ).fetchall()
+    
+    published_numbers = {str(row["video_number"]) for row in rows}
+    
+    # ابحث عن أول رقم غير منشور (بالترتيب)
+    for num in available_numbers:
+        if str(num) not in published_numbers:
+            return str(num)
+    
+    # كل الأرقام منشورة → يحتاج loop
+    return None
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✨ LOOP (إعادة من البداية)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def reset_published_for_lang(lang: str) -> int:
+    """
+    ✨ إعادة تعيين كل الفيديوهات المنشورة لهذه اللغة.
+    يُستخدم عند الـ loop (إعادة من البداية).
+    
+    Returns: عدد السجلات المحذوفة
+    """
+    with _write_lock:
+        with _conn() as c:
+            c.execute(
+                "DELETE FROM publish_tracker WHERE lang=?",
+                (lang,),
+            )
+            count = c.total_changes
+    
+    print(f"  🔄 Reset {lang.upper()} publish tracker — ready to loop!")
+    return count
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PENDING PUBLISH
+# ═════════════════════════════════════════════════════════════════════════════
+
 def get_pending_publish(lang: str | None = None) -> list[dict]:
-    if lang and lang in ("ar", "en"):
-        col   = f"published_{lang}"
-        rows  = _conn().execute(
-            f"""SELECT video_number, lang, output_path FROM renders
-                WHERE status='done' AND {col}=0 AND output_path IS NOT NULL""",
+    """أرجع الفيديوهات المنتهية التي لم تُنشر بعد."""
+    if lang:
+        rows = _conn().execute(
+            """SELECT r.video_number, r.lang, r.output_path 
+               FROM renders r
+               WHERE r.status='done' 
+               AND r.output_path IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM publish_tracker p 
+                   WHERE p.video_number = r.video_number AND p.lang = r.lang
+               )
+               AND r.lang = ?""",
+            (lang,),
         ).fetchall()
     else:
         rows = _conn().execute(
-            """SELECT video_number, lang, output_path FROM renders
-               WHERE status='done'
-               AND (
-                 (lang='ar' AND published_ar=0) OR
-                 (lang='en' AND published_en=0)
-               )
-               AND output_path IS NOT NULL""",
+            """SELECT r.video_number, r.lang, r.output_path 
+               FROM renders r
+               WHERE r.status='done' 
+               AND r.output_path IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM publish_tracker p 
+                   WHERE p.video_number = r.video_number AND p.lang = r.lang
+               )""",
         ).fetchall()
 
     return [
@@ -291,57 +372,43 @@ def save_script_meta(
     en_data: dict,
     ar_data: dict | None = None,
 ) -> None:
-    ar_tags_json = json.dumps(
-        ar_data.get("tags_summary", {}) if ar_data else {},
-        ensure_ascii=False
-    )
-    en_tags_json = json.dumps(
-        en_data.get("tags_summary", {}),
-        ensure_ascii=False
-    )
-    
     with _write_lock:
         with _conn() as c:
             c.execute(
-                """INSERT INTO scripts (
-                    video_number, title, en_sentences, ar_sentences,
-                    en_words, ar_words, ar_tags_json, en_tags_json
-                ) VALUES (?,?,?,?,?,?,?,?)
+                """INSERT INTO scripts (video_number, title, en_sentences, ar_sentences, en_words, ar_words)
+                   VALUES (?,?,?,?,?,?)
                    ON CONFLICT(video_number) DO UPDATE SET
                    title=excluded.title,
                    en_sentences=excluded.en_sentences,
                    ar_sentences=excluded.ar_sentences,
                    en_words=excluded.en_words,
-                   ar_words=excluded.ar_words,
-                   ar_tags_json=excluded.ar_tags_json,
-                   en_tags_json=excluded.en_tags_json""",
+                   ar_words=excluded.ar_words""",
                 (
                     str(video_number), title,
-                    len(en_data.get("sentences", [])),
+                    len(en_data.get("sentences", [])) if en_data else 0,
                     len(ar_data.get("sentences", [])) if ar_data else 0,
-                    en_data.get("word_count", 0),
+                    en_data.get("word_count", 0) if en_data else 0,
                     ar_data.get("word_count", 0) if ar_data else 0,
-                    ar_tags_json, en_tags_json,
                 ),
             )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✨ AI CACHE
+# AI CACHE
 # ═════════════════════════════════════════════════════════════════════════════
 
-def has_ai_cache(video_number: str) -> bool:
+def has_ai_cache(cache_key: str) -> bool:
     row = _conn().execute(
-        "SELECT 1 FROM ai_cache WHERE video_number=?",
-        (str(video_number),),
+        "SELECT 1 FROM ai_cache WHERE cache_key=?",
+        (str(cache_key),),
     ).fetchone()
     return row is not None
 
 
-def get_ai_cache(video_number: str) -> dict | None:
+def get_ai_cache(cache_key: str) -> dict | None:
     row = _conn().execute(
-        "SELECT * FROM ai_cache WHERE video_number=?",
-        (str(video_number),),
+        "SELECT * FROM ai_cache WHERE cache_key=?",
+        (str(cache_key),),
     ).fetchone()
     
     if not row:
@@ -353,42 +420,35 @@ def get_ai_cache(video_number: str) -> dict | None:
         except (json.JSONDecodeError, TypeError):
             return None
     
-    # backward compatibility
-    hook_keyword = ""
-    try:
-        hook_keyword = row["hook_keyword"] or ""
-    except (IndexError, KeyError):
-        hook_keyword = ""
-    
-    # ✨ NEW: attractive_title
-    attractive_title = None
-    try:
-        attractive_title = safe_json(row["attractive_title"])
-    except (IndexError, KeyError):
-        attractive_title = None
+    # Safe column access
+    def safe_col(name, default=""):
+        try:
+            return row[name]
+        except (IndexError, KeyError):
+            return default
     
     return {
-        "video_number":         row["video_number"],
-        "title":                row["title"],
-        "analysis":             safe_json(row["analysis"]),
-        "power_words":          safe_json(row["power_words"]),
-        "visual_keywords":      safe_json(row["visual_keywords"]),
-        "pattern_interrupts":   safe_json(row["pattern_interrupts"]),
-        "engagement_questions": safe_json(row["engagement_questions"]),
-        "hashtags":             safe_json(row["hashtags"]),
-        "captions":             safe_json(row["captions"]),
-        "accent_colors":        safe_json(row["accent_colors"]),
-        "hook_keyword":         hook_keyword,
-        "attractive_title":     attractive_title,    # ✨ NEW
-        "ar_tagged":            safe_json(row["ar_tagged"]),
-        "en_tagged":            safe_json(row["en_tagged"]),
-        "created_at":           row["created_at"],
-        "updated_at":           row["updated_at"],
+        "cache_key":            safe_col("cache_key"),
+        "title":                safe_col("title"),
+        "analysis":             safe_json(safe_col("analysis")),
+        "power_words":          safe_json(safe_col("power_words")),
+        "visual_keywords":      safe_json(safe_col("visual_keywords")),
+        "pattern_interrupts":   safe_json(safe_col("pattern_interrupts")),
+        "engagement_questions": safe_json(safe_col("engagement_questions")),
+        "hashtags":             safe_json(safe_col("hashtags")),
+        "captions":             safe_json(safe_col("captions")),
+        "accent_colors":        safe_json(safe_col("accent_colors")),
+        "hook_keyword":         safe_col("hook_keyword", ""),
+        "attractive_title":     safe_json(safe_col("attractive_title")),
+        "ar_tagged":            safe_json(safe_col("ar_tagged")),
+        "en_tagged":            safe_json(safe_col("en_tagged")),
+        "fr_tagged":            safe_json(safe_col("fr_tagged", None)),
+        "created_at":           safe_col("created_at"),
+        "updated_at":           safe_col("updated_at"),
     }
 
 
-def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
-    """حفظ نتائج Groq في الـ cache."""
+def save_ai_cache(cache_key: str, title: str, enriched: dict) -> None:
     def to_json(obj):
         return json.dumps(obj, ensure_ascii=False) if obj else None
     
@@ -396,12 +456,12 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
         with _conn() as c:
             c.execute(
                 """INSERT INTO ai_cache (
-                    video_number, title, analysis, power_words, visual_keywords,
+                    cache_key, title, analysis, power_words, visual_keywords,
                     pattern_interrupts, engagement_questions, hashtags,
                     captions, accent_colors, hook_keyword, attractive_title,
-                    ar_tagged, en_tagged
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(video_number) DO UPDATE SET
+                    ar_tagged, en_tagged, fr_tagged
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(cache_key) DO UPDATE SET
                    title=excluded.title,
                    analysis=excluded.analysis,
                    power_words=excluded.power_words,
@@ -415,9 +475,10 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
                    attractive_title=excluded.attractive_title,
                    ar_tagged=excluded.ar_tagged,
                    en_tagged=excluded.en_tagged,
+                   fr_tagged=excluded.fr_tagged,
                    updated_at=CURRENT_TIMESTAMP""",
                 (
-                    str(video_number), title,
+                    str(cache_key), title,
                     to_json(enriched.get("analysis")),
                     to_json(enriched.get("power_words")),
                     to_json(enriched.get("visual_keywords")),
@@ -427,96 +488,46 @@ def save_ai_cache(video_number: str, title: str, enriched: dict) -> None:
                     to_json(enriched.get("captions")),
                     to_json(enriched.get("accent_colors")),
                     enriched.get("hook_keyword", ""),
-                    to_json(enriched.get("attractive_title")),     # ✨ NEW
+                    to_json(enriched.get("attractive_title")),
                     to_json(enriched.get("ar_tagged")),
                     to_json(enriched.get("en_tagged")),
+                    to_json(enriched.get("fr_tagged")),
                 ),
             )
 
 
-def clear_ai_cache(video_number: str | None = None) -> int:
+def clear_ai_cache(cache_key: str | None = None) -> int:
     with _write_lock:
         with _conn() as c:
-            if video_number:
-                c.execute(
-                    "DELETE FROM ai_cache WHERE video_number=?",
-                    (str(video_number),),
-                )
+            if cache_key:
+                c.execute("DELETE FROM ai_cache WHERE cache_key=?", (str(cache_key),))
             else:
                 c.execute("DELETE FROM ai_cache")
-            return c.rowcount
+            return c.total_changes
 
 
-def show_ai_cache(video_number: str | None = None) -> None:
-    if video_number:
-        cache = get_ai_cache(video_number)
+def show_ai_cache(cache_key: str | None = None) -> None:
+    if cache_key:
+        cache = get_ai_cache(cache_key)
         if not cache:
-            print(f"\n  ❌ No cache for video #{video_number}")
+            print(f"\n  ❌ No cache for key: {cache_key}")
             return
         
         print(f"\n  {'═' * 60}")
-        print(f"  📦 AI Cache for Video #{video_number}: {cache['title'][:40]}")
+        print(f"  📦 AI Cache: {cache_key}")
         print(f"  {'═' * 60}")
-        print(f"  Created: {cache['created_at']}")
-        print(f"  Updated: {cache['updated_at']}")
         
         if cache.get("analysis"):
             a = cache["analysis"]
-            print(f"\n  📊 Analysis:")
-            print(f"     Type      : {a.get('content_type')}")
-            print(f"     Emotion   : {a.get('primary_emotion')}")
-            print(f"     Intensity : {a.get('intensity')}/10")
-            print(f"     Tone      : {a.get('tone')}")
-        
-        # ✨ NEW: Attractive Title
-        if cache.get("attractive_title"):
-            at = cache["attractive_title"]
-            print(f"\n  📌 Display Title:")
-            print(f"     {at.get('emoji_left', '🔥')} {at.get('title', '')} {at.get('emoji_right', '💥')}")
+            print(f"  📊 Type: {a.get('content_type')} | Emotion: {a.get('primary_emotion')}")
         
         if cache.get("hook_keyword"):
-            print(f"\n  🔥 Hook Keyword: '{cache['hook_keyword']}'")
-        
-        if cache.get("power_words"):
-            pw = cache["power_words"]
-            print(f"\n  🔥 Power Words:")
-            if pw.get("ar"):
-                print(f"     AR: {', '.join(pw['ar'][:8])}")
-            if pw.get("en"):
-                print(f"     EN: {', '.join(pw['en'][:8])}")
-        
-        if cache.get("pattern_interrupts"):
-            pi = cache["pattern_interrupts"]
-            print(f"\n  💬 Pattern Interrupts:")
-            if pi.get("ar"):
-                print(f"     AR: {' | '.join(pi['ar'][:4])}")
-            if pi.get("en"):
-                print(f"     EN: {' | '.join(pi['en'][:4])}")
-        
-        if cache.get("engagement_questions"):
-            eq = cache["engagement_questions"]
-            print(f"\n  ❓ Engagement Questions:")
-            if eq.get("ar"):
-                print(f"     AR: {' | '.join(eq['ar'][:3])}")
-            if eq.get("en"):
-                print(f"     EN: {' | '.join(eq['en'][:3])}")
-        
-        if cache.get("accent_colors"):
-            print(f"\n  🎨 Colors: {' '.join(cache['accent_colors'])}")
-        
-        if cache.get("hashtags"):
-            h = cache["hashtags"]
-            print(f"\n  🏷️  Hashtags:")
-            if h.get("ar"):
-                print(f"     AR: {' '.join(h['ar'][:6])}")
-            if h.get("en"):
-                print(f"     EN: {' '.join(h['en'][:6])}")
+            print(f"  🔥 Hook: '{cache['hook_keyword']}'")
         
         print(f"  {'═' * 60}\n")
-    
     else:
         rows = _conn().execute(
-            "SELECT video_number, title, created_at, updated_at FROM ai_cache ORDER BY video_number"
+            "SELECT cache_key, title, created_at FROM ai_cache ORDER BY cache_key"
         ).fetchall()
         
         if not rows:
@@ -524,19 +535,16 @@ def show_ai_cache(video_number: str | None = None) -> None:
             return
         
         print(f"\n  {'═' * 70}")
-        print(f"  📦 AI Cache Summary ({len(rows)} videos)")
+        print(f"  📦 AI Cache ({len(rows)} entries)")
         print(f"  {'═' * 70}")
-        print(f"  {'#':<5} {'Title':<40} {'Created':<20}")
-        print(f"  {'-' * 70}")
         
         for r in rows:
-            num   = str(r["video_number"])[:4]
-            title = (r["title"] or "")[:38]
+            key   = str(r["cache_key"])[:20]
+            title = (r["title"] or "")[:35]
             date  = (r["created_at"] or "")[:19]
-            print(f"  {num:<5} {title:<40} {date:<20}")
+            print(f"  {key:<20} {title:<35} {date}")
         
         print(f"  {'═' * 70}\n")
-        print(f"  💡 Use --show-ai-cache <number> to see details for one video\n")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -544,16 +552,20 @@ def show_ai_cache(video_number: str | None = None) -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def print_db_summary() -> None:
-    c      = _conn()
+    c = _conn()
     used   = c.execute("SELECT COUNT(*) FROM used_videos").fetchone()[0]
     done   = c.execute("SELECT COUNT(*) FROM renders WHERE status='done'").fetchone()[0]
     failed = c.execute("SELECT COUNT(*) FROM renders WHERE status='failed'").fetchone()[0]
-    pub_ar = c.execute("SELECT COUNT(*) FROM renders WHERE published_ar=1").fetchone()[0]
-    pub_en = c.execute("SELECT COUNT(*) FROM renders WHERE published_en=1").fetchone()[0]
     cached = c.execute("SELECT COUNT(*) FROM ai_cache").fetchone()[0]
+    
+    # Published per language
+    pub_ar = get_published_count("ar")
+    pub_fr = get_published_count("fr")
+    pub_en = get_published_count("en")
+    
     print(
         f"  📊 DB: {used} videos used | "
         f"{done} renders ✅ | {failed} failed ❌ | "
-        f"published AR:{pub_ar} EN:{pub_en} | "
-        f"AI cached: {cached}"
+        f"AI cached: {cached}\n"
+        f"  📘 Published: AR:{pub_ar} | FR:{pub_fr} | EN:{pub_en}"
     )
