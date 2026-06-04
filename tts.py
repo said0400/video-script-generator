@@ -1,7 +1,8 @@
 """
-Text-to-Speech via Google Gemini 2.5 Flash TTS.
-✨ يدعم 30+ مفتاح Gemini مع تدوير فوري عند rate limit
-✨ Tags-aware voice modulation (كل tag = نبرة مختلفة)
+Text-to-Speech via Google Gemini TTS.
+✨ صوت Algenib لكل اللغات
+✨ إعدادات مختلفة لكل لغة (Accent, Pace, Style)
+✨ يدعم 30+ مفتاح Gemini مع تدوير فوري
 """
 import mimetypes
 import os
@@ -27,13 +28,78 @@ VOICES = {
     "female_clear": "Zephyr",
     "female_warm":  "Aoede",
     "neutral":      "Fenrir",
+    "algenib":      "Algenib",
 }
 
 TTS_MODEL = "gemini-2.5-flash-preview-tts"
 MIN_DURATION_S = 2.0
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🎭 TAG-BASED VOICE INSTRUCTIONS
+# ✨ VOICE CONFIGURATIONS PER LANGUAGE
+# ═════════════════════════════════════════════════════════════════════════════
+
+VOICE_CONFIGS = {
+    "ar": {
+        "voice_key":   "algenib",
+        "voice_name":  "Algenib",
+        "director_note": (
+            "# Audio Profile\n"
+            "A smooth, premium narrator voice.\n\n"
+            "# Director's note\n"
+            "Style: Empathetic, emotionally connected, deeply feeling.\n"
+            "Pace: Natural, moderate speed.\n"
+            "Accent: Neutral Arabic, clear pronunciation.\n\n"
+            "## Scene:\n"
+            "An intimate recording studio.\n\n"
+            "## Sample Context:\n"
+            "Motivational short-form video. The narrator speaks with deep empathy,\n"
+            "connecting emotionally with every word. Feel the pain, the hope, the truth.\n"
+            "Each sentence carries weight and meaning.\n"
+            "Speak as if confiding in your closest friend."
+        ),
+    },
+    "fr": {
+        "voice_key":   "algenib",
+        "voice_name":  "Algenib",
+        "director_note": (
+            "# Audio Profile\n"
+            "A smooth, premium narrator voice.\n\n"
+            "# Director's note\n"
+            "Style: Whisper, intimate, secretive, close-to-mic.\n"
+            "Pace: Rapid Fire, very fast delivery but clear.\n"
+            "Accent: Transatlantic French, elegant and sophisticated.\n\n"
+            "## Scene:\n"
+            "A dark, intimate whisper booth.\n\n"
+            "## Sample Context:\n"
+            "Viral French short-form video. The narrator whispers urgently,\n"
+            "as if sharing a dangerous secret that nobody else knows.\n"
+            "Fast but perfectly articulated. Every word drips with mystery.\n"
+            "The listener must lean in to catch every syllable."
+        ),
+    },
+    "en": {
+        "voice_key":   "algenib",
+        "voice_name":  "Algenib",
+        "director_note": (
+            "# Audio Profile\n"
+            "A smooth, premium narrator voice.\n\n"
+            "# Director's note\n"
+            "Style: Vocal Smile, warm, friendly, inviting.\n"
+            "Pace: Natural, comfortable and conversational.\n"
+            "Accent: American Southern, warm drawl with charm.\n\n"
+            "## Scene:\n"
+            "A warm, sunlit porch conversation.\n\n"
+            "## Sample Context:\n"
+            "Motivational short-form video for American audience.\n"
+            "The narrator smiles while speaking — you can HEAR the smile.\n"
+            "Warm, genuine Southern charm. Like a trusted friend giving life advice.\n"
+            "Friendly, approachable, with natural charisma."
+        ),
+    },
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAG VOICE INSTRUCTIONS
 # ═════════════════════════════════════════════════════════════════════════════
 
 TAG_VOICE_INSTRUCTIONS = {
@@ -43,124 +109,83 @@ TAG_VOICE_INSTRUCTIONS = {
         "- Lower your volume slightly, almost whispering\n"
         "- Add tiny pauses before important words\n"
         "- Build curiosity with vocal tension\n"
-        "- Make the listener LEAN IN to hear you\n"
         "- End sentences with subtle rising tone"
     ),
     "desire": (
         "💛 WARM & DESIRABLE\n"
         "- Speak with genuine warmth and passion\n"
-        "- Use a soft, inviting tone\n"
-        "- Slightly slower than normal, savoring each word\n"
-        "- Add gentle emphasis on aspirational words\n"
-        "- Sound like you BELIEVE deeply in what you're saying\n"
+        "- Soft, inviting tone, savoring each word\n"
         "- Make the listener WANT what you're describing"
     ),
     "information": (
         "📘 CLEAR & EDUCATIONAL\n"
-        "- Speak with crystal clarity\n"
-        "- Natural, conversational pace\n"
+        "- Crystal clarity, natural conversational pace\n"
         "- Slight emphasis on key terms\n"
-        "- Confident but not aggressive\n"
-        "- Like explaining to a curious friend\n"
-        "- Pause briefly between concepts"
+        "- Like explaining to a curious friend"
     ),
     "inspiration": (
         "⚡ UPLIFTING & INSPIRING\n"
-        "- Speak with elevated energy\n"
-        "- Build momentum throughout the sentence\n"
-        "- Slightly faster pace, full of conviction\n"
-        "- Strong, motivating tone\n"
-        "- Lift the listener's spirit with your voice\n"
-        "- End with powerful, uplifting emphasis"
+        "- Elevated energy, build momentum\n"
+        "- Slightly faster, full of conviction\n"
+        "- End with powerful emphasis"
     ),
     "confident": (
         "💪 BOLD & ASSERTIVE\n"
-        "- Speak with absolute certainty\n"
-        "- Strong, grounded voice\n"
-        "- No hesitation, no doubt\n"
-        "- Slightly slower for impact\n"
-        "- Each word lands with weight\n"
+        "- Absolute certainty, strong grounded voice\n"
+        "- No hesitation, each word lands with weight\n"
         "- Make declarations, not suggestions"
     ),
     "shock": (
         "💥 INTENSE & SHOCKING\n"
-        "- Sudden, sharp delivery\n"
-        "- Strong emphasis on the shocking element\n"
-        "- Slight acceleration for urgency\n"
+        "- Sudden sharp delivery\n"
         "- Higher pitch on key words\n"
-        "- Make the listener STOP and pay attention\n"
         "- Brief pause AFTER the shocking word"
     ),
     "wisdom": (
         "🧠 DEEP & REFLECTIVE\n"
-        "- Speak slowly and deliberately\n"
-        "- Lower, contemplative tone\n"
-        "- Long pauses between thoughts\n"
-        "- Sound ancient, wise, timeless\n"
-        "- Each word carries deep meaning\n"
-        "- Make the listener think before responding"
+        "- Slowly and deliberately\n"
+        "- Lower contemplative tone\n"
+        "- Each word carries deep meaning"
     ),
     "urgency": (
         "🚨 URGENT & CRITICAL\n"
-        "- Faster pace with controlled energy\n"
-        "- Slightly higher pitch\n"
-        "- Strong emphasis on action words\n"
+        "- Faster pace, slightly higher pitch\n"
         "- Sound like there's NO TIME to waste\n"
-        "- Build pressure with each sentence\n"
         "- End with imperative force"
     ),
     "calm": (
         "🌊 PEACEFUL & SOOTHING\n"
-        "- Speak softly and gently\n"
-        "- Slow, relaxed pace\n"
-        "- Lower volume, lower pitch\n"
-        "- Reassuring and warm\n"
-        "- Like calming a frightened child\n"
-        "- Smooth transitions, no sudden changes"
+        "- Softly and gently, slow relaxed pace\n"
+        "- Lower volume, reassuring and warm"
     ),
     "emotional": (
         "💔 TENDER & TOUCHING\n"
-        "- Speak with genuine emotion in your voice\n"
-        "- Slightly slower, with feeling\n"
-        "- Subtle voice cracks on emotional words\n"
-        "- Pause when emotion overwhelms\n"
-        "- Make the listener FEEL what you feel\n"
-        "- Vulnerable, authentic delivery"
+        "- Genuine emotion, slightly slower\n"
+        "- Vulnerable, authentic delivery\n"
+        "- Make the listener FEEL what you feel"
     ),
 }
 
 DEFAULT_VOICE_INSTRUCTION = (
     "🎙️ NATURAL & ENGAGING\n"
-    "- Clear, natural narration\n"
-    "- Confident but warm\n"
-    "- Appropriate emphasis on key words\n"
-    "- Natural human breathing\n"
-    "- Engage the listener"
+    "- Clear natural narration, confident but warm"
 )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✨ API KEY ROTATION (يدعم 30+ مفتاح)
+# API KEY ROTATION (30+ مفتاح)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _load_keys() -> list[str]:
-    """
-    ✨ يدعم عدد غير محدود من مفاتيح Gemini.
-    يبحث عن: GEMINI_API_KEY, GEMINI_API_KEY_1, ..., GEMINI_API_KEY_50
-    """
+    """يدعم عدد غير محدود من مفاتيح Gemini."""
     keys = []
-    
-    # المفتاح الأساسي
     main_key = os.getenv("GEMINI_API_KEY")
     if main_key and main_key.strip():
         keys.append(main_key.strip())
-    
-    # المفاتيح المرقمة (1 إلى 50)
     for i in range(1, 51):
         key = os.getenv(f"GEMINI_API_KEY_{i}")
         if key and key.strip():
             keys.append(key.strip())
-    
     print(f"  🔑 Loaded {len(keys)} Gemini API keys")
     return keys
 
@@ -171,7 +196,6 @@ _key_lock  = threading.Lock()
 
 
 def _get_client() -> genai.Client:
-    """احصل على Gemini client باستخدام المفتاح الحالي."""
     with _key_lock:
         idx = _key_index
     if not _API_KEYS:
@@ -183,7 +207,6 @@ def _get_client() -> genai.Client:
 
 
 def _rotate_key() -> None:
-    """تدوير فوري إلى المفتاح التالي."""
     global _key_index
     with _key_lock:
         if len(_API_KEYS) <= 1:
@@ -194,7 +217,6 @@ def _rotate_key() -> None:
 
 
 def _is_rate_limit(e: Exception) -> bool:
-    """تحقق إذا الخطأ هو rate limit."""
     msg = str(e).lower()
     return any(s in msg for s in [
         "429", "resource_exhausted", "quota", "rate limit", "ratequota"
@@ -202,40 +224,37 @@ def _is_rate_limit(e: Exception) -> bool:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🎯 PROMPT BUILDER
+# PROMPT BUILDER
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _build_tagged_prompt(
     tagged_sentences: list[dict],
-    voice_name: str,
     lang: str,
 ) -> str:
-    """
-    بناء prompt يحتوي على tags واضحة لكل جملة.
-    Gemini TTS سيقرأ كل جملة بالنبرة المناسبة للـ tag.
-    """
+    """بناء prompt مع Director's Note + Tags."""
     if not tagged_sentences:
         raise ValueError("No tagged sentences provided")
     
-    # عدّ الـ tags المستخدمة
+    # ✨ Director's Note حسب اللغة
+    config = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
+    director_note = config["director_note"]
+    
+    # Tags المستخدمة
     used_tags = {}
     for sent in tagged_sentences:
         tag = sent.get("final_tag", DEFAULT_TAG)
         used_tags[tag] = used_tags.get(tag, 0) + 1
     
-    # بناء وصف الـ tags المستخدمة فقط
     tags_legend = []
-    for tag, count in sorted(used_tags.items(), key=lambda x: -x[1]):
+    for tag in sorted(used_tags.keys()):
         if tag in TAG_VOICE_INSTRUCTIONS:
-            tags_legend.append(
-                f"\n## [{tag}] - Used {count} time(s):\n{TAG_VOICE_INSTRUCTIONS[tag]}"
-            )
+            tags_legend.append(f"[{tag}]: {TAG_VOICE_INSTRUCTIONS[tag]}")
     
-    legend_text = "\n".join(tags_legend)
+    legend_text = "\n\n".join(tags_legend)
     
-    # بناء النص مع الـ tags
+    # النص
     script_lines = []
-    for i, sent in enumerate(tagged_sentences, 1):
+    for sent in tagged_sentences:
         tag = sent.get("final_tag", DEFAULT_TAG)
         text = sent["text"]
         script_lines.append(f"[{tag}] {text}")
@@ -243,49 +262,42 @@ def _build_tagged_prompt(
     script_text = "\n\n".join(script_lines)
     
     # Language note
-    lang_note = ""
-    if lang == "ar":
-        lang_note = "Text is in ARABIC. Read with native Arabic pronunciation."
-    else:
-        lang_note = "Text is in ENGLISH. Read with native English pronunciation."
+    lang_notes = {
+        "ar": "Text is in ARABIC. Read with native Arabic pronunciation.",
+        "fr": "Text is in FRENCH. Read with native French pronunciation.",
+        "en": "Text is in ENGLISH. Read with native American English pronunciation.",
+    }
+    lang_note = lang_notes.get(lang, lang_notes["en"])
     
     n = len(tagged_sentences)
     
-    prompt = f"""You are a world-class voice narrator for viral short-form videos.
+    prompt = f"""Read the following transcript based on the audio profile and director's note.
 
-# CRITICAL INSTRUCTIONS:
+{director_note}
+
+# Language
 {lang_note}
 
-# YOUR TASK:
-Read the script below. Each sentence is prefixed with an emotional tag in [brackets].
-The tag tells you HOW to speak that specific sentence.
+# Tag Instructions
+Each sentence has a [tag] that tells you HOW to speak it.
+DO NOT speak the tag — read ONLY the text after it.
+CHANGE your voice style for each different tag.
 
-CRUCIAL RULES:
-1. DO NOT speak the tag itself (the [tag] text is for YOU only)
-2. Read ONLY the text after the tag
-3. CHANGE your voice style for each different tag
-4. Read EVERY word from start to finish - never cut off
-5. Make each tag transition feel natural and smooth
-6. End the final sentence with strong, complete delivery
-
-# TAG MEANINGS:
 {legend_text}
 
-# PACING GUIDE ({n} sentences):
-- Sentence 1 (HOOK): MAXIMUM energy
-- Sentences 2-{max(2, n//3)}: Draw them in
-- Sentences {max(2, n//3)}-{max(2, n-2)}: Peak intensity
-- Sentence {n} (CLOSE): Deliver with complete conviction
+# Pacing Guide ({n} sentences)
+- Sentence 1: MAXIMUM energy (hook)
+- Middle sentences: Build intensity
+- Last sentence: Deliver with complete conviction
 
-# SCRIPT TO READ:
+# Transcript
 {script_text}
 
-# REMEMBER:
-- Tags are HIDDEN instructions for you
-- Different tags = DIFFERENT voice styles
-- Make the transitions feel like a real human storyteller
-- Stay in character for each tag
-- The variety of tones is what makes this engaging"""
+# Critical Rules
+1. Read EVERY word from start to finish
+2. Never trail off or stop early
+3. Different tags = DIFFERENT voice styles
+4. Make transitions feel natural"""
     
     return prompt
 
@@ -295,7 +307,6 @@ CRUCIAL RULES:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_duration(path: str) -> float:
-    """احصل على مدة ملف صوتي بالثواني."""
     r = subprocess.run(
         ["ffprobe","-v","error","-show_entries","format=duration",
          "-of","default=noprint_wrappers=1:nokey=1",path],
@@ -308,47 +319,35 @@ def _get_duration(path: str) -> float:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🎙️ MAIN SYNTHESIZE FUNCTION
+# SYNTHESIZE SPEECH
 # ═════════════════════════════════════════════════════════════════════════════
 
 def synthesize_speech(
     tagged_sentences: list[dict],
     output_path: str = "output",
-    voice_key: str = "male_smooth",
+    voice_key: str = "algenib",
     lang: str = "ar",
     retries: int = 3,
 ) -> Path:
-    """
-    تحويل tagged sentences إلى صوت.
-    
-    Args:
-      tagged_sentences: قائمة من dicts:
-        [
-          {"final_tag": "intrigue", "text": "..."},
-          {"final_tag": "desire",   "text": "..."},
-        ]
-      output_path: المسار الأساسي للحفظ
-      voice_key: المفتاح من VOICES dict
-      lang: "ar" أو "en"
-    
-    Returns: Path للملف الصوتي
-    """
+    """تحويل tagged sentences إلى صوت بـ Algenib."""
     if not tagged_sentences:
         raise ValueError("No tagged sentences to synthesize")
     
-    voice_name     = VOICES.get(voice_key, "Orus")
-    total_words    = sum(len(s.get("text", "").split()) for s in tagged_sentences)
-    unique_tags    = set(s.get("final_tag", DEFAULT_TAG) for s in tagged_sentences)
+    # ✨ Voice config حسب اللغة
+    config = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
+    voice_name = config["voice_name"]
     
-    # بناء الـ prompt مع tags
-    prompt = _build_tagged_prompt(tagged_sentences, voice_name, lang)
+    total_words = sum(len(s.get("text", "").split()) for s in tagged_sentences)
+    unique_tags = set(s.get("final_tag", DEFAULT_TAG) for s in tagged_sentences)
     
-    # ✨ عدد المحاولات = عدد المفاتيح × 2 (أو retries كحد أدنى)
+    prompt = _build_tagged_prompt(tagged_sentences, lang)
+    
     max_attempts = max(retries, len(_API_KEYS) * 2) if _API_KEYS else retries
     
     print(f"\n  🎙️  TTS Configuration:")
-    print(f"     Voice    : {voice_name} ({voice_key})")
+    print(f"     Voice    : {voice_name}")
     print(f"     Lang     : {lang.upper()}")
+    print(f"     Style    : {config['director_note'].split('Style:')[1].split('.')[0].strip() if 'Style:' in config['director_note'] else 'N/A'}")
     print(f"     Words    : {total_words}")
     print(f"     Tags     : {', '.join(sorted(unique_tags))}")
     print(f"     Sentences: {len(tagged_sentences)}")
@@ -366,7 +365,7 @@ def synthesize_speech(
             parts=[types.Part.from_text(text=prompt)]
         )]
         
-        config = types.GenerateContentConfig(
+        config_tts = types.GenerateContentConfig(
             temperature=1.0,
             response_modalities=["audio"],
             speech_config=types.SpeechConfig(
@@ -383,7 +382,7 @@ def synthesize_speech(
             audio_chunks: list[tuple[bytes, str]] = []
             
             for chunk in client.models.generate_content_stream(
-                model=TTS_MODEL, contents=contents, config=config,
+                model=TTS_MODEL, contents=contents, config=config_tts,
             ):
                 if chunk.parts:
                     part = chunk.parts[0]
@@ -408,7 +407,7 @@ def synthesize_speech(
             
             print(f"  ✅ Audio saved: {saved.name} ({duration:.1f}s)")
             
-            # Validation: مدة قصيرة جداً
+            # Validation
             if duration < MIN_DURATION_S:
                 print(f"  ⚠️  Too short ({duration:.1f}s) — retrying")
                 saved.unlink(missing_ok=True)
@@ -416,11 +415,10 @@ def synthesize_speech(
                 time.sleep(1)
                 continue
             
-            # Validation: قد يكون مقطوعاً
             if total_words > 20:
                 min_expected = (total_words / 200) * 60
                 if duration < min_expected * 0.5:
-                    print(f"  ⚠️  Likely truncated (expected≥{min_expected:.0f}s, got {duration:.1f}s)")
+                    print(f"  ⚠️  Likely truncated — retrying")
                     if attempt < max_attempts - 1:
                         saved.unlink(missing_ok=True)
                         _rotate_key()
@@ -431,9 +429,9 @@ def synthesize_speech(
             
         except Exception as e:
             if _is_rate_limit(e):
-                print(f"  🛑 Rate limit on key #{cur_idx}: {str(e)[:80]}")
+                print(f"  🛑 Rate limit on key #{cur_idx}")
                 _rotate_key()
-                time.sleep(2)  # ✨ انتظار قصير فقط ثم تدوير
+                time.sleep(2)
             else:
                 print(f"  ⚠️  TTS error [{type(e).__name__}]: {str(e)[:120]}")
                 _rotate_key()
@@ -449,7 +447,6 @@ def synthesize_speech(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    """تحويل بيانات صوتية خام إلى WAV format."""
     p           = _parse_mime(mime_type)
     bps         = p["bits_per_sample"]
     rate        = p["rate"]
@@ -466,7 +463,6 @@ def _to_wav(audio_data: bytes, mime_type: str) -> bytes:
 
 
 def _parse_mime(mime: str) -> dict:
-    """تحليل MIME type لاستخراج معلومات الصوت."""
     bps, rate = 16, 24000
     for part in mime.split(";"):
         p = part.strip()
