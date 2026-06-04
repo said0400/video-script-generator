@@ -27,8 +27,6 @@ from db import (
     save_script_meta,
     print_db_summary,
     is_published,
-    get_pending_publish,
-    close_thread_conn,
     has_ai_cache,
     get_ai_cache,
     save_ai_cache,
@@ -44,10 +42,7 @@ from script_reader import (
     process_tagged_content,
     print_scripts_summary,
 )
-from tags_parser import (
-    print_tags_summary,
-    DEFAULT_TAG,
-)
+from tags_parser import print_tags_summary
 from ai_enricher  import enrich_record, AIEnrichmentError
 from tts          import synthesize_speech, VOICE_CONFIGS
 from video_sources import fetch_videos_for_script
@@ -230,7 +225,6 @@ def _get_content_for_lang(record: dict, lang: str) -> str:
     else:
         content = record.get("en_content", "").strip()
 
-    # fallback للعمود العام
     if not content:
         content = record.get("content", "").strip()
 
@@ -247,15 +241,11 @@ def get_or_create_ai_data(
     tagged:   list[dict],
     force_ai: bool = False,
 ) -> dict:
-    """
-    احصل على AI data من الـ cache أو أنشئها.
-    cache_key = video_number_lang (مثال: 1_ar, 2_fr)
-    """
+    """احصل على AI data من الـ cache أو أنشئها."""
     video_number = str(record["number"])
     title        = record.get("title", "")
     cache_key    = f"{video_number}_{lang}"
 
-    # ── محاولة الـ cache أولاً ────────────────────────────────────────────────
     if not force_ai and has_ai_cache(cache_key):
         cached = get_ai_cache(cache_key)
         if cached and cached.get("hook_keyword"):
@@ -265,7 +255,6 @@ def get_or_create_ai_data(
             )
             return cached
 
-    # ── بناء content ──────────────────────────────────────────────────────────
     content = _get_content_for_lang(record, lang)
 
     if not content:
@@ -435,13 +424,7 @@ def produce_audio(
     music_volume: float = 0.12,
     sfx_type:     str   = "swoosh",
 ) -> tuple[Path, float, list, list, list]:
-    """
-    إنتاج الصوت الكامل:
-    1. TTS (Gemini)
-    2. تسريع الصوت
-    3. WhisperX للمزامنة
-    4. خلط الموسيقى والـ SFX
-    """
+    """إنتاج الصوت الكامل."""
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
     voice_config     = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
@@ -449,7 +432,6 @@ def produce_audio(
 
     print(f"\n  🎙️  {lang.upper()} TTS (voice={voice_key})")
 
-    # ── 1. TTS ───────────────────────────────────────────────────────────────
     synthesize_speech(
         tagged_sentences = tagged_sentences,
         output_path      = f"{output_base}_voice",
@@ -457,7 +439,6 @@ def produce_audio(
         lang             = lang,
     )
 
-    # البحث عن ملف الصوت الناتج
     out_dir        = Path(output_base).parent
     prefix         = Path(output_base).name
     wav_candidates = (
@@ -474,7 +455,6 @@ def produce_audio(
             real_dur = measured
             print(f"  📏 Raw voice duration: {real_dur:.3f}s")
 
-    # ── 2. تسريع الصوت قبل WhisperX ─────────────────────────────────────────
     speed = SPEED_MULTIPLIER.get(lang, 1.0)
     if wav_path and speed != 1.0:
         sped_path   = f"{output_base}_voice_fast.wav"
@@ -486,7 +466,6 @@ def produce_audio(
                 real_dur = measured_fast
                 print(f"  📏 Sped-up duration: {real_dur:.3f}s")
 
-    # ── 3. WhisperX ──────────────────────────────────────────────────────────
     timeline:          list = []
     aligned:           list = []
     whisper_sentences: list = []
@@ -519,7 +498,6 @@ def produce_audio(
             s["text"] for s in tagged_sentences
         ]
 
-    # ── 4. خلط الموسيقى ──────────────────────────────────────────────────────
     clip_dur  = _clip_durations_from_aligned(
         aligned, real_dur, len(whisper_sentences)
     )
@@ -697,7 +675,6 @@ def process_video(
         print(f"     {e}")
         return
 
-    # استخدام tagged المُحدَّث من AI إذا وُجد
     tagged = ai_data.get("tagged") or tagged
 
     # ── 3. Build script data ──────────────────────────────────────────────────
@@ -818,24 +795,20 @@ def process_video(
 
         final_video = _render_node(manifest, out_base)
 
-        # SRT subtitles
         if aligned:
             generate_srt(aligned, f"{out_base}.srt")
             generate_word_srt(aligned, f"{out_base}_words.srt")
 
-        # Additional formats
         if export_formats:
             export_all(str(final_video), out_base, export_formats)
 
         mark_render_done(num, lang, str(final_video), real_dur)
 
-        # ── 8. Publish ────────────────────────────────────────────────────────
         if should_publish:
             _do_publish(
                 str(final_video), record, ai_data, lang, num
             )
 
-        # ── 9. Summary ────────────────────────────────────────────────────────
         mb = (
             final_video.stat().st_size / 1_048_576
             if final_video.exists()
@@ -861,7 +834,6 @@ def main() -> None:
     args = parse_args()
     init_db()
 
-    # ── Cache management ──────────────────────────────────────────────────────
     if args.show_ai_cache is not None:
         show_ai_cache(
             args.show_ai_cache
@@ -899,7 +871,6 @@ def main() -> None:
     print()
     print_db_summary()
 
-    # ── Facebook credentials check ────────────────────────────────────────────
     if will_publish:
         print(f"\n📘 Checking Facebook credentials...")
         if not check_credentials():
@@ -909,7 +880,6 @@ def main() -> None:
             )
             will_publish = False
 
-    # ── Read scripts ──────────────────────────────────────────────────────────
     print(f"\n📖  Reading scripts...")
     try:
         all_scripts = read_scripts(args.input_file)
@@ -929,7 +899,6 @@ def main() -> None:
 
     print_scripts_summary(valid)
 
-    # ── Auto-next ─────────────────────────────────────────────────────────────
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
         next_num  = get_next_video_number(lang, available)
@@ -957,17 +926,14 @@ def main() -> None:
             print(f"❌  Video #{args.video_number} not found")
             sys.exit(1)
 
-    # ── Output directory ──────────────────────────────────────────────────────
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
     success = 0
     failed  = 0
 
-    # ── Process videos ────────────────────────────────────────────────────────
     for i, record in enumerate(valid, 1):
         print(f"\n[{i}/{len(valid)}]")
 
-        # Skip if already done
         if not args.force and is_render_done(
             record["number"], lang
         ):
@@ -1048,7 +1014,6 @@ def main() -> None:
         except Exception as e:
             print(f"  ⚠️  Thumbnail error: {e}")
 
-    # ── Final summary ─────────────────────────────────────────────────────────
     print(f"\n{'═' * 62}")
     print(
         f"  ✅  Done ({lang.upper()}) — "
