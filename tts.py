@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import mimetypes
 import os
-import re
 import struct
 import subprocess
 import threading
@@ -20,7 +19,7 @@ from pathlib import Path
 from google import genai
 from google.genai import types
 
-from tags_parser import VALID_TAGS, DEFAULT_TAG
+from tags_parser import DEFAULT_TAG
 
 # ═════════════════════════════════════════════════════════════════════════════
 # VOICES
@@ -51,16 +50,18 @@ VOICE_CONFIGS: dict[str, dict] = {
             "# Audio Profile\n"
             "A smooth, premium narrator voice.\n\n"
             "# Director's note\n"
-            "Style: Empathetic, emotionally connected, deeply feeling.\n"
+            "Style: Empathetic, emotionally connected, "
+            "deeply feeling.\n"
             "Pace: Natural, moderate speed.\n"
             "Accent: Neutral Arabic, clear pronunciation.\n\n"
             "## Scene:\n"
             "An intimate recording studio.\n\n"
             "## Sample Context:\n"
-            "Motivational short-form video. The narrator speaks with "
-            "deep empathy, connecting emotionally with every word. "
-            "Feel the pain, the hope, the truth. Each sentence carries "
-            "weight and meaning. Speak as if confiding in your closest friend."
+            "Motivational short-form video. The narrator speaks "
+            "with deep empathy, connecting emotionally with every "
+            "word. Feel the pain, the hope, the truth. Each "
+            "sentence carries weight and meaning. Speak as if "
+            "confiding in your closest friend."
         ),
     },
     "fr": {
@@ -72,14 +73,16 @@ VOICE_CONFIGS: dict[str, dict] = {
             "# Director's note\n"
             "Style: Whisper, intimate, secretive, close-to-mic.\n"
             "Pace: Rapid Fire, very fast delivery but clear.\n"
-            "Accent: Transatlantic French, elegant and sophisticated.\n\n"
+            "Accent: Transatlantic French, elegant and "
+            "sophisticated.\n\n"
             "## Scene:\n"
             "A dark, intimate whisper booth.\n\n"
             "## Sample Context:\n"
-            "Viral French short-form video. The narrator whispers urgently, "
-            "as if sharing a dangerous secret that nobody else knows. "
-            "Fast but perfectly articulated. Every word drips with mystery. "
-            "The listener must lean in to catch every syllable."
+            "Viral French short-form video. The narrator whispers "
+            "urgently, as if sharing a dangerous secret that nobody "
+            "else knows. Fast but perfectly articulated. Every word "
+            "drips with mystery. The listener must lean in to catch "
+            "every syllable."
         ),
     },
     "en": {
@@ -96,9 +99,10 @@ VOICE_CONFIGS: dict[str, dict] = {
             "A warm, sunlit porch conversation.\n\n"
             "## Sample Context:\n"
             "Motivational short-form video for American audience. "
-            "The narrator smiles while speaking — you can HEAR the smile. "
-            "Warm, genuine Southern charm. Like a trusted friend giving "
-            "life advice. Friendly, approachable, with natural charisma."
+            "The narrator smiles while speaking — you can HEAR "
+            "the smile. Warm, genuine Southern charm. Like a "
+            "trusted friend giving life advice. Friendly, "
+            "approachable, with natural charisma."
         ),
     },
 }
@@ -230,7 +234,9 @@ def _get_client() -> genai.Client:
             )
         return genai.Client(api_key=key)
 
-    return genai.Client(api_key=_API_KEYS[idx % len(_API_KEYS)])
+    return genai.Client(
+        api_key=_API_KEYS[idx % len(_API_KEYS)]
+    )
 
 
 def _rotate_key() -> None:
@@ -238,7 +244,9 @@ def _rotate_key() -> None:
     global _key_index
     with _key_lock:
         if len(_API_KEYS) <= 1:
-            print("  ⚠️  No additional Gemini keys to rotate")
+            print(
+                "  ⚠️  No additional Gemini keys to rotate"
+            )
             return
         _key_index = (_key_index + 1) % len(_API_KEYS)
         print(
@@ -280,7 +288,7 @@ def _build_tagged_prompt(
         tag = sent.get("final_tag", DEFAULT_TAG)
         used_tags[tag] = used_tags.get(tag, 0) + 1
 
-    tags_legend = []
+    tags_legend: list[str] = []
     for tag in sorted(used_tags.keys()):
         instruction = TAG_VOICE_INSTRUCTIONS.get(
             tag, DEFAULT_VOICE_INSTRUCTION
@@ -290,7 +298,7 @@ def _build_tagged_prompt(
     legend_text = "\n\n".join(tags_legend)
 
     # النص
-    script_lines = []
+    script_lines: list[str] = []
     for sent in tagged_sentences:
         tag  = sent.get("final_tag", DEFAULT_TAG)
         text = sent["text"]
@@ -300,15 +308,25 @@ def _build_tagged_prompt(
 
     # Language note
     lang_notes: dict[str, str] = {
-        "ar": "Text is in ARABIC. Read with native Arabic pronunciation.",
-        "fr": "Text is in FRENCH. Read with native French pronunciation.",
-        "en": "Text is in ENGLISH. Read with native American English pronunciation.",
+        "ar": (
+            "Text is in ARABIC. "
+            "Read with native Arabic pronunciation."
+        ),
+        "fr": (
+            "Text is in FRENCH. "
+            "Read with native French pronunciation."
+        ),
+        "en": (
+            "Text is in ENGLISH. "
+            "Read with native American English pronunciation."
+        ),
     }
     lang_note = lang_notes.get(lang, lang_notes["en"])
 
     n = len(tagged_sentences)
 
-    prompt = f"""Read the following transcript based on the audio profile and director's note.
+    prompt = f"""Read the following transcript based on \
+the audio profile and director's note.
 
 {director_note}
 
@@ -353,12 +371,16 @@ def _get_duration(path: str) -> float:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 path,
             ],
-            capture_output=True,
-            text=True,
-            timeout=15,
+            capture_output = True,
+            text           = True,
+            timeout        = 15,
         )
         return float(r.stdout.strip())
-    except (ValueError, subprocess.TimeoutExpired, FileNotFoundError):
+    except (
+        ValueError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+    ):
         return 0.0
 
 
@@ -425,10 +447,14 @@ def synthesize_speech(
         output_path:      المسار الأساسي للمخرج (بدون امتداد)
         voice_key:        مفتاح الصوت من VOICES
         lang:             اللغة (ar, fr, en)
-        retries:          عدد المحاولات
+        retries:          عدد المحاولات الأساسية
 
     Returns:
         Path لملف الصوت الناتج
+
+    Raises:
+        ValueError: إذا كانت القائمة فارغة
+        RuntimeError: إذا فشلت كل المحاولات
     """
     if not tagged_sentences:
         raise ValueError("No tagged sentences to synthesize")
@@ -481,12 +507,14 @@ def synthesize_speech(
         ]
 
         config_tts = types.GenerateContentConfig(
-            temperature          = 1.0,
-            response_modalities  = ["audio"],
-            speech_config        = types.SpeechConfig(
+            temperature         = 1.0,
+            response_modalities = ["audio"],
+            speech_config       = types.SpeechConfig(
                 voice_config = types.VoiceConfig(
-                    prebuilt_voice_config = types.PrebuiltVoiceConfig(
-                        voice_name = voice_name,
+                    prebuilt_voice_config = (
+                        types.PrebuiltVoiceConfig(
+                            voice_name=voice_name,
+                        )
                     )
                 )
             ),
@@ -559,7 +587,9 @@ def synthesize_speech(
 
         except Exception as e:
             if _is_rate_limit(e):
-                print(f"  🛑 Rate limit on key #{cur_idx}")
+                print(
+                    f"  🛑 Rate limit on key #{cur_idx}"
+                )
                 _rotate_key()
                 time.sleep(2)
             else:
