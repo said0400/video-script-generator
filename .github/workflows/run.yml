@@ -1,217 +1,98 @@
-name: 🎬 Motivational Video Generator (WhisperX)
+name: 🎬 Video Generator (Manual Run)
 
 on:
   workflow_dispatch:
     inputs:
-
-      scripts_file:
-        description: "📄 Path to scripts file (e.g. scripts/videos.xlsx)"
+      lang:
+        description: "🌐 Language"
         required: true
-        default: "scripts/videos.xlsx"
-        type: string
+        default: "ar"
+        type: choice
+        options: ["ar", "fr", "en"]
 
       video_number:
-        description: "🎬 Video number to process (empty = all)"
+        description: "🎬 Video number (empty = auto next)"
         required: false
         default: ""
         type: string
 
-      voice_en:
-        description: "🎙️ English voice"
-        required: true
-        default: "male_smooth"
-        type: choice
-        options: [male_smooth, male_warm, female_clear, female_warm, neutral]
-
-      voice_ar:
-        description: "🎙️ Arabic voice"
-        required: true
-        default: "female_warm"
-        type: choice
-        options: [male_smooth, male_warm, female_clear, female_warm, neutral]
-
-      sfx_type:
-        description: "🔊 Transition SFX"
-        required: true
-        default: "swoosh"
-        type: choice
-        options: [swoosh, whoosh]
-
-      music_volume:
-        description: "🎵 Music volume (0.08=quiet | 0.12=medium | 0.18=loud)"
-        required: true
-        default: "0.12"
-        type: string
-
-      formats:
-        description: "📐 Export formats (comma-separated: 1x1,16x9,4x5)"
-        required: true
-        default: "1x1,16x9"
-        type: string
-
-      script_only:
-        description: "📝 Script only? (no audio/video)"
-        required: true
-        default: "false"
-        type: choice
-        options: ["false", "true"]
-
-      no_video:
-        description: "🎵 Audio only? (skip video render)"
-        required: true
-        default: "false"
-        type: choice
-        options: ["false", "true"]
-
       force:
-        description: "⚡ Force re-render? (ignore resume)"
+        description: "⚡ Force re-render?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
 
       force_ai:
-        description: "🤖 Force re-generate AI data?"
+        description: "🤖 Force re-generate AI?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
 
-      publish_fb:
-        description: "📘 Auto-publish to Facebook after render?"
+      publish:
+        description: "📘 Publish to Facebook?"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+      formats:
+        description: "📐 Export formats (9x16,1x1,16x9,4x5)"
+        required: true
+        default: "9x16"
+        type: string
+
+      script_only:
+        description: "📝 Script preview only?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
 
-      fb_language:
-        description: "🌐 Facebook publish language"
+      no_video:
+        description: "🎵 Audio only?"
         required: true
-        default: "ar"
+        default: "false"
         type: choice
-        options: [ar, en, both]
+        options: ["false", "true"]
+
+concurrency:
+  group: manual-run-${{ github.event.inputs.lang }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   generate:
-    name: 🎬 Generate + Publish
+    name: 🎬 Generate ${{ github.event.inputs.lang == 'ar' && '🇸🇦 Arabic' || github.event.inputs.lang == 'fr' && '🇫🇷 French' || '🇺🇸 English' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 90
 
     steps:
 
-      # ═══════════════════════════════════════════════════════════════
-      # 1. Checkout
-      # ═══════════════════════════════════════════════════════════════
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      # ═══════════════════════════════════════════════════════════════
-      # 2. Setup Python
-      # ═══════════════════════════════════════════════════════════════
       - name: 🐍 Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: 'pip'
 
-      # ═══════════════════════════════════════════════════════════════
-      # 3. Install PyTorch CPU
-      # ═══════════════════════════════════════════════════════════════
-      - name: 🔥 Install PyTorch (CPU)
-        run: |
-          pip install --upgrade pip setuptools wheel
-          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          python -c "import torch; print(f'✅ PyTorch: {torch.__version__}')"
-          python -c "import torchaudio; print(f'✅ TorchAudio: {torchaudio.__version__}')"
-
-      # ═══════════════════════════════════════════════════════════════
-      # 4. Install WhisperX from GitHub
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📦 Install WhisperX (from GitHub)
-        run: |
-          pip install git+https://github.com/m-bain/whisperX.git
-          python -c "import whisperx; print('✅ WhisperX installed')"
-
-      # ═══════════════════════════════════════════════════════════════
-      # 5. Install Python Dependencies
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📦 Install Python dependencies
-        run: |
-          pip install -r requirements.txt
-          python -m playwright install chromium
-
-      # ═══════════════════════════════════════════════════════════════
-      # 6. Setup Node.js
-      # ═══════════════════════════════════════════════════════════════
-      - name: 🟢 Setup Node.js 20
-        if: ${{ inputs.script_only == 'false' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      # ═══════════════════════════════════════════════════════════════
-      # 7. Install Node Dependencies
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📦 Install Node dependencies
-        if: ${{ inputs.script_only == 'false' }}
-        working-directory: remotion
-        run: npm install
-
-      # ═══════════════════════════════════════════════════════════════
-      # 8. Install System Dependencies
-      # ═══════════════════════════════════════════════════════════════
-      - name: 🔧 Install system dependencies
-        if: ${{ inputs.script_only == 'false' }}
+      - name: 🔧 Install system deps
         run: |
           sudo apt-get update -q
           sudo apt-get install -y \
-            ffmpeg \
-            libsndfile1 \
-            libasound2-dev \
-            libasound2t64 \
-            libatk-bridge2.0-0 \
-            libatk1.0-0 \
-            libcairo2 \
-            libcups2 \
-            libdbus-1-3 \
-            libdrm2 \
-            libgbm1 \
-            libglib2.0-0 \
-            libgtk-3-0 \
-            libnspr4 \
-            libnss3 \
-            libpango-1.0-0 \
-            libx11-6 \
-            libxcb1 \
-            libxcomposite1 \
-            libxdamage1 \
-            libxext6 \
-            libxfixes3 \
-            libxkbcommon0 \
-            libxrandr2 \
-            libxshmfence1 \
-            xvfb \
-            fonts-noto \
-            fonts-noto-core \
-            fonts-hosny-amiri \
+            ffmpeg libsndfile1 libasound2-dev libasound2t64 \
+            libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
+            libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
+            libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
+            libxcomposite1 libxdamage1 libxext6 libxfixes3 \
+            libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
+            fonts-noto fonts-noto-core fonts-hosny-amiri \
             fonts-sil-scheherazade
           sudo fc-cache -fv
-          ffmpeg -version | head -1
-          echo "✅ System dependencies installed"
 
-      # ═══════════════════════════════════════════════════════════════
-      # 9. Install Playwright Chromium (Node)
-      # ═══════════════════════════════════════════════════════════════
-      - name: 🌐 Install Playwright Chromium (Node)
-        if: ${{ inputs.script_only == 'false' }}
-        working-directory: remotion
-        run: npx playwright install chromium
-
-      # ═══════════════════════════════════════════════════════════════
-      # 10. Cache WhisperX Models
-      # ═══════════════════════════════════════════════════════════════
       - name: 💾 Cache WhisperX models
-        id: cache-whisperx
         uses: actions/cache@v4
         with:
           path: |
@@ -219,162 +100,200 @@ jobs:
             ~/.cache/huggingface
             ~/.cache/torch
           key: whisperx-models-v5
-          restore-keys: |
-            whisperx-models-
+          restore-keys: whisperx-models-
 
-      - name: 📊 WhisperX cache status
+      - name: 💾 Cache PyTorch
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pytorch-cpu-${{ runner.os }}-py3.11
+          restore-keys: pytorch-cpu-
+
+      - name: 🔥 Install PyTorch (CPU)
         run: |
-          if [ "${{ steps.cache-whisperx.outputs.cache-hit }}" == 'true' ]; then
-            echo "✅ Using cached WhisperX models (faster!)"
-          else
-            echo "📥 Will download WhisperX models on first run (~2 GB)"
-          fi
+          pip install --upgrade pip setuptools wheel
+          pip install torch torchaudio \
+            --index-url https://download.pytorch.org/whl/cpu
 
-      # ═══════════════════════════════════════════════════════════════
-      # 11. Restore SQLite Database (Resume)
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📥 Restore SQLite database (resume)
+      - name: 📦 Install WhisperX
+        run: |
+          pip install git+https://github.com/m-bain/whisperX.git
+
+      - name: 📦 Install Python deps
+        run: |
+          pip install -r requirements.txt
+
+      - name: 🟢 Setup Node.js 20
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm'
+          cache-dependency-path: remotion/package-lock.json
+
+      - name: 📦 Install Node deps
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        working-directory: remotion
+        run: npm ci
+
+      - name: 🌐 Install Playwright Chromium
+        run: |
+          pip install playwright
+          python -m playwright install chromium --with-deps
+
+      - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
         with:
-          name: vsg-database
+          name: vsg-database-${{ github.event.inputs.lang }}
           if_no_artifact_found: ignore
           search_artifacts: true
 
-      # ═══════════════════════════════════════════════════════════════
-      # 12. Run Generator + Publish
-      # ═══════════════════════════════════════════════════════════════
-      - name: 🎬 Run generator + publish
+      - name: 🎬 Generate + Publish
         env:
-          # ── Gemini TTS (30 مفتاح) ──────────────────────────────
-          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_API_KEY_1:   ${{ secrets.GEMINI_API_KEY_1 }}
-          GEMINI_API_KEY_2:   ${{ secrets.GEMINI_API_KEY_2 }}
-          GEMINI_API_KEY_3:   ${{ secrets.GEMINI_API_KEY_3 }}
-          GEMINI_API_KEY_4:   ${{ secrets.GEMINI_API_KEY_4 }}
-          GEMINI_API_KEY_5:   ${{ secrets.GEMINI_API_KEY_5 }}
-          GEMINI_API_KEY_6:   ${{ secrets.GEMINI_API_KEY_6 }}
-          GEMINI_API_KEY_7:   ${{ secrets.GEMINI_API_KEY_7 }}
-          GEMINI_API_KEY_8:   ${{ secrets.GEMINI_API_KEY_8 }}
-          GEMINI_API_KEY_9:   ${{ secrets.GEMINI_API_KEY_9 }}
-          GEMINI_API_KEY_10:  ${{ secrets.GEMINI_API_KEY_10 }}
-          GEMINI_API_KEY_11:  ${{ secrets.GEMINI_API_KEY_11 }}
-          GEMINI_API_KEY_12:  ${{ secrets.GEMINI_API_KEY_12 }}
-          GEMINI_API_KEY_13:  ${{ secrets.GEMINI_API_KEY_13 }}
-          GEMINI_API_KEY_14:  ${{ secrets.GEMINI_API_KEY_14 }}
-          GEMINI_API_KEY_15:  ${{ secrets.GEMINI_API_KEY_15 }}
-          GEMINI_API_KEY_16:  ${{ secrets.GEMINI_API_KEY_16 }}
-          GEMINI_API_KEY_17:  ${{ secrets.GEMINI_API_KEY_17 }}
-          GEMINI_API_KEY_18:  ${{ secrets.GEMINI_API_KEY_18 }}
-          GEMINI_API_KEY_19:  ${{ secrets.GEMINI_API_KEY_19 }}
-          GEMINI_API_KEY_20:  ${{ secrets.GEMINI_API_KEY_20 }}
-          GEMINI_API_KEY_21:  ${{ secrets.GEMINI_API_KEY_21 }}
-          GEMINI_API_KEY_22:  ${{ secrets.GEMINI_API_KEY_22 }}
-          GEMINI_API_KEY_23:  ${{ secrets.GEMINI_API_KEY_23 }}
-          GEMINI_API_KEY_24:  ${{ secrets.GEMINI_API_KEY_24 }}
-          GEMINI_API_KEY_25:  ${{ secrets.GEMINI_API_KEY_25 }}
-          GEMINI_API_KEY_26:  ${{ secrets.GEMINI_API_KEY_26 }}
-          GEMINI_API_KEY_27:  ${{ secrets.GEMINI_API_KEY_27 }}
-          GEMINI_API_KEY_28:  ${{ secrets.GEMINI_API_KEY_28 }}
-          GEMINI_API_KEY_29:  ${{ secrets.GEMINI_API_KEY_29 }}
-          # ── Pixabay (2 مفتاح) ──────────────────────────────────
-          PIXABAY_API_KEY:    ${{ secrets.PIXABAY_API_KEY }}
-          PIXABAY_API_KEY_1:  ${{ secrets.PIXABAY_API_KEY_1 }}
-          # ── Pexels (2 مفتاح) ───────────────────────────────────
-          PEXELS_API_KEY:     ${{ secrets.PEXELS_API_KEY }}
-          PEXELS_API_KEY_1:   ${{ secrets.PEXELS_API_KEY_1 }}
-          # ── Groq (2 مفتاح) ────────────────────────────────────
-          GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
-          GROQ_API_KEY_1:     ${{ secrets.GROQ_API_KEY_1 }}
-          # ── Facebook ──────────────────────────────────────────
-          FB_PAGE_ID1:        ${{ secrets.FB_PAGE_ID1 }}
-          FB_PAGE_TOKEN:      ${{ secrets.FB_PAGE_TOKEN }}
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_1:  ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2:  ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3:  ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4:  ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5:  ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6:  ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7:  ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_API_KEY_8:  ${{ secrets.GEMINI_API_KEY_8 }}
+          GEMINI_API_KEY_9:  ${{ secrets.GEMINI_API_KEY_9 }}
+          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
+          GEMINI_API_KEY_11: ${{ secrets.GEMINI_API_KEY_11 }}
+          GEMINI_API_KEY_12: ${{ secrets.GEMINI_API_KEY_12 }}
+          GEMINI_API_KEY_13: ${{ secrets.GEMINI_API_KEY_13 }}
+          GEMINI_API_KEY_14: ${{ secrets.GEMINI_API_KEY_14 }}
+          GEMINI_API_KEY_15: ${{ secrets.GEMINI_API_KEY_15 }}
+          GEMINI_API_KEY_16: ${{ secrets.GEMINI_API_KEY_16 }}
+          GEMINI_API_KEY_17: ${{ secrets.GEMINI_API_KEY_17 }}
+          GEMINI_API_KEY_18: ${{ secrets.GEMINI_API_KEY_18 }}
+          GEMINI_API_KEY_19: ${{ secrets.GEMINI_API_KEY_19 }}
+          GEMINI_API_KEY_20: ${{ secrets.GEMINI_API_KEY_20 }}
+          GEMINI_API_KEY_21: ${{ secrets.GEMINI_API_KEY_21 }}
+          GEMINI_API_KEY_22: ${{ secrets.GEMINI_API_KEY_22 }}
+          GEMINI_API_KEY_23: ${{ secrets.GEMINI_API_KEY_23 }}
+          GEMINI_API_KEY_24: ${{ secrets.GEMINI_API_KEY_24 }}
+          GEMINI_API_KEY_25: ${{ secrets.GEMINI_API_KEY_25 }}
+          GEMINI_API_KEY_26: ${{ secrets.GEMINI_API_KEY_26 }}
+          GEMINI_API_KEY_27: ${{ secrets.GEMINI_API_KEY_27 }}
+          GEMINI_API_KEY_28: ${{ secrets.GEMINI_API_KEY_28 }}
+          GEMINI_API_KEY_29: ${{ secrets.GEMINI_API_KEY_29 }}
+          PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
+          PIXABAY_API_KEY_1: ${{ secrets.PIXABAY_API_KEY_1 }}
+          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_API_KEY_1:  ${{ secrets.PEXELS_API_KEY_1 }}
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY_1:    ${{ secrets.GROQ_API_KEY_1 }}
+          HF_TOKEN:          ${{ secrets.HF_TOKEN }}
+          FB_PAGE_ID: >-
+            ${{
+              github.event.inputs.lang == 'ar' && secrets.FB_PAGE_ID_AR ||
+              github.event.inputs.lang == 'fr' && secrets.FB_PAGE_ID_FR ||
+              secrets.FB_PAGE_ID_EN
+            }}
+          FB_PAGE_TOKEN: >-
+            ${{
+              github.event.inputs.lang == 'ar' && secrets.FB_PAGE_TOKEN_AR ||
+              github.event.inputs.lang == 'fr' && secrets.FB_PAGE_TOKEN_FR ||
+              secrets.FB_PAGE_TOKEN_EN
+            }}
         run: |
-          FLAGS=""
+          # تحديد ملف السكريبت حسب اللغة
+          case "${{ github.event.inputs.lang }}" in
+            ar) SCRIPT_FILE="scripts/videos_ar.xlsx" ;;
+            fr) SCRIPT_FILE="scripts/videos_fr.xlsx" ;;
+            en) SCRIPT_FILE="scripts/videos_en.xlsx" ;;
+             *) SCRIPT_FILE="scripts/videos_ar.xlsx" ;;
+          esac
 
-          [ "${{ inputs.script_only }}" = "true" ] && FLAGS="$FLAGS --script-only"
-          [ "${{ inputs.no_video }}"    = "true" ] && FLAGS="$FLAGS --no-video"
-          [ "${{ inputs.force }}"       = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ inputs.force_ai }}"    = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ inputs.publish_fb }}"  = "true" ] && FLAGS="$FLAGS --publish-fb --fb-lang ${{ inputs.fb_language }}"
+          FLAGS="--lang ${{ github.event.inputs.lang }}"
 
-          [ -n "${{ inputs.video_number }}" ] && \
-            FLAGS="$FLAGS --video-number ${{ inputs.video_number }}"
+          # video number أو auto-next
+          if [ -n "${{ github.event.inputs.video_number }}" ]; then
+            FLAGS="$FLAGS --video-number ${{ github.event.inputs.video_number }}"
+          else
+            FLAGS="$FLAGS --auto-next"
+          fi
 
-          python main.py "${{ inputs.scripts_file }}" \
-            --voice-en     "${{ inputs.voice_en }}"    \
-            --voice-ar     "${{ inputs.voice_ar }}"    \
-            --music-volume "${{ inputs.music_volume }}" \
-            --sfx-type     "${{ inputs.sfx_type }}"    \
-            --formats      "${{ inputs.formats }}"     \
-            --output-dir   output                      \
+          # force flags
+          [ "${{ github.event.inputs.force }}"     = "true" ] && \
+            FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"  = "true" ] && \
+            FLAGS="$FLAGS --force-ai"
+
+          # publish
+          if [ "${{ github.event.inputs.publish }}" = "true" ]; then
+            FLAGS="$FLAGS --publish-fb"
+          else
+            FLAGS="$FLAGS --no-publish"
+          fi
+
+          # modes
+          [ "${{ github.event.inputs.script_only }}" = "true" ] && \
+            FLAGS="$FLAGS --script-only"
+          [ "${{ github.event.inputs.no_video }}"    = "true" ] && \
+            FLAGS="$FLAGS --no-video"
+
+          python main.py "$SCRIPT_FILE" \
+            --output-dir output          \
+            --formats "${{ github.event.inputs.formats || '9x16' }}" \
             $FLAGS
 
-      # ═══════════════════════════════════════════════════════════════
-      # 13. Upload Final Videos (9:16)
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📤 Upload final videos (9:16)
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+      - name: 📤 Upload videos
+        if: >-
+          always() &&
+          inputs.script_only == 'false' &&
+          inputs.no_video    == 'false'
         uses: actions/upload-artifact@v4
         with:
-          name: videos-9x16-${{ github.run_number }}
-          path: output/**/*_final.mp4
+          name: ${{ github.event.inputs.lang }}-videos-${{ github.run_number }}
+          path: output/**/*.mp4
           retention-days: 7
+          if-no-files-found: ignore
 
-      # ═══════════════════════════════════════════════════════════════
-      # 14. Upload Additional Formats
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📤 Upload additional formats
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+      - name: 📤 Upload subtitles
+        if: >-
+          always() &&
+          inputs.script_only == 'false' &&
+          inputs.no_video    == 'false'
         uses: actions/upload-artifact@v4
         with:
-          name: videos-formats-${{ github.run_number }}
-          path: |
-            output/**/*_1_1.mp4
-            output/**/*_16_9.mp4
-            output/**/*_4_5.mp4
-          retention-days: 7
-
-      # ═══════════════════════════════════════════════════════════════
-      # 15. Upload SRT Subtitles
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📤 Upload SRT subtitles
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: subtitles-${{ github.run_number }}
+          name: ${{ github.event.inputs.lang }}-subtitles-${{ github.run_number }}
           path: output/**/*.srt
           retention-days: 30
+          if-no-files-found: ignore
 
-      # ═══════════════════════════════════════════════════════════════
-      # 16. Upload Thumbnails
-      # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload thumbnails
-        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        if: >-
+          always() &&
+          inputs.script_only == 'false' &&
+          inputs.no_video    == 'false'
         uses: actions/upload-artifact@v4
         with:
-          name: thumbnails-${{ github.run_number }}
-          path: output/**/*_thumbnail.png
+          name: ${{ github.event.inputs.lang }}-thumbnails-${{ github.run_number }}
+          path: output/**/*.png
           retention-days: 30
+          if-no-files-found: ignore
 
-      # ═══════════════════════════════════════════════════════════════
-      # 17. Upload Audio (audio-only mode)
-      # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload audio
-        if: ${{ inputs.no_video == 'true' && inputs.script_only == 'false' }}
+        if: >-
+          always() &&
+          inputs.no_video    == 'true' &&
+          inputs.script_only == 'false'
         uses: actions/upload-artifact@v4
         with:
-          name: audio-${{ github.run_number }}
+          name: ${{ github.event.inputs.lang }}-audio-${{ github.run_number }}
           path: output/**/*_audio_mixed.aac
           retention-days: 7
+          if-no-files-found: ignore
 
-      # ═══════════════════════════════════════════════════════════════
-      # 18. Save SQLite Database (Resume)
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📤 Save SQLite database (resume)
+      - name: 📤 Save DB
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vsg-database
+          name: vsg-database-${{ github.event.inputs.lang }}
           path: vsg.db
           retention-days: 90
           overwrite: true
