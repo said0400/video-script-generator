@@ -21,14 +21,12 @@ from pathlib import Path
 from db import (
     init_db,
     is_render_done,
-    get_render_output,
     mark_render_start,
     mark_render_done,
     mark_render_failed,
     save_script_meta,
     print_db_summary,
     is_published,
-    mark_published,
     get_pending_publish,
     close_thread_conn,
     has_ai_cache,
@@ -50,16 +48,16 @@ from tags_parser import (
     print_tags_summary,
     DEFAULT_TAG,
 )
-from ai_enricher import enrich_record, AIEnrichmentError
-from tts         import synthesize_speech, VOICE_CONFIGS
+from ai_enricher  import enrich_record, AIEnrichmentError
+from tts          import synthesize_speech, VOICE_CONFIGS
 from video_sources import fetch_videos_for_script
-from srt         import generate_srt, generate_word_srt
-from export      import export_all
-from thumb_gen   import generate_thumbnail_html
-from thumbnail   import render_thumbnails_batch
-from sync        import get_audio_duration, extract_transcript_from_audio
+from srt          import generate_srt, generate_word_srt
+from export       import export_all
+from thumb_gen    import generate_thumbnail_html
+from thumbnail    import render_thumbnails_batch
+from sync         import get_audio_duration, extract_transcript_from_audio
 from audio_manager import mix_voice_music_sfx
-from facebook    import (
+from facebook     import (
     publish_to_facebook,
     credentials_available,
     check_credentials,
@@ -193,15 +191,16 @@ def _estimate_duration(text: str) -> int:
 
 
 def _clip_durations_from_aligned(
-    aligned:      list,
-    real_dur:     float,
-    n_sentences:  int,
+    aligned:     list,
+    real_dur:    float,
+    n_sentences: int,
 ) -> list[float]:
     """حساب مدة كل مقطع من بيانات WhisperX."""
     if aligned and len(aligned) >= n_sentences:
         durations = [
             max(
-                float(item.get("end", 0)) - float(item.get("start", 0)),
+                float(item.get("end", 0)) -
+                float(item.get("start", 0)),
                 0.1,
             )
             for item in aligned[:n_sentences]
@@ -222,6 +221,22 @@ def _should_publish(args: argparse.Namespace) -> bool:
     return credentials_available() or args.publish_fb
 
 
+def _get_content_for_lang(record: dict, lang: str) -> str:
+    """احصل على المحتوى حسب اللغة."""
+    if lang == "ar":
+        content = record.get("ar_content", "").strip()
+    elif lang == "fr":
+        content = record.get("fr_content", "").strip()
+    else:
+        content = record.get("en_content", "").strip()
+
+    # fallback للعمود العام
+    if not content:
+        content = record.get("content", "").strip()
+
+    return content
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # AI ENRICHMENT
 # ═════════════════════════════════════════════════════════════════════════════
@@ -240,7 +255,7 @@ def get_or_create_ai_data(
     title        = record.get("title", "")
     cache_key    = f"{video_number}_{lang}"
 
-    # محاولة الـ cache أولاً
+    # ── محاولة الـ cache أولاً ────────────────────────────────────────────────
     if not force_ai and has_ai_cache(cache_key):
         cached = get_ai_cache(cache_key)
         if cached and cached.get("hook_keyword"):
@@ -250,17 +265,8 @@ def get_or_create_ai_data(
             )
             return cached
 
-    # بناء content حسب اللغة
-    if lang == "ar":
-        content = record.get("ar_content", "").strip()
-    elif lang == "fr":
-        content = record.get("fr_content", "").strip()
-    else:
-        content = record.get("en_content", "").strip()
-
-    # fallback للعمود العام
-    if not content:
-        content = record.get("content", "").strip()
+    # ── بناء content ──────────────────────────────────────────────────────────
+    content = _get_content_for_lang(record, lang)
 
     if not content:
         raise AIEnrichmentError(
@@ -509,7 +515,9 @@ def produce_audio(
                 s["text"] for s in tagged_sentences
             ]
     else:
-        whisper_sentences = [s["text"] for s in tagged_sentences]
+        whisper_sentences = [
+            s["text"] for s in tagged_sentences
+        ]
 
     # ── 4. خلط الموسيقى ──────────────────────────────────────────────────────
     clip_dur  = _clip_durations_from_aligned(
@@ -519,13 +527,13 @@ def produce_audio(
 
     try:
         final_audio = mix_voice_music_sfx(
-            voice_path    = wav_path or f"{output_base}_voice_0.wav",
-            content_type  = CONTENT_TYPE,
-            output_path   = mixed_out,
+            voice_path     = wav_path or f"{output_base}_voice_0.wav",
+            content_type   = CONTENT_TYPE,
+            output_path    = mixed_out,
             clip_durations = clip_dur,
-            sfx_type      = sfx_type,
-            music_volume  = music_volume,
-            seed          = hash(script_data["title"]) % 10000,
+            sfx_type       = sfx_type,
+            music_volume   = music_volume,
+            seed           = hash(script_data["title"]) % 10000,
         )
         dur = get_audio_duration(str(final_audio))
         if dur >= 5:
@@ -663,15 +671,7 @@ def process_video(
     ]
 
     # ── 1. Parse tagged content ───────────────────────────────────────────────
-    if lang == "ar":
-        content = record.get("ar_content", "").strip()
-    elif lang == "fr":
-        content = record.get("fr_content", "").strip()
-    else:
-        content = record.get("en_content", "").strip()
-
-    if not content:
-        content = record.get("content", "").strip()
+    content = _get_content_for_lang(record, lang)
 
     if not content:
         print(f"  ❌ No content for #{num} ({lang.upper()})")
@@ -697,9 +697,10 @@ def process_video(
         print(f"     {e}")
         return
 
-    # ── 3. Build script data ──────────────────────────────────────────────────
+    # استخدام tagged المُحدَّث من AI إذا وُجد
     tagged = ai_data.get("tagged") or tagged
 
+    # ── 3. Build script data ──────────────────────────────────────────────────
     script_data = _build_script_data(record, lang, ai_data, tagged)
     if not script_data:
         print(f"  ❌ Cannot build script data for #{num}")
@@ -737,7 +738,6 @@ def process_video(
 
     print(f"  📊 Duration: {total_duration}s → {n_clips} clips")
 
-    # بناء قائمة الـ keywords
     clip_keywords: list[list[str]] = []
 
     if hook_keyword:
@@ -903,7 +903,10 @@ def main() -> None:
     if will_publish:
         print(f"\n📘 Checking Facebook credentials...")
         if not check_credentials():
-            print("  ⚠️  FB credentials invalid — auto-publish disabled")
+            print(
+                "  ⚠️  FB credentials invalid "
+                "— auto-publish disabled"
+            )
             will_publish = False
 
     # ── Read scripts ──────────────────────────────────────────────────────────
@@ -940,7 +943,10 @@ def main() -> None:
             next_num = str(valid[0]["number"])
 
         print(f"\n  🎯 Auto-next: Video #{next_num}")
-        valid = [s for s in valid if str(s["number"]) == next_num]
+        valid = [
+            s for s in valid
+            if str(s["number"]) == next_num
+        ]
 
     elif args.video_number:
         valid = [
@@ -962,7 +968,9 @@ def main() -> None:
         print(f"\n[{i}/{len(valid)}]")
 
         # Skip if already done
-        if not args.force and is_render_done(record["number"], lang):
+        if not args.force and is_render_done(
+            record["number"], lang
+        ):
             if (
                 will_publish and
                 not is_published(record["number"], lang)
@@ -976,8 +984,7 @@ def main() -> None:
                     ai_data = (
                         get_ai_cache(
                             f"{record['number']}_{lang}"
-                        ) or
-                        {"captions": {}}
+                        ) or {"captions": {}}
                     )
                     _do_publish(
                         path, record, ai_data,
@@ -1024,6 +1031,7 @@ def main() -> None:
                     title       = record["title"],
                     hook        = record.get("title", ""),
                     tone        = "energetic",
+                    lang        = lang,
                     output_path = html_path,
                 )
                 thumbnail_queue.append((html_path, png_path))
