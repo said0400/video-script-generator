@@ -1,6 +1,7 @@
 """
 ai_enricher.py — Smart AI Assistant powered by Groq
-✨ يولّد كل شيء عدا النصوص الرئيسية والعنوان (التي تأتي من Excel)
+✨ يولّد كل شيء عدا النصوص الرئيسية (التي تأتي من Excel)
+✨ يدعم عدة مفاتيح Groq مع تدوير فوري عند rate limit
 
 الوظائف:
   1. تحليل المحتوى (نوع/مشاعر/شدة)
@@ -12,12 +13,10 @@ ai_enricher.py — Smart AI Assistant powered by Groq
   7. توليد Hashtags
   8. توليد Caption للنشر
   9. اقتراح Accent Colors
-  10. توليد Hook Keyword (للفيديو الصادم في البداية)
+  10. توليد Hook Keyword
+  11. العنوان + إيموجي (من Excel مباشرة)
 
-✅ العنوان: يأتي من Excel كما هو (بدون Groq)
-✅ الإيموجي: ثابت افتراضي (🔥 ... 💥)
-
-السلوك عند الفشل: ⛔ توقف الفيديو نهائياً (لا قيم افتراضية)
+السلوك عند الفشل: ⛔ توقف الفيديو نهائياً
 """
 
 from __future__ import annotations
@@ -37,9 +36,9 @@ from tags_parser import VALID_TAG_NAMES, DEFAULT_TAG
 MODEL              = "llama-3.3-70b-versatile"
 MAX_RETRIES        = 3
 RETRY_DELAYS       = [2.0, 5.0, 10.0]
-RATE_LIMIT_WAIT    = 15.0
+RATE_LIMIT_WAIT    = 2.0   # ✨ قصير لأن عندنا مفاتيح متعددة
 
-# ✅ إيموجي افتراضي للعنوان (يمكن تغييرها هنا)
+# ✨ إيموجي افتراضي للعنوان
 DEFAULT_EMOJI_LEFT  = "🔥"
 DEFAULT_EMOJI_RIGHT = "💥"
 
@@ -54,20 +53,61 @@ class AIEnrichmentError(Exception):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CORE GROQ CALLER
+# ✨ GROQ API KEY ROTATION (يدعم عدة مفاتيح)
 # ═════════════════════════════════════════════════════════════════════════════
 
+_groq_key_idx = 0
+_GROQ_KEYS = []
+
+
+def _load_groq_keys() -> list[str]:
+    """يدعم عدة مفاتيح Groq."""
+    keys = []
+    main = os.environ.get("GROQ_API_KEY", "").strip()
+    if main:
+        keys.append(main)
+    for i in range(1, 10):
+        k = os.environ.get(f"GROQ_API_KEY_{i}", "").strip()
+        if k:
+            keys.append(k)
+    return keys
+
+
 def _get_client() -> Groq:
-    api_key = os.environ.get("GROQ_API_KEY", "").strip()
-    if not api_key:
+    """احصل على Groq client مع تدوير المفاتيح."""
+    global _GROQ_KEYS, _groq_key_idx
+    
+    if not _GROQ_KEYS:
+        _GROQ_KEYS = _load_groq_keys()
+        if _GROQ_KEYS:
+            print(f"  🔑 Loaded {len(_GROQ_KEYS)} Groq API keys")
+    
+    if not _GROQ_KEYS:
         raise AIEnrichmentError(
             "GROQ_API_KEY not found in environment.\n"
             "Set it in .env or GitHub Secrets."
         )
-    return Groq(api_key=api_key)
+    
+    key = _GROQ_KEYS[_groq_key_idx % len(_GROQ_KEYS)]
+    return Groq(api_key=key)
 
+
+def _rotate_groq_key():
+    """تدوير فوري لمفتاح Groq."""
+    global _groq_key_idx
+    if len(_GROQ_KEYS) > 1:
+        _groq_key_idx = (_groq_key_idx + 1) % len(_GROQ_KEYS)
+        print(f"  🔄 Groq key rotated → #{_groq_key_idx} (of {len(_GROQ_KEYS)})")
+    else:
+        print(f"  ⚠️  No additional Groq keys to rotate")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CORE GROQ CALLER
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _clean_json(raw: str) -> str:
+    """تنظيف JSON من Markdown."""
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     raw = re.sub(r"\s*```$", "", raw)
     return raw.strip()
@@ -79,12 +119,19 @@ def _call_groq(
     temperature: float = 0.7,
     operation_name: str = "AI call",
 ) -> str:
-    client = _get_client()
+    """
+    استدعاء Groq مع retry + key rotation.
+    """
     last_error = None
     
-    for attempt in range(MAX_RETRIES):
+    # ✨ عدد المحاولات = عدد المفاتيح × 2 (أو MAX_RETRIES كحد أدنى)
+    total_attempts = max(MAX_RETRIES, len(_GROQ_KEYS) * 2) if _GROQ_KEYS else MAX_RETRIES
+    
+    for attempt in range(total_attempts):
         try:
-            print(f"  🤖 {operation_name} (attempt {attempt + 1}/{MAX_RETRIES})...")
+            print(f"  🤖 {operation_name} (attempt {attempt + 1}/{total_attempts})...")
+            
+            client = _get_client()
             
             resp = client.chat.completions.create(
                 model=MODEL,
@@ -104,25 +151,28 @@ def _call_groq(
             last_error = err_str
             
             if "429" in err_str or "rate_limit" in err_str.lower():
-                print(f"  ⏳ Rate limit hit - waiting {RATE_LIMIT_WAIT}s...")
+                print(f"  🛑 Rate limit — rotating key...")
+                _rotate_groq_key()
                 time.sleep(RATE_LIMIT_WAIT)
                 continue
             
-            if attempt < MAX_RETRIES - 1:
+            if attempt < total_attempts - 1:
                 wait = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
                 print(f"  ⚠️  Error: {err_str[:80]} - retrying in {wait}s...")
+                _rotate_groq_key()
                 time.sleep(wait)
             else:
                 break
     
     raise AIEnrichmentError(
-        f"❌ {operation_name} FAILED after {MAX_RETRIES} attempts.\n"
+        f"❌ {operation_name} FAILED after {total_attempts} attempts.\n"
         f"   Last error: {last_error[:200]}\n"
         f"   Video render will STOP."
     )
 
 
 def _parse_json_response(raw: str, expected_type: type, operation: str):
+    """تحليل JSON response مع validation."""
     try:
         cleaned = _clean_json(raw)
         data = json.loads(cleaned)
@@ -148,6 +198,7 @@ def _parse_json_response(raw: str, expected_type: type, operation: str):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def analyze_content(title: str, ar_content: str, en_content: str) -> dict:
+    """تحليل المحتوى وفهم طبيعته."""
     content = ar_content or en_content
     
     prompt = f"""You are an expert content analyst for short-form viral videos.
@@ -166,7 +217,7 @@ Return ONLY a valid JSON object with this exact structure:
   "primary_emotion": "<one of: curiosity, fear, desire, anger, hope, sadness, joy, awe, surprise>",
   "secondary_emotions": ["<2-3 emotions>"],
   "intensity": <integer 1-10>,
-  "audience": "<short description, e.g. 'young adults interested in self-improvement'>",
+  "audience": "<short description>",
   "tone": "<one of: energetic, calm, emotional, inspirational, mysterious, urgent>",
   "topic_summary": "<one sentence summary>"
 }}
@@ -176,21 +227,14 @@ Rules:
 - All values must be valid JSON types
 - Do not use markdown code blocks"""
 
-    raw = _call_groq(
-        prompt,
-        max_tokens=400,
-        temperature=0.3,
-        operation_name="Content Analysis",
-    )
+    raw = _call_groq(prompt, max_tokens=400, temperature=0.3, operation_name="Content Analysis")
     
     data = _parse_json_response(raw, dict, "Content Analysis")
     
     required = ["content_type", "primary_emotion", "intensity", "tone"]
     for field in required:
         if field not in data:
-            raise AIEnrichmentError(
-                f"❌ Content Analysis missing required field: {field}"
-            )
+            raise AIEnrichmentError(f"❌ Content Analysis missing field: {field}")
     
     data["intensity"] = max(1, min(10, int(data.get("intensity", 7))))
     
@@ -209,6 +253,7 @@ def suggest_tags_for_sentences(
     context: dict,
     lang: str = "ar",
 ) -> list[str]:
+    """اقتراح tags لجمل بدون tags."""
     if not sentences_needing_tags:
         return []
     
@@ -223,35 +268,19 @@ def suggest_tags_for_sentences(
 
 Context: {context.get('content_type')} content, {context.get('tone')} tone.
 
-For each sentence below, choose the MOST suitable emotional tag for voice narration.
+For each sentence below, choose the MOST suitable emotional tag.
 
-Available tags (use ONLY these, lowercase):
+Available tags (lowercase only):
 {available_tags}
-
-Tag meanings:
-- intrigue: mysterious, whispering, curiosity-inducing
-- desire: warm, inspiring, motivating
-- information: clear, neutral, educational
-- inspiration: uplifting, enthusiastic, elevated
-- confident: bold, firm, assertive
-- shock: surprising, intense, alarming
-- wisdom: deep, reflective, philosophical
-- urgency: fast, urgent, critical
-- calm: peaceful, reassuring, soothing
-- emotional: tender, touching, heartfelt
 
 Sentences ({len(sentences_needing_tags)} total):
 {sentences_text}
 
-Return ONLY a JSON array of exactly {len(sentences_needing_tags)} tag names (lowercase, in order).
+Return ONLY a JSON array of exactly {len(sentences_needing_tags)} tag names.
 Example: ["intrigue","desire","confident"]"""
 
-    raw = _call_groq(
-        prompt,
-        max_tokens=200,
-        temperature=0.5,
-        operation_name=f"Tag Suggestion ({lang.upper()})",
-    )
+    raw = _call_groq(prompt, max_tokens=200, temperature=0.5,
+                     operation_name=f"Tag Suggestion ({lang.upper()})")
     
     tags = _parse_json_response(raw, list, "Tag Suggestion")
     
@@ -267,7 +296,6 @@ Example: ["intrigue","desire","confident"]"""
                 cleaned_tags.append(corrected)
             else:
                 cleaned_tags.append(DEFAULT_TAG)
-                print(f"  ⚠️  Invalid tag '{tag}' - using default")
     
     while len(cleaned_tags) < len(sentences_needing_tags):
         cleaned_tags.append(DEFAULT_TAG)
@@ -286,36 +314,31 @@ def generate_power_words(
     lang: str = "ar",
     count: int = 10,
 ) -> list[str]:
+    """استخراج الكلمات القوية نفسياً من النص."""
     if not content or not content.strip():
         raise AIEnrichmentError("Cannot generate power words from empty content")
     
     lang_name = "Arabic" if lang == "ar" else "English"
     
-    prompt = f"""You are a viral content expert specializing in attention psychology.
+    prompt = f"""You are a viral content expert.
 
 Content type: {context.get('content_type', 'general')}
 Primary emotion: {context.get('primary_emotion', 'curiosity')}
-Intensity: {context.get('intensity', 7)}/10
 
-From this {lang_name} text, extract the {count} MOST psychologically powerful SINGLE WORDS that:
-- Trigger strong emotions (fear, curiosity, desire, surprise)
-- Stop the scroll instantly
-- Are surprising, unexpected, or taboo
-- Are SINGLE words only (not phrases)
-- Actually exist in the text below
+From this {lang_name} text, extract {count} psychologically powerful SINGLE WORDS:
+- Trigger strong emotions
+- Stop the scroll
+- SINGLE words only (not phrases)
+- Actually exist in the text
 
 Text:
 {content[:1500]}
 
-Return ONLY a JSON array of {count} single words (no explanations, no markdown).
+Return ONLY a JSON array of {count} single words.
 Example: ["word1","word2","word3",...]"""
 
-    raw = _call_groq(
-        prompt,
-        max_tokens=300,
-        temperature=0.6,
-        operation_name=f"Power Words ({lang.upper()})",
-    )
+    raw = _call_groq(prompt, max_tokens=300, temperature=0.6,
+                     operation_name=f"Power Words ({lang.upper()})")
     
     words = _parse_json_response(raw, list, "Power Words")
     
@@ -324,15 +347,13 @@ Example: ["word1","word2","word3",...]"""
     for w in words[:count]:
         if isinstance(w, str):
             w = w.strip()
-            if w and w.lower() not in seen and len(w) >= 2:
-                if " " not in w:
-                    result.append(w)
-                    seen.add(w.lower())
+            if w and w.lower() not in seen and len(w) >= 2 and " " not in w:
+                result.append(w)
+                seen.add(w.lower())
     
     if len(result) < 3:
         raise AIEnrichmentError(
-            f"❌ Power Words: only {len(result)} valid words extracted (need at least 3)"
-        )
+            f"❌ Power Words: only {len(result)} valid words (need at least 3)")
     
     print(f"  ✅ Power Words ({lang.upper()}): {len(result)} words")
     return result
@@ -347,6 +368,7 @@ def generate_visual_keywords(
     title: str,
     context: dict,
 ) -> list[list[str]]:
+    """توليد visual keywords لكل جملة."""
     if not sentences:
         raise AIEnrichmentError("Cannot generate keywords for empty sentences")
     
@@ -360,43 +382,28 @@ def generate_visual_keywords(
 
 Video title: "{title}"
 Content type: {content_type}
-Primary emotion: {emotion}
+Emotion: {emotion}
 
-For each sentence below, suggest 3 VISUAL search terms (English only, 2-5 words each)
-for searching Pexels/Pixabay stock footage that:
-- Reflect the emotional state of the sentence
-- Are concrete and visual (not abstract concepts)
-- Match the {content_type} theme
-- Would make a viewer feel the {emotion} emotion
+For each sentence, suggest 3 VISUAL search terms (English, 2-5 words each)
+for Pexels/Pixabay stock footage.
 
-GOOD examples:
-- "person looking through window mysterious"
-- "couple arguing tension"
-- "successful businessman confident pose"
-
-BAD examples (too abstract):
-- "success", "freedom", "happiness"
+GOOD: "person looking through window", "couple arguing tension"
+BAD: "success", "freedom"
 
 Sentences ({n} total):
 {sentences_text}
 
-Return ONLY a JSON array of EXACTLY {n} sub-arrays of 3 strings.
-No markdown, no explanation.
-Format: [["kw1","kw2","kw3"],["kw1","kw2","kw3"],...]"""
+Return ONLY a JSON array of {n} sub-arrays of 3 strings.
+Format: [["kw1","kw2","kw3"],...]"""
 
-    raw = _call_groq(
-        prompt,
-        max_tokens=1500,
-        temperature=0.5,
-        operation_name="Visual Keywords",
-    )
+    raw = _call_groq(prompt, max_tokens=1500, temperature=0.5,
+                     operation_name="Visual Keywords")
     
     keywords = _parse_json_response(raw, list, "Visual Keywords")
     
     if len(keywords) < n // 2:
         raise AIEnrichmentError(
-            f"❌ Visual Keywords: got {len(keywords)} rows, need at least {n // 2}"
-        )
+            f"❌ Visual Keywords: got {len(keywords)} rows, need at least {n // 2}")
     
     result = []
     for i in range(n):
@@ -405,11 +412,7 @@ Format: [["kw1","kw2","kw3"],["kw1","kw2","kw3"],...]"""
         else:
             row = []
         
-        defaults = [
-            "person thinking deeply",
-            "emotional moment close-up",
-            "mysterious atmosphere",
-        ]
+        defaults = ["person thinking deeply", "emotional moment close-up", "mysterious atmosphere"]
         while len(row) < 3:
             row.append(defaults[len(row) % 3])
         
@@ -424,44 +427,23 @@ Format: [["kw1","kw2","kw3"],["kw1","kw2","kw3"],...]"""
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_pattern_interrupts(
-    title: str,
-    content: str,
-    context: dict,
-    count: int = 6,
+    title: str, content: str, context: dict, count: int = 6,
 ) -> dict[str, list[str]]:
+    """توليد رسائل مقاطعة قصيرة."""
     content_type = context.get('content_type', 'general')
     emotion      = context.get('primary_emotion', 'curiosity')
     
-    prompt = f"""You are a viral short-form video expert (TikTok/Reels/Shorts).
+    prompt = f"""Generate {count} SHORT pattern interrupt phrases (Arabic AND English).
 
-Video title: "{title}"
-Content type: {content_type}
-Primary emotion: {emotion}
+Title: "{title}" | Type: {content_type} | Emotion: {emotion}
 
-Generate {count} SHORT pattern interrupt phrases (BOTH Arabic AND English).
+Rules: 1-4 words MAX, shocking, can include emojis.
 
-Rules:
-- Each phrase MUST be 1-4 words MAXIMUM
-- Must STOP the scroll instantly
-- Must create curiosity, surprise, or urgency
-- Can include emojis: 🚨, 🔥, ⚠️, 💥, 👁️
-- Must match the {emotion} emotion
-- Relevant to {content_type} theme
+Return ONLY JSON:
+{{"ar": ["phrase1",...], "en": ["phrase1",...]}}"""
 
-Return ONLY this JSON structure:
-{{
-  "ar": ["انتبه!", "علامة خطيرة", "99% يجهلون", ...],
-  "en": ["WAIT!", "RED FLAG", "99% MISS THIS", ...]
-}}
-
-Generate {count} phrases for each language."""
-
-    raw = _call_groq(
-        prompt,
-        max_tokens=500,
-        temperature=0.8,
-        operation_name="Pattern Interrupts",
-    )
+    raw = _call_groq(prompt, max_tokens=500, temperature=0.8,
+                     operation_name="Pattern Interrupts")
     
     data = _parse_json_response(raw, dict, "Pattern Interrupts")
     
@@ -474,10 +456,7 @@ Generate {count} phrases for each language."""
     }
     
     if len(result["ar"]) < 3 or len(result["en"]) < 3:
-        raise AIEnrichmentError(
-            f"❌ Pattern Interrupts: not enough phrases "
-            f"(AR: {len(result['ar'])}, EN: {len(result['en'])})"
-        )
+        raise AIEnrichmentError("❌ Pattern Interrupts: not enough phrases")
     
     print(f"  ✅ Pattern Interrupts: AR({len(result['ar'])}) | EN({len(result['en'])})")
     return result
@@ -488,44 +467,27 @@ Generate {count} phrases for each language."""
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_engagement_questions(
-    title: str,
-    content: str,
-    context: dict,
-    count: int = 6,
+    title: str, content: str, context: dict, count: int = 6,
 ) -> dict[str, list[str]]:
+    """توليد أسئلة تفاعل."""
     content_type = context.get('content_type', 'general')
     
-    prompt = f"""You are a social media engagement expert.
+    prompt = f"""Generate {count} SHORT engagement questions (Arabic AND English).
 
-Video title: "{title}"
-Content type: {content_type}
+Title: "{title}" | Type: {content_type}
 
-Generate {count} SHORT engagement questions (BOTH Arabic AND English) that:
-- Are 3-7 words maximum
-- Encourage commenting
-- Feel personal and direct
-- Match the {content_type} theme
-- Can include emojis: 💭, 👇, 🤔, ❓, 💬
+Rules: 3-7 words, encourage comments, can include emojis.
 
-Return ONLY this JSON structure:
-{{
-  "ar": ["هل توافق؟", "اكتب رأيك 👇", ...],
-  "en": ["Agree? 💭", "Comment YES 👇", ...]
-}}
+Return ONLY JSON:
+{{"ar": ["q1",...], "en": ["q1",...]}}"""
 
-Generate {count} questions for each language."""
-
-    raw = _call_groq(
-        prompt,
-        max_tokens=500,
-        temperature=0.8,
-        operation_name="Engagement Questions",
-    )
+    raw = _call_groq(prompt, max_tokens=500, temperature=0.8,
+                     operation_name="Engagement Questions")
     
     data = _parse_json_response(raw, dict, "Engagement Questions")
     
     if "ar" not in data or "en" not in data:
-        raise AIEnrichmentError("Engagement Questions: missing 'ar' or 'en' keys")
+        raise AIEnrichmentError("Engagement Questions: missing keys")
     
     result = {
         "ar": [str(x).strip() for x in data["ar"][:count] if str(x).strip()],
@@ -533,9 +495,7 @@ Generate {count} questions for each language."""
     }
     
     if len(result["ar"]) < 3 or len(result["en"]) < 3:
-        raise AIEnrichmentError(
-            f"❌ Engagement Questions: not enough phrases"
-        )
+        raise AIEnrichmentError("❌ Engagement Questions: not enough")
     
     print(f"  ✅ Engagement Questions: AR({len(result['ar'])}) | EN({len(result['en'])})")
     return result
@@ -546,46 +506,27 @@ Generate {count} questions for each language."""
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_hashtags(
-    title: str,
-    content: str,
-    context: dict,
-    count: int = 12,
+    title: str, content: str, context: dict, count: int = 12,
 ) -> dict[str, list[str]]:
+    """توليد هاشتاقات."""
     content_type = context.get('content_type', 'general')
     
-    prompt = f"""You are a social media hashtag expert.
+    prompt = f"""Generate {count} hashtags per language (Arabic AND English).
 
-Video title: "{title}"
-Content type: {content_type}
+Title: "{title}" | Type: {content_type}
 
-Generate {count} HIGH-PERFORMING hashtags for EACH language (Arabic AND English):
+Rules: start with #, underscores in Arabic, no spaces.
 
-Rules:
-- Mix popular and niche hashtags
-- Each must start with #
-- Use underscores in Arabic: #تطوير_الذات (not #تطوير الذات)
-- No spaces in hashtags
-- Relevant to {content_type}
+Return ONLY JSON:
+{{"ar": ["#tag1",...], "en": ["#tag1",...]}}"""
 
-Return ONLY this JSON structure:
-{{
-  "ar": ["#علم_النفس", "#العلاقات", "#تطوير_الذات", ...],
-  "en": ["#psychology", "#relationships", "#selfimprovement", ...]
-}}
-
-Generate {count} hashtags per language."""
-
-    raw = _call_groq(
-        prompt,
-        max_tokens=600,
-        temperature=0.6,
-        operation_name="Hashtags",
-    )
+    raw = _call_groq(prompt, max_tokens=600, temperature=0.6,
+                     operation_name="Hashtags")
     
     data = _parse_json_response(raw, dict, "Hashtags")
     
     if "ar" not in data or "en" not in data:
-        raise AIEnrichmentError("Hashtags: missing 'ar' or 'en' keys")
+        raise AIEnrichmentError("Hashtags: missing keys")
     
     def clean_tags(tags):
         result = []
@@ -604,7 +545,7 @@ Generate {count} hashtags per language."""
     }
     
     if len(result["ar"]) < 5 or len(result["en"]) < 5:
-        raise AIEnrichmentError("❌ Hashtags: not enough tags")
+        raise AIEnrichmentError("❌ Hashtags: not enough")
     
     print(f"  ✅ Hashtags: AR({len(result['ar'])}) | EN({len(result['en'])})")
     return result
@@ -615,51 +556,39 @@ Generate {count} hashtags per language."""
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_captions(
-    title: str,
-    content: str,
-    context: dict,
-    hashtags: dict[str, list[str]],
+    title: str, content: str, context: dict, hashtags: dict[str, list[str]],
 ) -> dict[str, str]:
+    """توليد caption احترافي للنشر."""
     ar_tags = " ".join(hashtags.get("ar", [])[:10])
     en_tags = " ".join(hashtags.get("en", [])[:10])
     
-    prompt = f"""You are a viral social media copywriter.
+    prompt = f"""Write a professional Facebook caption (Arabic AND English).
 
-Video title: "{title}"
-Content type: {context.get('content_type')}
-Primary emotion: {context.get('primary_emotion')}
+Title: "{title}"
+Type: {context.get('content_type')}
+Emotion: {context.get('primary_emotion')}
 
 Content sample:
 {content[:1000]}
 
-Write a professional Facebook caption in BOTH Arabic and English with:
-- Strong opening hook (1 line, attention-grabbing question or statement)
-- 2-3 lines of value (key insight from the content)
-- Call-to-action (engagement question)
-- Use emojis strategically
-- Build curiosity
-- 5-7 lines total per language
+Rules:
+- Strong hook (1 line)
+- 2-3 lines of value
+- Call-to-action
+- Use emojis
+- 5-7 lines total
+- NO hashtags
 
-DO NOT include hashtags (they will be added separately).
-DO NOT include "Read more..." or similar.
+Return ONLY JSON:
+{{"ar": "caption here", "en": "caption here"}}"""
 
-Return ONLY this JSON structure:
-{{
-  "ar": "نص الـ caption الكامل بالعربية...",
-  "en": "Full English caption text..."
-}}"""
-
-    raw = _call_groq(
-        prompt,
-        max_tokens=800,
-        temperature=0.7,
-        operation_name="Captions",
-    )
+    raw = _call_groq(prompt, max_tokens=800, temperature=0.7,
+                     operation_name="Captions")
     
     data = _parse_json_response(raw, dict, "Captions")
     
     if "ar" not in data or "en" not in data:
-        raise AIEnrichmentError("Captions: missing 'ar' or 'en' keys")
+        raise AIEnrichmentError("Captions: missing keys")
     
     ar_caption = data["ar"].strip()
     en_caption = data["en"].strip()
@@ -683,38 +612,19 @@ Return ONLY this JSON structure:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def suggest_accent_colors(context: dict) -> list[str]:
+    """اقتراح ألوان مناسبة."""
     emotion      = context.get('primary_emotion', 'curiosity')
     content_type = context.get('content_type', 'general')
     intensity    = context.get('intensity', 7)
     
-    prompt = f"""You are a video color theory expert.
+    prompt = f"""Suggest 4 vibrant accent HEX colors for:
+Type: {content_type} | Emotion: {emotion} | Intensity: {intensity}/10
 
-Content type: {content_type}
-Primary emotion: {emotion}
-Intensity: {intensity}/10
-
-Suggest 4 vibrant accent colors (HEX codes) that:
-- Match the {emotion} emotion psychologically
-- Stand out on dark backgrounds
-- Create visual impact
-- Work well together
-
-For reference:
-- shock/danger: red tones (#FF003C)
-- curiosity/mystery: cyan/purple (#00FFFF, #A020F0)
-- desire/power: gold/orange (#FFD700, #FF6B00)
-- success/hope: green (#39FF14)
-- emotional/calm: blue/teal (#00E5FF, #4FC3F7)
-
-Return ONLY a JSON array of 4 HEX color codes.
+Return ONLY a JSON array of 4 HEX codes.
 Example: ["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
 
-    raw = _call_groq(
-        prompt,
-        max_tokens=200,
-        temperature=0.6,
-        operation_name="Accent Colors",
-    )
+    raw = _call_groq(prompt, max_tokens=200, temperature=0.6,
+                     operation_name="Accent Colors")
     
     colors = _parse_json_response(raw, list, "Accent Colors")
     
@@ -727,9 +637,7 @@ Example: ["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
             valid_colors.append(color)
     
     if len(valid_colors) < 2:
-        raise AIEnrichmentError(
-            f"❌ Accent Colors: only {len(valid_colors)} valid HEX codes"
-        )
+        raise AIEnrichmentError(f"❌ Accent Colors: only {len(valid_colors)} valid")
     
     defaults = ["#FF003C", "#FFD700", "#00FFFF", "#39FF14"]
     while len(valid_colors) < 4:
@@ -743,59 +651,33 @@ Example: ["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🔟 HOOK VIDEO KEYWORD GENERATOR
+# 🔟 HOOK KEYWORD
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_hook_keyword(title: str, content: str, context: dict) -> str:
-    """
-    توليد كلمة مفتاحية صادمة للفيديو الأول (HOOK).
-    """
+    """توليد كلمة مفتاحية صادمة للـ HOOK."""
     if not content or not content.strip():
         return "shocking dramatic moment"
     
     content_type = context.get('content_type', 'general')
     emotion      = context.get('primary_emotion', 'curiosity')
-    title_short  = title[:100] if title else ""
     
-    prompt = f"""You are a viral video director specializing in stop-the-scroll hooks.
+    prompt = f"""Suggest ONE powerful visual keyword for the FIRST 3 seconds of this video.
 
-Video title: "{title_short}"
-Content type: {content_type}
-Primary emotion: {emotion}
+Title: "{title[:100]}"
+Type: {content_type} | Emotion: {emotion}
 
-Suggest ONE powerful visual keyword for the FIRST 3 seconds of this video.
-The keyword should:
-- Be SHOCKING or EMOTIONALLY INTENSE
-- Stop the scroll immediately
-- Create curiosity or visceral reaction
-- Be visually CLOSE-UP (faces, eyes, hands)
-- Match the {emotion} emotion
-- Be relevant to {content_type}
-
-Examples for different content:
-- relationships/betrayal → "crying woman closeup eyes" or "couple arguing intense"
-- psychology/manipulation → "intense stare camera" or "hidden face shadow"
-- success/wealth → "luxury lifestyle dramatic" or "money close-up"
-- fear/danger → "warning dramatic face" or "shocked expression"
-- mystery → "mysterious eyes shadow" or "secret revealed dramatic"
-
-CRITICAL RULES:
-- 3-6 words MAXIMUM
+Rules:
+- 3-6 words MAX
 - English only
-- Concrete visual (NOT abstract)
-- High emotional impact
+- SHOCKING or EMOTIONALLY INTENSE
+- Concrete visual (not abstract)
 
-Return ONLY the keyword (no quotes, no explanation, no JSON).
-Example: crying woman eyes closeup
+Return ONLY the keyword (no quotes, no JSON).
+Example: crying woman eyes closeup"""
 
-Your keyword:"""
-
-    raw = _call_groq(
-        prompt,
-        max_tokens=50,
-        temperature=0.8,
-        operation_name="Hook Keyword",
-    )
+    raw = _call_groq(prompt, max_tokens=50, temperature=0.8,
+                     operation_name="Hook Keyword")
     
     keyword = raw.strip().split("\n")[0].strip()
     keyword = keyword.strip('"').strip("'").strip()
@@ -826,12 +708,6 @@ def enrich_record(
     
     ✅ العنوان يبقى كما هو من Excel
     ✅ الإيموجي ثابت افتراضي
-    
-    Returns:
-      dict كامل يحتوي على كل ما يحتاجه النظام
-    
-    Raises:
-      AIEnrichmentError: إذا فشل أي استدعاء (يوقف الفيديو)
     """
     title       = record.get("title", "")
     ar_content  = record.get("ar_content", "")
@@ -851,13 +727,9 @@ def enrich_record(
     # ── 1. Content Analysis ──────────────────────────────────────────────────
     analysis = analyze_content(title, ar_content, en_content)
     
-    # ── 2. Suggest tags for sentences without tags ───────────────────────────
-    ar_tags_needed = []
+    # ── 2. Suggest tags ──────────────────────────────────────────────────────
     if ar_tagged:
-        for sent in ar_tagged:
-            if sent["final_tag"] is None:
-                ar_tags_needed.append(sent)
-        
+        ar_tags_needed = [s for s in ar_tagged if s["final_tag"] is None]
         if ar_tags_needed:
             suggested = suggest_tags_for_sentences(ar_tags_needed, analysis, "ar")
             for i, sent in enumerate(ar_tags_needed):
@@ -865,12 +737,8 @@ def enrich_record(
                 sent["tag_source"]    = "ai_suggested"
                 sent["text_with_tag"] = f"[{suggested[i]}] {sent['text']}"
     
-    en_tags_needed = []
     if en_tagged:
-        for sent in en_tagged:
-            if sent["final_tag"] is None:
-                en_tags_needed.append(sent)
-        
+        en_tags_needed = [s for s in en_tagged if s["final_tag"] is None]
         if en_tags_needed:
             suggested = suggest_tags_for_sentences(en_tags_needed, analysis, "en")
             for i, sent in enumerate(en_tags_needed):
@@ -892,27 +760,19 @@ def enrich_record(
         from script_reader import split_into_sentences
         sentences_for_keywords = split_into_sentences(en_content, "en")
     
-    visual_keywords = generate_visual_keywords(
-        sentences_for_keywords, title, analysis
-    )
+    visual_keywords = generate_visual_keywords(sentences_for_keywords, title, analysis)
     
     # ── 5. Pattern Interrupts ────────────────────────────────────────────────
-    interrupts = generate_pattern_interrupts(
-        title, ar_content or en_content, analysis
-    )
+    interrupts = generate_pattern_interrupts(title, ar_content or en_content, analysis)
     
     # ── 6. Engagement Questions ──────────────────────────────────────────────
-    questions = generate_engagement_questions(
-        title, ar_content or en_content, analysis
-    )
+    questions = generate_engagement_questions(title, ar_content or en_content, analysis)
     
     # ── 7. Hashtags ──────────────────────────────────────────────────────────
     hashtags = generate_hashtags(title, ar_content or en_content, analysis)
     
     # ── 8. Captions ──────────────────────────────────────────────────────────
-    captions = generate_captions(
-        title, ar_content or en_content, analysis, hashtags
-    )
+    captions = generate_captions(title, ar_content or en_content, analysis, hashtags)
     
     # ── 9. Accent Colors ─────────────────────────────────────────────────────
     accent_colors = suggest_accent_colors(analysis)
@@ -920,11 +780,11 @@ def enrich_record(
     # ── 10. Hook Keyword ─────────────────────────────────────────────────────
     hook_keyword = generate_hook_keyword(title, ar_content or en_content, analysis)
     
-    # ── 11. ✅ Title + Emojis (من Excel + إيموجي افتراضي) ───────────────────
+    # ── 11. Title + Emojis (من Excel + إيموجي افتراضي) ───────────────────────
     attractive_title = {
-        "title":       title,                  # ✅ العنوان من Excel كما هو
-        "emoji_left":  DEFAULT_EMOJI_LEFT,     # ✅ إيموجي ثابت
-        "emoji_right": DEFAULT_EMOJI_RIGHT,    # ✅ إيموجي ثابت
+        "title":       title,
+        "emoji_left":  DEFAULT_EMOJI_LEFT,
+        "emoji_right": DEFAULT_EMOJI_RIGHT,
     }
     
     if verbose:
@@ -942,7 +802,7 @@ def enrich_record(
         "captions":             captions,
         "accent_colors":        accent_colors,
         "hook_keyword":         hook_keyword,
-        "attractive_title":     attractive_title,    # ✅ من Excel
+        "attractive_title":     attractive_title,
         "ar_tagged":            ar_tagged,
         "en_tagged":            en_tagged,
     }
