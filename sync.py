@@ -7,7 +7,6 @@ sync.py — Word-level audio synchronization using WhisperX
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import time
@@ -30,7 +29,7 @@ MAX_WORD_DURATION     = 2.0
 MIN_GAP_BETWEEN_WORDS = 0.02
 MAX_INITIAL_OFFSET    = 1.5
 
-# ── Language codes لـ WhisperX ────────────────────────────────────────────────
+# Language codes لـ WhisperX
 WHISPERX_LANG_MAP: dict[str, str] = {
     "ar": "ar",
     "fr": "fr",
@@ -52,9 +51,9 @@ def get_audio_duration(audio_path: str) -> float:
                 "-of", "default=noprint_wrappers=1:nokey=1",
                 audio_path,
             ],
-            capture_output=True,
-            text=True,
-            timeout=15,
+            capture_output = True,
+            text           = True,
+            timeout        = 15,
         )
         return float(result.stdout.strip())
     except (ValueError, subprocess.TimeoutExpired, FileNotFoundError):
@@ -77,16 +76,15 @@ def detect_speech_start(audio_path: str) -> float:
                 "-af", "silencedetect=noise=-35dB:d=0.1",
                 "-f", "null", "-",
             ],
-            capture_output=True,
-            text=True,
-            timeout=30,
+            capture_output = True,
+            text           = True,
+            timeout        = 30,
         )
         output  = result.stderr
         matches = re.findall(r"silence_end:\s*([\d.]+)", output)
 
         if matches:
             speech_start = float(matches[0])
-            # تجاهل offset صغير جداً
             if speech_start < 0.05:
                 print(
                     f"  🎯 Speech starts at: {speech_start:.3f}s "
@@ -96,7 +94,10 @@ def detect_speech_start(audio_path: str) -> float:
             print(f"  🎯 Speech starts at: {speech_start:.3f}s")
             return speech_start
         else:
-            print("  🎯 Speech starts at: 0.000s (no silence detected)")
+            print(
+                "  🎯 Speech starts at: 0.000s "
+                "(no silence detected)"
+            )
             return 0.0
 
     except Exception as e:
@@ -108,8 +109,8 @@ def detect_speech_start(audio_path: str) -> float:
 # WHISPERX MODELS (Singleton)
 # ═════════════════════════════════════════════════════════════════════════════
 
-_WHISPERX_MODEL: object        = None
-_ALIGN_MODELS:   dict          = {}
+_WHISPERX_MODEL: object = None
+_ALIGN_MODELS:   dict   = {}
 
 
 def _load_whisperx_model() -> object | None:
@@ -130,13 +131,16 @@ def _load_whisperx_model() -> object | None:
 
         _WHISPERX_MODEL = whisperx.load_model(
             WHISPERX_MODEL,
-            device       = WHISPERX_DEVICE,
-            compute_type = COMPUTE_TYPE,
+            device        = WHISPERX_DEVICE,
+            compute_type  = COMPUTE_TYPE,
             download_root = str(MODEL_CACHE_DIR),
         )
 
         load_time = time.time() - start_time
-        print(f"  ✅ WhisperX model loaded in {load_time:.1f}s")
+        print(
+            f"  ✅ WhisperX model loaded "
+            f"in {load_time:.1f}s"
+        )
 
     except Exception as e:
         print(f"  ❌ Failed to load WhisperX: {e}")
@@ -241,6 +245,10 @@ def extract_transcript_from_audio(
     }
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# WHISPERX FULL EXTRACTION
+# ═════════════════════════════════════════════════════════════════════════════
+
 def _extract_whisperx_full(
     audio_path:          str,
     lang:                str,
@@ -260,7 +268,10 @@ def _extract_whisperx_full(
     try:
         import whisperx
 
-        print(f"  🎯 WhisperX: Processing {lang.upper()} audio...")
+        print(
+            f"  🎯 WhisperX: Processing "
+            f"{lang.upper()} audio..."
+        )
 
         model = _load_whisperx_model()
         if model is None:
@@ -282,6 +293,7 @@ def _extract_whisperx_full(
 
         transcribe_time = time.time() - start_time
         segments_raw    = transcribe_result.get("segments", [])
+
         print(
             f"  ⏱️  Transcribed in {transcribe_time:.1f}s "
             f"({len(segments_raw)} segments)"
@@ -304,11 +316,13 @@ def _extract_whisperx_full(
                     align_model,
                     metadata,
                     audio,
-                    device                = WHISPERX_DEVICE,
+                    device                 = WHISPERX_DEVICE,
                     return_char_alignments = False,
                 )
-                aligned_segments = aligned_result.get("segments", [])
-                align_time       = time.time() - start_time
+                aligned_segments = aligned_result.get(
+                    "segments", []
+                )
+                align_time = time.time() - start_time
                 print(f"  ⏱️  Aligned in {align_time:.1f}s")
             except Exception as e:
                 print(f"  ⚠️  Alignment failed: {e}")
@@ -331,7 +345,9 @@ def _extract_whisperx_full(
                 seg_end    = float(segment.get("end",   0))
                 words_data = segment.get("words", [])
             else:
-                text       = (getattr(segment, "text",  "") or "").strip()
+                text       = (
+                    getattr(segment, "text", "") or ""
+                ).strip()
                 seg_start  = float(getattr(segment, "start", 0))
                 seg_end    = float(getattr(segment, "end",   0))
                 words_data = getattr(segment, "words", [])
@@ -349,7 +365,9 @@ def _extract_whisperx_full(
                         w_start   = w.get("start")
                         w_end     = w.get("end")
                     else:
-                        word_text = (getattr(w, "word", "") or "").strip()
+                        word_text = (
+                            getattr(w, "word", "") or ""
+                        ).strip()
                         w_start   = getattr(w, "start", None)
                         w_end     = getattr(w, "end",   None)
 
@@ -373,12 +391,19 @@ def _extract_whisperx_full(
                 words_in_text = text.split()
                 if words_in_text:
                     word_dur = (
-                        (seg_end - seg_start) / len(words_in_text)
+                        (seg_end - seg_start) /
+                        len(words_in_text)
                     )
-                    for w_idx, word_text in enumerate(words_in_text):
-                        w_start = seg_start + (w_idx       * word_dur)
-                        w_end   = seg_start + ((w_idx + 1) * word_dur)
-                        entry   = {
+                    for w_idx, word_text in enumerate(
+                        words_in_text
+                    ):
+                        w_start = (
+                            seg_start + (w_idx * word_dur)
+                        )
+                        w_end = (
+                            seg_start + ((w_idx + 1) * word_dur)
+                        )
+                        entry = {
                             "word":  word_text,
                             "start": round(w_start, 4),
                             "end":   round(w_end,   4),
@@ -402,20 +427,23 @@ def _extract_whisperx_full(
             all_words_flat = _normalize_word_timestamps(
                 all_words_flat,
                 audio_duration,
-                skip_offset_check=True,
+                skip_offset_check = True,
             )
         else:
             all_words_flat = _normalize_word_timestamps(
                 all_words_flat,
                 audio_duration,
-                skip_offset_check=False,
+                skip_offset_check = False,
             )
 
         # ── Rebuild aligned ───────────────────────────────────────────────────
         aligned_normalized: list[dict] = []
 
         for s_idx in range(len(sentences)):
-            sw = [w for w in all_words_flat if w["s_idx"] == s_idx]
+            sw = [
+                w for w in all_words_flat
+                if w["s_idx"] == s_idx
+            ]
             if sw:
                 aligned_normalized.append({
                     "sentence": sentences[s_idx],
@@ -484,10 +512,11 @@ def _apply_speech_offset(
 
     print(
         f"  ✨ Applying speech offset: "
-        f"+{speech_start_offset:.3f}s to all {len(words)} words"
+        f"+{speech_start_offset:.3f}s "
+        f"to all {len(words)} words"
     )
 
-    fixed = []
+    fixed: list[dict] = []
     for w in words:
         fw          = dict(w)
         fw["start"] = round(w["start"] + speech_start_offset, 4)
@@ -496,8 +525,10 @@ def _apply_speech_offset(
         if fw["end"] > audio_duration:
             fw["end"] = audio_duration
         if fw["start"] >= audio_duration:
-            fw["start"] = max(0, audio_duration - MIN_WORD_DURATION)
-            fw["end"]   = audio_duration
+            fw["start"] = max(
+                0, audio_duration - MIN_WORD_DURATION
+            )
+            fw["end"] = audio_duration
 
         fixed.append(fw)
 
@@ -542,8 +573,8 @@ def _normalize_word_timestamps(
                 f"→ subtracting {offset:.2f}s"
             )
             for w in fixed:
-                w["start"] = max(0, w["start"] - offset)
-                w["end"]   = max(0.1, w["end"]  - offset)
+                w["start"] = max(0,   w["start"] - offset)
+                w["end"]   = max(0.1, w["end"]   - offset)
     else:
         print("  ℹ️  Skipping offset check (already applied)")
 
@@ -588,8 +619,10 @@ def _normalize_word_timestamps(
             if w["end"] > audio_duration:
                 w["end"] = audio_duration
             if w["start"] >= audio_duration:
-                w["start"] = max(0, audio_duration - MIN_WORD_DURATION)
-                w["end"]   = audio_duration
+                w["start"] = max(
+                    0, audio_duration - MIN_WORD_DURATION
+                )
+                w["end"] = audio_duration
 
     # ── 5. تقريب ─────────────────────────────────────────────────────────────
     for w in fixed:
@@ -624,7 +657,7 @@ def get_word_timestamps(
     result = extract_transcript_from_audio(audio_path, lang)
     if not result["success"]:
         return []
-    words = []
+    words: list[dict] = []
     for seg in result["aligned"]:
         words.extend(seg.get("words", []))
     return words
@@ -675,7 +708,7 @@ def _duration_sync(
     LEAD_IN   = 0.20
     TRAIL_OUT = 0.25
 
-    usable      = max(
+    usable = max(
         total_duration - LEAD_IN - TRAIL_OUT,
         total_duration * 0.85,
     )
@@ -703,15 +736,18 @@ def _duration_sync(
 
 
 def _build_output(
-    sentences:   list[str],
-    word_times:  list[dict],
+    sentences:      list[str],
+    word_times:     list[dict],
     total_duration: float,
 ) -> tuple[list[dict], list[dict]]:
     """بناء aligned و timeline من word_times."""
     aligned: list[dict] = []
 
     for s_idx, sentence in enumerate(sentences):
-        sw = [wt for wt in word_times if wt["s_idx"] == s_idx]
+        sw = [
+            wt for wt in word_times
+            if wt["s_idx"] == s_idx
+        ]
         if sw:
             aligned.append({
                 "sentence": sentence,
