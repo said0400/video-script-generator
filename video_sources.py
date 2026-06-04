@@ -2,7 +2,8 @@
 video_sources.py — Unified stock video fetcher
 Sources (in priority order): Local → Pexels → Pixabay
 
-✨ FIXED: motion detection يعمل بشكل صحيح
+✨ يدعم عدة مفاتيح لكل منصة مع تدوير فوري عند rate limit
+✨ Motion detection لضمان فيديوهات متحركة
 """
 
 from __future__ import annotations
@@ -18,16 +19,17 @@ import requests
 
 from db import is_video_used, mark_video_used
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# Constants
+# ═════════════════════════════════════════════════════════════════════════════
 
 MIN_DURATION     = 5
 MIN_FILE_BYTES   = 100_000
 DOWNLOAD_TIMEOUT = 90
 API_TIMEOUT      = 15
 
-# ✨ Motion validation thresholds
-MIN_FRAMES       = 30        # حد أدنى للـ frames
-MIN_FPS          = 10        # حد أدنى للـ FPS
+MIN_FRAMES       = 30
+MIN_FPS          = 10
 
 PEXELS_API_URL  = "https://api.pexels.com/videos/search"
 PIXABAY_API_URL = "https://pixabay.com/api/videos/"
@@ -36,23 +38,72 @@ RETRY_DELAYS = [1.0, 2.0, 4.0]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ FIXED: VIDEO VALIDATION (simple & reliable)
+# ✨ API KEY ROTATION (عدة مفاتيح لكل منصة)
+# ═════════════════════════════════════════════════════════════════════════════
+
+_pexels_key_idx = 0
+_pixabay_key_idx = 0
+
+
+def _load_keys_for(prefix: str) -> list[str]:
+    """
+    تحميل كل مفاتيح API لمنصة معينة.
+    يبحث عن: PREFIX, PREFIX_1, PREFIX_2, ...
+    """
+    keys = []
+    main = os.environ.get(prefix, "").strip()
+    if main:
+        keys.append(main)
+    for i in range(1, 10):
+        k = os.environ.get(f"{prefix}_{i}", "").strip()
+        if k:
+            keys.append(k)
+    return keys
+
+
+def _get_pexels_key() -> str:
+    """احصل على مفتاح Pexels الحالي."""
+    global _pexels_key_idx
+    keys = _load_keys_for("PEXELS_API_KEY")
+    if not keys:
+        return ""
+    return keys[_pexels_key_idx % len(keys)]
+
+
+def _rotate_pexels_key():
+    """تدوير مفتاح Pexels عند الفشل."""
+    global _pexels_key_idx
+    keys = _load_keys_for("PEXELS_API_KEY")
+    if len(keys) > 1:
+        _pexels_key_idx = (_pexels_key_idx + 1) % len(keys)
+        print(f"  🔄 Pexels key rotated → #{_pexels_key_idx} (of {len(keys)})")
+
+
+def _get_pixabay_key() -> str:
+    """احصل على مفتاح Pixabay الحالي."""
+    global _pixabay_key_idx
+    keys = _load_keys_for("PIXABAY_API_KEY")
+    if not keys:
+        return ""
+    return keys[_pixabay_key_idx % len(keys)]
+
+
+def _rotate_pixabay_key():
+    """تدوير مفتاح Pixabay عند الفشل."""
+    global _pixabay_key_idx
+    keys = _load_keys_for("PIXABAY_API_KEY")
+    if len(keys) > 1:
+        _pixabay_key_idx = (_pixabay_key_idx + 1) % len(keys)
+        print(f"  🔄 Pixabay key rotated → #{_pixabay_key_idx} (of {len(keys)})")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# VIDEO VALIDATION (motion detection)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _probe_video_info(path: Path) -> dict:
-    """
-    تحليل بسيط وموثوق للفيديو.
-    
-    Returns: {
-        "duration": float,
-        "frames":   int,
-        "fps":      float,
-        "valid":    bool,
-        "reason":   str,
-    }
-    """
+    """تحليل بسيط وموثوق للفيديو."""
     try:
-        # ✅ استخدام -count_packets أسرع وأكثر موثوقية من -count_frames
         r = subprocess.run(
             [
                 "ffprobe", "-v", "error",
@@ -66,7 +117,7 @@ def _probe_video_info(path: Path) -> dict:
         )
         
         if r.returncode != 0:
-            return {"valid": False, "reason": "ffprobe failed", 
+            return {"valid": False, "reason": "ffprobe failed",
                     "duration": 0, "frames": 0, "fps": 0}
         
         info = {"duration": 0.0, "frames": 0, "fps": 0.0}
@@ -99,49 +150,37 @@ def _probe_video_info(path: Path) -> dict:
                 except (ValueError, ZeroDivisionError):
                     pass
         
-        # ✅ إذا لم نحصل على frames، احسبها من duration × fps
         if info["frames"] == 0 and info["duration"] > 0 and info["fps"] > 0:
             info["frames"] = int(info["duration"] * info["fps"])
         
-        # ✅ Validation
         if info["duration"] < MIN_DURATION:
-            return {**info, "valid": False, 
+            return {**info, "valid": False,
                     "reason": f"too short ({info['duration']:.1f}s)"}
         
         if info["fps"] < MIN_FPS:
-            return {**info, "valid": False, 
+            return {**info, "valid": False,
                     "reason": f"low fps ({info['fps']:.1f})"}
         
-        # ✅ إذا frames قليلة جداً مقارنة بالـ duration
         if info["frames"] > 0 and info["frames"] < MIN_FRAMES:
-            return {**info, "valid": False, 
+            return {**info, "valid": False,
                     "reason": f"too few frames ({info['frames']})"}
         
         return {**info, "valid": True, "reason": "ok"}
         
     except (subprocess.TimeoutExpired, Exception) as e:
-        return {"valid": False, "reason": f"probe error", 
+        return {"valid": False, "reason": f"probe error",
                 "duration": 0, "frames": 0, "fps": 0}
 
 
 def _detect_motion_simple(path: Path) -> bool:
-    """
-    ✅ NEW: كشف بسيط للحركة باستخدام مقارنة frames.
-    
-    يستخرج 3 frames ويقارن أحجامها.
-    إذا كانت متطابقة 100% → الفيديو ثابت (صورة متكررة).
-    
-    Returns: True إذا متحرك، False إذا ثابت.
-    """
+    """كشف بسيط للحركة بمقارنة frames."""
     try:
-        # احصل على مدة الفيديو
         info = _probe_video_info(path)
         duration = info.get("duration", 0)
         
         if duration < 2:
-            return True  # فيديو قصير - نفترض متحرك
+            return True
         
-        # ✅ استخراج 3 frames في أوقات مختلفة
         frame_sizes = []
         sample_times = [0.5, duration / 2, duration - 0.5]
         
@@ -165,21 +204,18 @@ def _detect_motion_simple(path: Path) -> bool:
                 frame_sizes.append(size)
                 os.unlink(tmp_frame)
         
-        # تنظيف أي ملفات متبقية
+        # تنظيف
         for i in range(3):
             tmp = f"/tmp/_motion_check_{os.getpid()}_{i}.jpg"
             if os.path.exists(tmp):
                 os.unlink(tmp)
         
-        # ✅ إذا حصلنا على frame واحد أو أقل، نفترض متحرك (لا نرفض بدون سبب)
         if len(frame_sizes) < 2:
             return True
         
-        # ✅ إذا frames متطابقة 100% → ثابت
         if len(set(frame_sizes)) == 1:
             return False
         
-        # ✅ احسب نسبة الاختلاف
         min_size = min(frame_sizes)
         max_size = max(frame_sizes)
         
@@ -188,26 +224,19 @@ def _detect_motion_simple(path: Path) -> bool:
         
         diff_ratio = (max_size - min_size) / min_size
         
-        # ✅ إذا الاختلاف أقل من 1% → ثابت (صورة)
-        # إذا أكثر → متحرك
         return diff_ratio > 0.01
         
     except Exception:
-        # في حالة أي خطأ، نفترض متحرك
         return True
 
 
 def _is_video_animated(path: Path) -> tuple[bool, str]:
-    """
-    ✅ تحقق شامل: معلومات + motion detection.
-    """
-    # 1. معلومات الفيديو
+    """تحقق شامل: معلومات + motion detection."""
     info = _probe_video_info(path)
     
     if not info["valid"]:
         return False, info["reason"]
     
-    # 2. كشف الحركة الفعلية
     has_motion = _detect_motion_simple(path)
     
     if not has_motion:
@@ -217,7 +246,7 @@ def _is_video_animated(path: Path) -> tuple[bool, str]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Backward compatibility
+# Shared helpers
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _probe_video(path: Path) -> float:
@@ -240,12 +269,10 @@ def _download(url: str, dest: Path, retries: int = 3) -> bool:
                         if chunk:
                             f.write(chunk)
 
-            # Basic check
             if not dest.exists() or dest.stat().st_size < MIN_FILE_BYTES:
                 dest.unlink(missing_ok=True)
                 raise ValueError("File too small")
 
-            # ✅ Motion check
             is_valid, reason = _is_video_animated(dest)
             
             if not is_valid:
@@ -302,7 +329,7 @@ def _search_local(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Pexels
+# Pexels (✨ مع key rotation)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _search_pexels(
@@ -313,7 +340,7 @@ def _search_pexels(
     session_used: set,
     retries: int = 3,
 ) -> Path | None:
-    api_key = os.environ.get("PEXELS_API_KEY", "").strip()
+    api_key = _get_pexels_key()
     if not api_key:
         return None
 
@@ -337,11 +364,16 @@ def _search_pexels(
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response else 0
             if status == 429:
-                print(f"    ⚠️  Pexels rate limit — waiting 10s")
-                time.sleep(10)
+                print(f"    ⚠️  Pexels rate limit — rotating key")
+                _rotate_pexels_key()
+                api_key = _get_pexels_key()
+                time.sleep(2)
             elif status in (401, 403):
-                print(f"    ❌ Pexels auth error ({status})")
-                return None
+                print(f"    ❌ Pexels auth error ({status}) — rotating key")
+                _rotate_pexels_key()
+                api_key = _get_pexels_key()
+                if not api_key:
+                    return None
             else:
                 if attempt < retries - 1:
                     time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS)-1)])
@@ -350,11 +382,9 @@ def _search_pexels(
             if attempt < retries - 1:
                 time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS)-1)])
 
-    # Filter & sort
     videos = [v for v in videos if v.get("duration", 0) >= MIN_DURATION]
     videos = sorted(videos, key=lambda v: v.get("duration", 0), reverse=True)
 
-    # ✅ LIMIT: جرب أول 5 فقط (بدلاً من كل النتائج)
     for video in videos[:5]:
         vid_id = str(video["id"])
         sk     = f"px_{vid_id}"
@@ -382,7 +412,7 @@ def _search_pexels(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Pixabay
+# Pixabay (✨ مع key rotation)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _search_pixabay(
@@ -393,7 +423,7 @@ def _search_pixabay(
     session_used: set,
     retries: int = 3,
 ) -> Path | None:
-    api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
+    api_key = _get_pixabay_key()
     if not api_key:
         return None
 
@@ -418,11 +448,16 @@ def _search_pixabay(
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response else 0
             if status == 429:
-                print(f"    ⚠️  Pixabay rate limit — waiting 10s")
-                time.sleep(10)
+                print(f"    ⚠️  Pixabay rate limit — rotating key")
+                _rotate_pixabay_key()
+                api_key = _get_pixabay_key()
+                time.sleep(2)
             elif status in (400, 401):
-                print(f"    ❌ Pixabay auth error ({status})")
-                return None
+                print(f"    ❌ Pixabay auth error ({status}) — rotating key")
+                _rotate_pixabay_key()
+                api_key = _get_pixabay_key()
+                if not api_key:
+                    return None
             else:
                 if attempt < retries - 1:
                     time.sleep(RETRY_DELAYS[min(attempt, len(RETRY_DELAYS)-1)])
@@ -434,7 +469,6 @@ def _search_pixabay(
     hits = [h for h in hits if h.get("duration", 0) >= MIN_DURATION]
     hits = sorted(hits, key=lambda h: h.get("duration", 0), reverse=True)
 
-    # ✅ LIMIT: جرب أول 5 فقط
     for hit in hits[:5]:
         vid_id = str(hit["id"])
         sk     = f"pb_{vid_id}"
@@ -498,7 +532,11 @@ def fetch_videos_for_script(
     session_used  : set[str] = set()
     results       : list[Path | None] = [None] * n
 
+    # Log عدد المفاتيح
+    pexels_keys = _load_keys_for("PEXELS_API_KEY")
+    pixabay_keys = _load_keys_for("PIXABAY_API_KEY")
     print(f"\n  📹 Fetching {n} videos...")
+    print(f"     Pexels keys: {len(pexels_keys)} | Pixabay keys: {len(pixabay_keys)}")
 
     for i, kws in enumerate(keywords_per_sentence):
         found = False
