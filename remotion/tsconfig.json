@@ -1,16 +1,16 @@
 {
   "compilerOptions": {
     "lib": ["dom", "esnext"],
-    "module": "commonjs",
-    "target": "es6",
-    "jsx": "react",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "esnext",
     "strict": true,
-    "rootDir": ".",
     "esModuleInterop": true,
-    "moduleResolution": "node",
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "isolatedModules": true
   },
-  "include": ["src/**/*", "remotion.config.ts"]
+  "include": ["render.mjs"],
+  "exclude": ["node_modules"]
 }
