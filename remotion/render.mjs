@@ -1,10 +1,17 @@
-// remotion/render.mjs — Full Paragraph + Karaoke + Yellow BG + Cairo Font
-// ✨ خلفية صفراء + نص أسود + كلمة حالية حمراء مشعة
+// remotion/render.mjs — Full Paragraph Display
+// ✨ خلفية صفراء واحدة تجمع كل النص
+// ✨ نص أسود + كلمة حالية حمراء مشعة
+// ✨ خط Cairo عصري
+// ✨ مزامنة 100% من WhisperX
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync,
          symlinkSync, existsSync } from "fs";
 import { spawnSync } from "child_process";
 import { chromium } from "playwright";
+
+// ═════════════════════════════════════════════════════════════════════════════
+// READ MANIFEST
+// ═════════════════════════════════════════════════════════════════════════════
 
 const manifestPath = process.argv[2];
 const outputPath   = process.argv[3];
@@ -72,7 +79,7 @@ const esc = s => (s||"").toString()
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🔥 POWER WORDS
+// POWER WORDS
 // ═════════════════════════════════════════════════════════════════════════════
 
 function normalizeWord(word) {
@@ -97,46 +104,66 @@ function isPowerWord(word) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎬 BUILD FRAME STATE MAP
+// BUILD FRAME STATE MAP — فقرة كاملة لكل segment
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildFrameStateMap() {
-  const segments = (aligned && aligned.length > 0) ? aligned : [];
+  // نسخة من aligned (أو fallback)
+  let segments = [];
   
+  if (aligned && aligned.length > 0) {
+    // نسخ البيانات (لتجنب تعديل الأصل)
+    segments = aligned.map(seg => ({
+      sentence: seg.sentence || "",
+      start:    seg.start || 0,
+      end:      seg.end || 0,
+      words:    (seg.words || []).map(w => ({
+        word:  w.word || "",
+        start: w.start || 0,
+        end:   w.end || 0,
+      })),
+    }));
+  }
+  
+  // Fallback: إذا لم يوجد aligned
   if (segments.length === 0) {
     console.log("⚠️  No aligned segments - using equal split");
-    const perSentence = effectiveDuration / sentences.length;
+    const perSentence = effectiveDuration / Math.max(sentences.length, 1);
+    
     for (let i = 0; i < sentences.length; i++) {
       const words = sentences[i].split(/\s+/).filter(Boolean);
       const start = i * perSentence;
-      const end = (i + 1) * perSentence;
-      const wordDur = (end - start) / words.length;
+      const end   = (i + 1) * perSentence;
+      const wordDur = words.length > 0 ? (end - start) / words.length : 1;
       
       segments.push({
         sentence: sentences[i],
-        start: start,
-        end: end,
-        words: words.map((w, j) => ({
-          word: w,
+        start:    start,
+        end:      end,
+        words:    words.map((w, j) => ({
+          word:  w,
           start: start + j * wordDur,
-          end: start + (j + 1) * wordDur,
+          end:   start + (j + 1) * wordDur,
         })),
       });
     }
   }
   
-  console.log(`\n📊 Segments:`);
+  // Log
+  console.log(`\n📊 Segments (${segments.length}):`);
   segments.forEach((seg, i) => {
     const preview = seg.sentence ? seg.sentence.substring(0, 50) : "";
     const wc = seg.words ? seg.words.length : 0;
     console.log(`  ${i+1}. [${seg.start.toFixed(2)}s → ${seg.end.toFixed(2)}s] ${wc}w: "${preview}..."`);
   });
   
+  // Build frame map
   const map = new Array(totalFrames).fill(null);
   
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
     
+    // ابحث عن الـ segment الحالي
     let currentSeg = null;
     let currentSegIdx = 0;
     
@@ -148,8 +175,9 @@ function buildFrameStateMap() {
       }
     }
     
+    // Fallback
     if (!currentSeg) {
-      if (t < segments[0].start) {
+      if (segments.length > 0 && t < segments[0].start) {
         currentSeg = segments[0];
         currentSegIdx = 0;
       } else {
@@ -160,13 +188,16 @@ function buildFrameStateMap() {
             break;
           }
         }
-        if (!currentSeg) {
-          currentSeg = segments[segments.length - 1];
-          currentSegIdx = segments.length - 1;
-        }
+      }
+      if (!currentSeg) {
+        currentSeg = segments[segments.length - 1] || {
+          sentence: "", start: 0, end: effectiveDuration, words: []
+        };
+        currentSegIdx = segments.length - 1;
       }
     }
     
+    // ابحث عن الكلمة الحالية
     let currentWordIdx = -1;
     const segWords = currentSeg.words || [];
     
@@ -180,9 +211,10 @@ function buildFrameStateMap() {
       }
     }
     
+    // Fade in
     const segStartFrame = Math.floor(currentSeg.start * FPS);
-    const framesSince = f - segStartFrame;
-    const fadeProgress = Math.max(0, Math.min(framesSince / 4, 1.0));
+    const framesSince = Math.max(0, f - segStartFrame);
+    const fadeProgress = Math.min(framesSince / 4, 1.0);
     
     map[f] = {
       segment_idx:      currentSegIdx,
@@ -192,6 +224,7 @@ function buildFrameStateMap() {
     };
   }
   
+  // Debug
   console.log("\n📊 Sample sync:");
   [0, 0.25, 0.5, 0.75].forEach(pct => {
     const f = Math.floor(totalFrames * pct);
@@ -199,7 +232,8 @@ function buildFrameStateMap() {
       const t = (f / FPS).toFixed(2);
       const seg = map[f].segment;
       const wIdx = map[f].current_word_idx;
-      const word = (seg.words && seg.words[wIdx]) ? seg.words[wIdx].word : "---";
+      const word = (seg.words && wIdx >= 0 && seg.words[wIdx])
+        ? seg.words[wIdx].word : "---";
       console.log(`  ${t}s → seg ${map[f].segment_idx} | word "${word}"`);
     }
   });
@@ -208,7 +242,7 @@ function buildFrameStateMap() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎨 HTML BUILDER — خلفية صفراء + نص أسود + كلمة حالية حمراء مشعة
+// HTML BUILDER — خلفية صفراء واحدة + نص أسود + كلمة حمراء مشعة
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildHTML(opts) {
@@ -216,6 +250,12 @@ function buildHTML(opts) {
   
   const segWords = segment.words || [];
   const allWordsText = segWords.map(w => w.word);
+  
+  if (allWordsText.length === 0) {
+    // Segment فارغ — لا نعرض شيئاً
+    return `<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>
+    <body style="width:${WIDTH}px;height:${HEIGHT}px;background:transparent;"></body></html>`;
+  }
   
   const ar = isArabicText(allWordsText.join(" "));
   const dir = ar ? "rtl" : "ltr";
@@ -225,7 +265,7 @@ function buildHTML(opts) {
   const titleFont = titleAr ? `"Cairo", sans-serif` : `"Inter", sans-serif`;
   const titleDir = titleAr ? "rtl" : "ltr";
   
-  // حجم الخط
+  // حجم الخط حسب عدد الكلمات
   let fontSize;
   const wc = allWordsText.length;
   if (wc <= 5)       fontSize = ar ? 85 : 80;
@@ -233,6 +273,9 @@ function buildHTML(opts) {
   else if (wc <= 15) fontSize = ar ? 60 : 56;
   else if (wc <= 20) fontSize = ar ? 52 : 48;
   else               fontSize = ar ? 44 : 40;
+  
+  // Power word solo check
+  const showPowerSolo = allWordsText.length === 1 && isPowerWord(allWordsText[0]);
   
   // بناء الكلمات مع karaoke
   let wordIdx = 0;
@@ -246,12 +289,12 @@ function buildHTML(opts) {
     let opacity;
     
     if (isCurrent) {
-      // ✨ الكلمة الحالية: حمراء مشعة مضيئة
+      // ✨ الكلمة الحالية: حمراء فاتحة مشعة مضيئة
       color = "#FF1744";
       textShadow = "0 0 20px rgba(255,23,68,0.9), 0 0 40px rgba(255,23,68,0.6), 0 0 60px rgba(255,23,68,0.3)";
       opacity = 1.0;
     } else if (isPast) {
-      // الكلمات السابقة: أسود عادي
+      // الكلمات السابقة: أسود
       color = "#000000";
       textShadow = "none";
       opacity = 1.0;
@@ -267,6 +310,23 @@ function buildHTML(opts) {
     return `<span class="word" style="color:${color};opacity:${opacity};text-shadow:${textShadow};">${esc(word)}</span>`;
   }).join(" ");
   
+  // بناء mainContent
+  let mainContent;
+  
+  if (showPowerSolo) {
+    mainContent = `
+      <div class="power-word-container">
+        <span class="power-word-text">${esc(allWordsText[0])}</span>
+      </div>
+    `;
+  } else {
+    mainContent = `
+      <div class="text-container">
+        <div class="text-bg">${wordsHTML}</div>
+      </div>
+    `;
+  }
+  
   return `<!DOCTYPE html>
 <html lang="${ar?"ar":"en"}">
 <head>
@@ -279,38 +339,47 @@ function buildHTML(opts) {
       overflow:hidden;background:transparent;
     }
     
+    /* تدرج علوي */
     .overlay-top{
       position:absolute;top:0;left:0;right:0;height:35%;
       background:linear-gradient(to bottom,rgba(0,0,0,0.7) 0%,rgba(0,0,0,0.3) 60%,transparent 100%);
       pointer-events:none;z-index:1;
     }
+    
+    /* تدرج سفلي */
     .overlay-bottom{
       position:absolute;bottom:0;left:0;right:0;height:45%;
       background:linear-gradient(to top,rgba(0,0,0,0.7) 0%,rgba(0,0,0,0.3) 60%,transparent 100%);
       pointer-events:none;z-index:1;
     }
     
-    /* ✨ العنوان */
+    /* ══════════════════════════════════════════════════════ */
+    /* العنوان                                               */
+    /* ══════════════════════════════════════════════════════ */
     .title-container{
       position:absolute;top:400px;left:50%;transform:translateX(-50%);
       width:90%;max-width:980px;direction:${titleDir};text-align:center;z-index:20;
     }
     .title-box{
-      display:inline-block;background:#FF0000;padding:20px 45px;
+      display:inline-block;
+      background:#FF0000;
+      padding:20px 45px;
       border-radius:9999px;
       box-shadow:0 0 50px rgba(255,0,0,0.7),0 10px 30px rgba(0,0,0,0.5);
     }
     .title-text{
-      font-family:${titleFont};font-size:${titleAr?"48px":"44px"};
-      font-weight:900;color:#FFFFFF;
+      font-family:${titleFont};
+      font-size:${titleAr?"48px":"44px"};
+      font-weight:900;
+      color:#FFFFFF;
       display:inline-flex;align-items:center;gap:16px;white-space:nowrap;
       text-shadow:0 2px 6px rgba(0,0,0,0.4);
     }
     .title-emoji{font-size:${titleAr?"54px":"50px"};}
     
-    /* ════════════════════════════════════════════════════════════ */
-    /* ✨ النص — خلفية صفراء مدمجة كما في الصورة                */
-    /* ════════════════════════════════════════════════════════════ */
+    /* ══════════════════════════════════════════════════════ */
+    /* ✨ النص — خلفية صفراء واحدة تجمع كل النص            */
+    /* ══════════════════════════════════════════════════════ */
     .text-container{
       position:absolute;
       left:50%;
@@ -324,18 +393,20 @@ function buildHTML(opts) {
       opacity:${fadeProgress};
     }
     
+    /* ✨ خلفية واحدة (inline-block = مربع واحد يجمع كل النص) */
     .text-bg{
-      display:inline;
-      background:rgba(255, 215, 0, 0.95);          /* ✨ خلفية صفراء ذهبية */
+      display:inline-block;
+      background:rgba(255, 215, 0, 0.95);
       font-family:${font};
       font-size:${fontSize}px;
       font-weight:900;
-      line-height:1.65;
-      padding:12px 25px;
-      border-radius:20px;
-      box-decoration-break:clone;
-      -webkit-box-decoration-break:clone;
+      line-height:1.6;
+      padding:25px 35px;
+      border-radius:24px;
       box-shadow:0 8px 30px rgba(0,0,0,0.3);
+      max-width:100%;
+      word-wrap:break-word;
+      overflow-wrap:break-word;
     }
     
     .word{
@@ -343,15 +414,17 @@ function buildHTML(opts) {
       transition:color 0.1s ease-out, opacity 0.1s ease-out, text-shadow 0.15s ease-out;
     }
     
-    /* ✨ الكلمة القوية */
+    /* ══════════════════════════════════════════════════════ */
+    /* الكلمة القوية وحدها                                   */
+    /* ══════════════════════════════════════════════════════ */
     .power-word-container{
       position:absolute;left:50%;top:62%;
       transform:translate(-50%,-50%);
-      direction:${dir};text-align:center;z-index:10;
-      opacity:${fadeProgress};
+      direction:${dir};text-align:center;
+      z-index:10;opacity:${fadeProgress};
     }
     .power-word-text{
-      display:inline;
+      display:inline-block;
       background:#FF0000;
       color:#FFD700;
       font-family:${font};
@@ -360,8 +433,6 @@ function buildHTML(opts) {
       line-height:1.5;
       padding:15px 40px;
       border-radius:9999px;
-      box-decoration-break:clone;
-      -webkit-box-decoration-break:clone;
       box-shadow:0 0 80px rgba(255,0,0,0.8),0 15px 40px rgba(0,0,0,0.6);
     }
   </style>
@@ -380,21 +451,13 @@ function buildHTML(opts) {
     </div>
   </div>
   
-  ${allWordsText.length === 1 && isPowerWord(allWordsText[0]) ? `
-    <div class="power-word-container">
-      <span class="power-word-text">${esc(allWordsText[0])}</span>
-    </div>
-  ` : `
-    <div class="text-container">
-      <span class="text-bg">${wordsHTML}</span>
-    </div>
-  `}
+  ${mainContent}
 </body>
 </html>`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🖼️ RENDER PNGs
+// RENDER PNGs
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function renderAllPNGs(page, frameStateMap) {
@@ -409,8 +472,9 @@ async function renderAllPNGs(page, frameStateMap) {
   
   console.log(`\n  📸 ${uniqueStates.size} unique states`);
   
+  // Warmup fonts
   const initHtml = buildHTML({
-    segment: { words: [{ word: "تحميل" }], start: 0, end: 1 },
+    segment: { words: [{ word: "تحميل", start: 0, end: 1 }], start: 0, end: 1 },
     currentWordIdx: 0,
     fadeProgress: 1.0,
   });
@@ -474,7 +538,7 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// PROCESS BACKGROUND
+// PROCESS BACKGROUND — Zoom + Cinematic Filters
 // ═════════════════════════════════════════════════════════════════════════════
 
 function processBackground(videoPath, duration, outPath, idx, isHook = false) {
@@ -494,7 +558,7 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   
   const startScale = 1.0;
   const endScale   = isHook ? 1.4 : 1.15;
-  const scaleStep  = (endScale - startScale) / duration;
+  const scaleStep  = (endScale - startScale) / Math.max(duration, 0.1);
   
   const zoomFilter = 
     `scale=w='trunc((iw*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':` +
@@ -509,15 +573,16 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
     "unsharp=5:5:0.6:5:5:0.0",
   ].join(",");
   
+  const safeDur = Math.max(duration, 0.5);
   const fadeFilter = isHook
-    ? `fade=t=out:st=${(duration-0.2).toFixed(3)}:d=0.2`
-    : `fade=t=in:st=0:d=0.3,fade=t=out:st=${(duration-0.3).toFixed(3)}:d=0.3`;
+    ? `fade=t=out:st=${(safeDur-0.2).toFixed(3)}:d=0.2`
+    : `fade=t=in:st=0:d=0.3,fade=t=out:st=${(safeDur-0.3).toFixed(3)}:d=0.3`;
   
   const videoFilter = 
     `${zoomFilter},crop=${WIDTH}:${HEIGHT}:(iw-${WIDTH})/2:(ih-${HEIGHT})/2,` +
     `setsar=1,${cinematicFilters},${fadeFilter}`;
   
-  const r = spawnSync("ffmpeg", [
+  let r = spawnSync("ffmpeg", [
     "-y", ...inputArgs, "-t", duration.toFixed(3),
     "-vf", videoFilter, "-r", String(FPS),
     "-c:v", "libx264", "-preset", "fast", "-crf", isHook ? "18" : "20",
@@ -525,16 +590,29 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   ], { stdio: ["ignore", "pipe", "pipe"] });
   
   if (r.status !== 0) {
+    // Fallback بسيط
     const basicFilter = 
       `scale=${Math.round(WIDTH*1.1)}:${Math.round(HEIGHT*1.1)}:force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1,${cinematicFilters},${fadeFilter}`;
     
-    spawnSync("ffmpeg", [
+    r = spawnSync("ffmpeg", [
       "-y", "-stream_loop", "-1", "-i", videoPath,
       "-t", duration.toFixed(3), "-vf", basicFilter,
       "-r", String(FPS), "-c:v", "libx264", "-preset", "fast", "-crf", "22",
       "-pix_fmt", "yuv420p", "-an", outPath,
     ], { stdio: ["ignore", "pipe", "pipe"] });
+    
+    if (r.status !== 0) {
+      console.error(`❌ BG failed for clip ${idx}`);
+      // Last resort: فقط scale
+      spawnSync("ffmpeg", [
+        "-y", "-stream_loop", "-1", "-i", videoPath,
+        "-t", duration.toFixed(3),
+        "-vf", `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT},setsar=1`,
+        "-r", String(FPS), "-c:v", "libx264", "-preset", "fast", "-crf", "25",
+        "-pix_fmt", "yuv420p", "-an", outPath,
+      ], { stdio: ["ignore", "pipe", "pipe"] });
+    }
   }
   
   return outPath;
@@ -545,25 +623,36 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function framesToMov(frameDir, outPath) {
-  spawnSync("ffmpeg",[
+  const r = spawnSync("ffmpeg",[
     "-y","-framerate",String(FPS),
     "-i",`${frameDir}/frame_%06d.png`,
     "-vf",`scale=${WIDTH}:${HEIGHT},format=rgba`,
     "-c:v","png","-an",outPath,
   ],{stdio:["ignore","pipe","pipe"]});
+  
+  if (r.status !== 0) {
+    console.error("❌ framesToMov failed");
+    console.error(r.stderr ? r.stderr.toString().slice(-200) : "");
+  }
   return outPath;
 }
 
 function overlayOnBackground(bgMp4, captionMov, outPath) {
-  spawnSync("ffmpeg",[
+  const r = spawnSync("ffmpeg",[
     "-y","-i",bgMp4,"-i",captionMov,
     "-filter_complex","[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
     "-map","[out]","-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-an",outPath,
   ],{stdio:["ignore","pipe","pipe"]});
+  
+  if (r.status !== 0) {
+    console.error("❌ overlay failed");
+    console.error(r.stderr ? r.stderr.toString().slice(-200) : "");
+  }
   return outPath;
 }
 
 function xfadeConcat(clipPaths, clipDurations) {
+  if (clipPaths.length === 0) return "";
   if (clipPaths.length === 1) return clipPaths[0];
   
   const TRANSITIONS = ["fade","fadeblack","dissolve","wiperight","slideleft"];
@@ -574,6 +663,7 @@ function xfadeConcat(clipPaths, clipDurations) {
   
   for (let i = 1; i < clipPaths.length; i++) {
     offset += clipDurations[i-1] - XFADE;
+    if (offset < 0) offset = 0;
     const out = i === clipPaths.length-1 ? "[vout]" : `[v${i}]`;
     const trans = TRANSITIONS[(i-1) % TRANSITIONS.length];
     filters.push(`${last}[${i}:v]xfade=transition=${trans}:duration=${XFADE}:offset=${offset.toFixed(3)}${out}`);
@@ -588,6 +678,7 @@ function xfadeConcat(clipPaths, clipDurations) {
   ],{stdio:["ignore","pipe","pipe"]});
   
   if (r.status !== 0) {
+    console.error("⚠️  xfade failed - using concat");
     const lst = `${TMP}/list.txt`;
     writeFileSync(lst, clipPaths.map(p=>`file '${p}'`).join("\n"));
     const raw = `${TMP}/raw.mp4`;
@@ -604,22 +695,34 @@ function mergeAudio(videoPath, audioPath, outPath) {
   
   let finalVideo = videoPath;
   
+  // إذا الفيديو أقصر من الصوت → loop
   if (vDur < aDur - 0.3) {
+    console.log(`⚠️  Video shorter - looping...`);
     const looped = `${TMP}/video_looped.mp4`;
     const r = spawnSync("ffmpeg", [
       "-y", "-stream_loop", "-1", "-i", videoPath,
       "-t", aDur.toFixed(3), "-c:v", "libx264", "-preset", "fast", "-crf", "22",
       "-pix_fmt", "yuv420p", "-an", looped,
     ], { stdio: ["ignore", "pipe", "pipe"] });
-    if (r.status === 0) finalVideo = looped;
+    if (r.status === 0) {
+      finalVideo = looped;
+      console.log(`  ✅ Looped to ${aDur.toFixed(2)}s`);
+    }
   }
   
-  spawnSync("ffmpeg", [
+  // دمج
+  const r = spawnSync("ffmpeg", [
     "-y", "-i", finalVideo, "-i", audioPath,
     "-map", "0:v:0", "-map", "1:a:0",
     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
     "-t", aDur.toFixed(3), outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
+  
+  if (r.status !== 0) {
+    console.error("❌ Merge failed");
+    console.error(r.stderr ? r.stderr.toString().slice(-200) : "");
+    process.exit(1);
+  }
   
   console.log(`✅ Final: ${aDur.toFixed(3)}s → ${outPath}`);
 }
@@ -652,19 +755,22 @@ async function main() {
   await browser.close();
   console.log(`✅ ${pngCache.size} PNGs done\n`);
 
+  // حساب عدد المقاطع
   const totalClips = Math.max(1, Math.floor(effectiveDuration / clip_duration));
   const actualClipDuration = effectiveDuration / totalClips;
   
   console.log(`📊 ${totalClips} clips × ${actualClipDuration.toFixed(2)}s`);
+  console.log(`🎥 Videos: ${videos.length}`);
   
-  const finalClips = [], clipDurations = [];
+  const finalClips = [];
+  const clipDurations = [];
 
   console.log("\n🎬 Processing clips...");
   
   for (let i = 0; i < totalClips; i++) {
     const clipStart = i * actualClipDuration;
     const clipEnd   = Math.min((i + 1) * actualClipDuration, effectiveDuration);
-    const clipDur   = clipEnd - clipStart;
+    const clipDur   = Math.max(clipEnd - clipStart, 0.5);
     const nFrames   = Math.ceil(clipDur * FPS);
     const startF    = Math.floor(clipStart * FPS);
     const clipMap   = frameStateMap.slice(startF, startF + nFrames);
@@ -689,7 +795,7 @@ async function main() {
     process.stdout.write("✓\n");
   }
 
-  console.log(`\n✨ Concatenating...`);
+  console.log(`\n✨ Concatenating ${finalClips.length} clips...`);
   const dissolved = xfadeConcat(finalClips, clipDurations);
 
   console.log("🎵 Merging audio...");
@@ -698,6 +804,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("\n❌ Fatal:", err);
+  console.error("\n❌ Fatal error:");
+  console.error(err);
   process.exit(1);
 });
