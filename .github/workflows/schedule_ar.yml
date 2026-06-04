@@ -1,0 +1,275 @@
+name: 🇸🇦 Arabic Videos (Auto + Manual)
+
+on:
+  # ── تلقائي (فعّل بعد الاختبار بإزالة #) ──────────────────
+  # schedule:
+  #   - cron: "0 12 * * *"    # فيديو 1 - 12:00 UTC
+  #   - cron: "0 15 * * *"    # فيديو 2 - 15:00 UTC
+  #   - cron: "30 18 * * *"   # فيديو 3 - 18:30 UTC
+  #   - cron: "0 20 * * *"    # فيديو 4 - 20:00 UTC
+  #   - cron: "0 22 * * *"    # فيديو 5 - 22:00 UTC
+
+  # ── يدوي (يعمل دائماً) ────────────────────────────────────
+  workflow_dispatch:
+    inputs:
+      video_number:
+        description: "🎬 Video number (empty = auto next)"
+        required: false
+        default: ""
+        type: string
+
+      force:
+        description: "⚡ Force re-render?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+      force_ai:
+        description: "🤖 Force re-generate AI?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+      publish:
+        description: "📘 Publish to Facebook?"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+      formats:
+        description: "📐 Export formats"
+        required: true
+        default: "9x16"
+        type: string
+
+jobs:
+  generate_ar:
+    name: 🇸🇦 Arabic Video
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+
+      # ═══════════════════════════════════════════════════════════════
+      # 1. Checkout
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      # ═══════════════════════════════════════════════════════════════
+      # 2. Setup Python
+      # ═══════════════════════════════════════════════════════════════
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      # ═══════════════════════════════════════════════════════════════
+      # 3. Install PyTorch CPU
+      # ═══════════════════════════════════════════════════════════════
+      - name: 🔥 Install PyTorch (CPU)
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+      # ═══════════════════════════════════════════════════════════════
+      # 4. Install WhisperX
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📦 Install WhisperX
+        run: |
+          pip install git+https://github.com/m-bain/whisperX.git
+
+      # ═══════════════════════════════════════════════════════════════
+      # 5. Install Python Dependencies
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📦 Install Python deps
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install chromium
+
+      # ═══════════════════════════════════════════════════════════════
+      # 6. Setup Node.js
+      # ═══════════════════════════════════════════════════════════════
+      - name: 🟢 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # ═══════════════════════════════════════════════════════════════
+      # 7. Install Node Dependencies
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📦 Install Node deps
+        working-directory: remotion
+        run: npm install
+
+      # ═══════════════════════════════════════════════════════════════
+      # 8. Install System Dependencies
+      # ═══════════════════════════════════════════════════════════════
+      - name: 🔧 Install system deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            ffmpeg libsndfile1 libasound2-dev libasound2t64 \
+            libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
+            libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
+            libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
+            libxcomposite1 libxdamage1 libxext6 libxfixes3 \
+            libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
+            fonts-noto fonts-noto-core fonts-hosny-amiri \
+            fonts-sil-scheherazade
+          sudo fc-cache -fv
+
+      # ═══════════════════════════════════════════════════════════════
+      # 9. Install Playwright Chromium (Node)
+      # ═══════════════════════════════════════════════════════════════
+      - name: 🌐 Install Playwright Chromium
+        working-directory: remotion
+        run: npx playwright install chromium
+
+      # ═══════════════════════════════════════════════════════════════
+      # 10. Cache WhisperX Models
+      # ═══════════════════════════════════════════════════════════════
+      - name: 💾 Cache WhisperX models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/whisperx
+            ~/.cache/huggingface
+            ~/.cache/torch
+          key: whisperx-models-v5
+          restore-keys: whisperx-models-
+
+      # ═══════════════════════════════════════════════════════════════
+      # 11. Restore DB
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📥 Restore DB
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vsg-database
+          if_no_artifact_found: ignore
+          search_artifacts: true
+
+      # ═══════════════════════════════════════════════════════════════
+      # 12. 🇸🇦 Run Arabic Generator
+      # ═══════════════════════════════════════════════════════════════
+      - name: 🇸🇦 Generate + Publish Arabic
+        env:
+          # ── Gemini (30 keys) ───────────────────────────────
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_1:   ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2:   ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3:   ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4:   ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5:   ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6:   ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7:   ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_API_KEY_8:   ${{ secrets.GEMINI_API_KEY_8 }}
+          GEMINI_API_KEY_9:   ${{ secrets.GEMINI_API_KEY_9 }}
+          GEMINI_API_KEY_10:  ${{ secrets.GEMINI_API_KEY_10 }}
+          GEMINI_API_KEY_11:  ${{ secrets.GEMINI_API_KEY_11 }}
+          GEMINI_API_KEY_12:  ${{ secrets.GEMINI_API_KEY_12 }}
+          GEMINI_API_KEY_13:  ${{ secrets.GEMINI_API_KEY_13 }}
+          GEMINI_API_KEY_14:  ${{ secrets.GEMINI_API_KEY_14 }}
+          GEMINI_API_KEY_15:  ${{ secrets.GEMINI_API_KEY_15 }}
+          GEMINI_API_KEY_16:  ${{ secrets.GEMINI_API_KEY_16 }}
+          GEMINI_API_KEY_17:  ${{ secrets.GEMINI_API_KEY_17 }}
+          GEMINI_API_KEY_18:  ${{ secrets.GEMINI_API_KEY_18 }}
+          GEMINI_API_KEY_19:  ${{ secrets.GEMINI_API_KEY_19 }}
+          GEMINI_API_KEY_20:  ${{ secrets.GEMINI_API_KEY_20 }}
+          GEMINI_API_KEY_21:  ${{ secrets.GEMINI_API_KEY_21 }}
+          GEMINI_API_KEY_22:  ${{ secrets.GEMINI_API_KEY_22 }}
+          GEMINI_API_KEY_23:  ${{ secrets.GEMINI_API_KEY_23 }}
+          GEMINI_API_KEY_24:  ${{ secrets.GEMINI_API_KEY_24 }}
+          GEMINI_API_KEY_25:  ${{ secrets.GEMINI_API_KEY_25 }}
+          GEMINI_API_KEY_26:  ${{ secrets.GEMINI_API_KEY_26 }}
+          GEMINI_API_KEY_27:  ${{ secrets.GEMINI_API_KEY_27 }}
+          GEMINI_API_KEY_28:  ${{ secrets.GEMINI_API_KEY_28 }}
+          GEMINI_API_KEY_29:  ${{ secrets.GEMINI_API_KEY_29 }}
+          # ── Video APIs ─────────────────────────────────────
+          PIXABAY_API_KEY:    ${{ secrets.PIXABAY_API_KEY }}
+          PIXABAY_API_KEY_1:  ${{ secrets.PIXABAY_API_KEY_1 }}
+          PEXELS_API_KEY:     ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_API_KEY_1:   ${{ secrets.PEXELS_API_KEY_1 }}
+          # ── Groq ───────────────────────────────────────────
+          GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY_1:     ${{ secrets.GROQ_API_KEY_1 }}
+          # ── Facebook العربية ───────────────────────────────
+          FB_PAGE_ID:         ${{ secrets.FB_PAGE_ID_AR1 }}
+          FB_PAGE_TOKEN:      ${{ secrets.FB_PAGE_TOKEN_AR1 }}
+        run: |
+          FLAGS="--lang ar --publish-fb"
+
+          # إذا تشغيل يدوي مع رقم فيديو محدد
+          if [ -n "${{ github.event.inputs.video_number }}" ]; then
+            FLAGS="$FLAGS --video-number ${{ github.event.inputs.video_number }}"
+          else
+            FLAGS="$FLAGS --auto-next"
+          fi
+
+          # إذا تشغيل يدوي مع خيارات
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            FLAGS="$FLAGS --force"
+          fi
+          if [ "${{ github.event.inputs.force_ai }}" = "true" ]; then
+            FLAGS="$FLAGS --force-ai"
+          fi
+          if [ "${{ github.event.inputs.publish }}" = "false" ]; then
+            FLAGS="$FLAGS --no-publish"
+          fi
+
+          python main.py "scripts/videos_ar.xlsx" \
+            --output-dir output \
+            --formats "${{ github.event.inputs.formats || '9x16' }}" \
+            $FLAGS
+
+      # ═══════════════════════════════════════════════════════════════
+      # 13. Upload Videos
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📤 Upload videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ar-videos-${{ github.run_number }}
+          path: output/**/*.mp4
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ═══════════════════════════════════════════════════════════════
+      # 14. Upload Subtitles
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📤 Upload subtitles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ar-subtitles-${{ github.run_number }}
+          path: output/**/*.srt
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # ═══════════════════════════════════════════════════════════════
+      # 15. Upload Thumbnails
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📤 Upload thumbnails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ar-thumbnails-${{ github.run_number }}
+          path: output/**/*.png
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # ═══════════════════════════════════════════════════════════════
+      # 16. Save DB
+      # ═══════════════════════════════════════════════════════════════
+      - name: 📤 Save DB
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsg-database
+          path: vsg.db
+          retention-days: 90
+          overwrite: true
