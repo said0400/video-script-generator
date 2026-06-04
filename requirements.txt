@@ -1,32 +1,67 @@
-# ── Core Dependencies ────────────────────────────────────────────
-google-genai
-groq
-openpyxl
-requests
-playwright
-# ── Audio / Video ────────────────────────────────────────────────
-ffmpeg-python
-numpy<2.0
-# ── ✨ WhisperX Dependencies (سيُثبّت من GitHub) ────────────────
-# لا نضع whisperx هنا - يُثبّت في GitHub Actions
+# ══════════════════════════════════════════════════════════════════════════════
+# requirements.txt — Video Script Generator
+# ══════════════════════════════════════════════════════════════════════════════
+# ملاحظة:
+#   - torch + torchaudio يُثبَّتان في GitHub Actions من whl/cpu
+#   - whisperx يُثبَّت من GitHub في GitHub Actions
+#   - لا تضع ffmpeg هنا — يُثبَّت كـ system package
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Google Gemini (TTS + AI) ──────────────────────────────────────────────────
+google-genai>=0.8.0
+
+
+# ── Groq (AI Enrichment) ──────────────────────────────────────────────────────
+groq>=0.11.0
+
+
+# ── Excel Reader ──────────────────────────────────────────────────────────────
+openpyxl>=3.1.0
+
+
+# ── HTTP Requests ─────────────────────────────────────────────────────────────
+requests>=2.31.0
+
+
+# ── Playwright (Thumbnail + Render) ───────────────────────────────────────────
+playwright>=1.44.0
+
+
+# ── WhisperX Dependencies ─────────────────────────────────────────────────────
+# whisperx نفسه يُثبَّت في GitHub Actions:
+#   pip install git+https://github.com/m-bain/whisperX.git
+# لكن dependencies يجب أن تكون هنا:
+
 faster-whisper>=1.0.0
 ctranslate2>=4.4.0
 transformers>=4.36.0
 tokenizers>=0.15.0
 huggingface_hub>=0.20.0
-# ── PyTorch Audio (مطلوب لـ WhisperX alignment) ──────────────────
-# torch و torchaudio يُثبّتان في GitHub Actions من whl/cpu
-# ── Alignment Models (مطلوبة لـ word-level sync) ─────────────────
+
+
+# ── PyAnnote (Word-level alignment — مطلوب لـ WhisperX) ──────────────────────
+# يحتاج HF_TOKEN في البيئة لتحميل النماذج
 pyannote.audio>=3.1.0
 pyannote.core>=5.0.0
 pyannote.pipeline>=3.0.1
-# ── Audio Processing ──────────────────────────────────────────────
+
+
+# ── Audio Processing ──────────────────────────────────────────────────────────
 soundfile>=0.12.1
 librosa>=0.10.0
 audioread>=3.0.0
 scipy>=1.11.0
-# ── NLP / Text ───────────────────────────────────────────────────
+
+
+# ── Numpy (مقيّد لتوافق WhisperX) ────────────────────────────────────────────
+numpy>=1.24.0,<2.0.0
+
+
+# ── NLP ───────────────────────────────────────────────────────────────────────
 nltk>=3.8.1
-# ── Utilities ────────────────────────────────────────────────────
+
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
 tqdm>=4.65.0
 more-itertools>=9.1.0
