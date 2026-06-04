@@ -1,10 +1,5 @@
-// remotion/render.mjs — KCS + Per-Word Sync with WhisperX
-// ✨ النسخة النهائية:
-//    - مزامنة دقيقة مع كل كلمة (من WhisperX)
-//    - عنوان من Excel (أحمر ساطع + دائري)
-//    - خلفية سوداء داكنة + نص أبيض + Karaoke ذهبي
-//    - الكلمات القوية: خلفية حمراء + ذهبي (وحدها)
-//    - كل 3 ثوانٍ فيديو جديد + Zoom in
+// remotion/render.mjs — Full Paragraph + Karaoke + Yellow BG + Cairo Font
+// ✨ خلفية صفراء + نص أسود + كلمة حالية حمراء مشعة
 
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync,
          symlinkSync, existsSync } from "fs";
@@ -48,63 +43,12 @@ const safeOut = outputPath.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").sli
 const TMP     = `/tmp/vsg_${safeOut}`;
 mkdirSync(TMP, { recursive: true });
 
-console.log(`📌 Display Title: ${emoji_left} ${display_title} ${emoji_right}`);
-console.log(`🎬 Clip duration: ${clip_duration}s | Hook: ${has_hook ? "YES" : "NO"}`);
-console.log(`🎯 Word timeline: ${word_timeline.length} events | Aligned: ${aligned.length} sentences`);
+console.log(`📌 Title: ${emoji_left} ${display_title} ${emoji_right}`);
+console.log(`🎬 Clip: ${clip_duration}s | Hook: ${has_hook ? "YES" : "NO"}`);
+console.log(`🎯 Aligned: ${aligned.length} segments`);
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎯 KCS CONFIGURATION
-// ═════════════════════════════════════════════════════════════════════════════
-
-const KCS = {
-  FADE_IN_FRAMES: 3,
-};
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🎨 COLORS
-// ═════════════════════════════════════════════════════════════════════════════
-
-const DEFAULT_COLORS = [
-  "#FFD700", "#00E5FF", "#FF6B00", "#39FF14",
-];
-
-const POWER_COLORS = (accent_colors && accent_colors.length >= 2)
-  ? accent_colors
-  : DEFAULT_COLORS;
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🔥 POWER WORDS DETECTION
-// ═════════════════════════════════════════════════════════════════════════════
-
-function normalizeWord(word) {
-  if (!word) return "";
-  return word
-    .toString()
-    .replace(/[.,!?؟،;:"'(){}[\]<>«»…]/g, "")
-    .trim()
-    .toLowerCase();
-}
-
-function isPowerWord(word) {
-  if (!power_words || power_words.length === 0) return false;
-  
-  const normalized = normalizeWord(word);
-  if (!normalized || normalized.length < 2) return false;
-  
-  return power_words.some(pw => {
-    const pwNorm = normalizeWord(pw);
-    if (!pwNorm) return false;
-    if (normalized === pwNorm) return true;
-    if (pwNorm.length >= 3 && normalized.includes(pwNorm)) return true;
-    if (normalized.length >= 3 && pwNorm.includes(normalized)) return true;
-    return false;
-  });
-}
-
-console.log(`🔥 Power Words (${power_words.length}): ${power_words.slice(0, 8).join(", ")}${power_words.length > 8 ? "..." : ""}`);
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🛠️ HELPERS
+// HELPERS
 // ═════════════════════════════════════════════════════════════════════════════
 
 function probeDuration(filePath) {
@@ -119,464 +63,306 @@ const realAudioDuration = probeDuration(audio);
 const effectiveDuration = realAudioDuration > 5 ? realAudioDuration : duration_s;
 const totalFrames       = Math.ceil(effectiveDuration * FPS);
 
-console.log(`📋 Sentences   : ${sentences.length}`);
-console.log(`🎵 Audio       : ${realAudioDuration.toFixed(3)}s`);
-console.log(`⏱️  Effective   : ${effectiveDuration.toFixed(3)}s`);
-console.log(`🎞️  Frames      : ${totalFrames}`);
+console.log(`📋 Sentences: ${sentences.length}`);
+console.log(`🎵 Audio: ${realAudioDuration.toFixed(3)}s`);
+console.log(`🎞️  Frames: ${totalFrames}`);
 
 const isArabicText = t => /[\u0600-\u06FF]/.test(t);
 const esc = s => (s||"").toString()
   .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎯 BUILD WORD-LEVEL TIMELINE FROM WHISPER
+// 🔥 POWER WORDS
 // ═════════════════════════════════════════════════════════════════════════════
 
-function buildWordTimeline() {
-  const wordTimings = [];
+function normalizeWord(word) {
+  if (!word) return "";
+  return word.toString()
+    .replace(/[.,!?؟،;:"'(){}[\]<>«»…]/g, "")
+    .trim().toLowerCase();
+}
+
+function isPowerWord(word) {
+  if (!power_words || power_words.length === 0) return false;
+  const normalized = normalizeWord(word);
+  if (!normalized || normalized.length < 2) return false;
+  return power_words.some(pw => {
+    const pwNorm = normalizeWord(pw);
+    if (!pwNorm) return false;
+    if (normalized === pwNorm) return true;
+    if (pwNorm.length >= 3 && normalized.includes(pwNorm)) return true;
+    if (normalized.length >= 3 && pwNorm.includes(normalized)) return true;
+    return false;
+  });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 🎬 BUILD FRAME STATE MAP
+// ═════════════════════════════════════════════════════════════════════════════
+
+function buildFrameStateMap() {
+  const segments = (aligned && aligned.length > 0) ? aligned : [];
   
-  if (aligned && aligned.length > 0) {
-    console.log("📝 Using Whisper word_timeline for precise sync");
-    
-    for (let sIdx = 0; sIdx < aligned.length; sIdx++) {
-      const sentence = aligned[sIdx];
-      const words = sentence.words || [];
+  if (segments.length === 0) {
+    console.log("⚠️  No aligned segments - using equal split");
+    const perSentence = effectiveDuration / sentences.length;
+    for (let i = 0; i < sentences.length; i++) {
+      const words = sentences[i].split(/\s+/).filter(Boolean);
+      const start = i * perSentence;
+      const end = (i + 1) * perSentence;
+      const wordDur = (end - start) / words.length;
       
-      if (words.length > 0) {
-        for (let wIdx = 0; wIdx < words.length; wIdx++) {
-          const w = words[wIdx];
-          wordTimings.push({
-            word: w.word,
-            start: w.start,
-            end: w.end,
-            sentence_idx: sIdx,
-            word_in_sentence: wIdx,
-            total_in_sentence: words.length,
-          });
-        }
+      segments.push({
+        sentence: sentences[i],
+        start: start,
+        end: end,
+        words: words.map((w, j) => ({
+          word: w,
+          start: start + j * wordDur,
+          end: start + (j + 1) * wordDur,
+        })),
+      });
+    }
+  }
+  
+  console.log(`\n📊 Segments:`);
+  segments.forEach((seg, i) => {
+    const preview = seg.sentence ? seg.sentence.substring(0, 50) : "";
+    const wc = seg.words ? seg.words.length : 0;
+    console.log(`  ${i+1}. [${seg.start.toFixed(2)}s → ${seg.end.toFixed(2)}s] ${wc}w: "${preview}..."`);
+  });
+  
+  const map = new Array(totalFrames).fill(null);
+  
+  for (let f = 0; f < totalFrames; f++) {
+    const t = f / FPS;
+    
+    let currentSeg = null;
+    let currentSegIdx = 0;
+    
+    for (let i = 0; i < segments.length; i++) {
+      if (t >= segments[i].start && t < segments[i].end) {
+        currentSeg = segments[i];
+        currentSegIdx = i;
+        break;
+      }
+    }
+    
+    if (!currentSeg) {
+      if (t < segments[0].start) {
+        currentSeg = segments[0];
+        currentSegIdx = 0;
       } else {
-        const sentenceWords = sentence.sentence.trim().split(/\s+/).filter(Boolean);
-        const sStart = sentence.start;
-        const sEnd = sentence.end;
-        const wordDur = (sEnd - sStart) / sentenceWords.length;
-        
-        for (let wIdx = 0; wIdx < sentenceWords.length; wIdx++) {
-          wordTimings.push({
-            word: sentenceWords[wIdx],
-            start: sStart + (wIdx * wordDur),
-            end: sStart + ((wIdx + 1) * wordDur),
-            sentence_idx: sIdx,
-            word_in_sentence: wIdx,
-            total_in_sentence: sentenceWords.length,
-          });
+        for (let i = segments.length - 1; i >= 0; i--) {
+          if (t >= segments[i].start) {
+            currentSeg = segments[i];
+            currentSegIdx = i;
+            break;
+          }
+        }
+        if (!currentSeg) {
+          currentSeg = segments[segments.length - 1];
+          currentSegIdx = segments.length - 1;
         }
       }
     }
-  } else {
-    console.log("⚠️  No Whisper timeline - using equal distribution");
     
-    let totalWords = 0;
-    sentences.forEach(s => {
-      totalWords += s.trim().split(/\s+/).filter(Boolean).length;
-    });
+    let currentWordIdx = -1;
+    const segWords = currentSeg.words || [];
     
-    const timePerWord = effectiveDuration / totalWords;
-    let currentTime = 0;
+    for (let i = 0; i < segWords.length; i++) {
+      if (t >= segWords[i].start && t <= segWords[i].end) {
+        currentWordIdx = i;
+        break;
+      }
+      if (t > segWords[i].end) {
+        currentWordIdx = i;
+      }
+    }
     
-    sentences.forEach((sentence, sIdx) => {
-      const sentenceWords = sentence.trim().split(/\s+/).filter(Boolean);
-      sentenceWords.forEach((word, wIdx) => {
-        wordTimings.push({
-          word: word,
-          start: currentTime,
-          end: currentTime + timePerWord,
-          sentence_idx: sIdx,
-          word_in_sentence: wIdx,
-          total_in_sentence: sentenceWords.length,
-        });
-        currentTime += timePerWord;
-      });
-    });
+    const segStartFrame = Math.floor(currentSeg.start * FPS);
+    const framesSince = f - segStartFrame;
+    const fadeProgress = Math.max(0, Math.min(framesSince / 4, 1.0));
+    
+    map[f] = {
+      segment_idx:      currentSegIdx,
+      segment:          currentSeg,
+      current_word_idx: currentWordIdx,
+      fade_progress:    fadeProgress,
+    };
   }
   
-  console.log(`📊 Total words in timeline: ${wordTimings.length}`);
-  return wordTimings;
+  console.log("\n📊 Sample sync:");
+  [0, 0.25, 0.5, 0.75].forEach(pct => {
+    const f = Math.floor(totalFrames * pct);
+    if (map[f]) {
+      const t = (f / FPS).toFixed(2);
+      const seg = map[f].segment;
+      const wIdx = map[f].current_word_idx;
+      const word = (seg.words && seg.words[wIdx]) ? seg.words[wIdx].word : "---";
+      console.log(`  ${t}s → seg ${map[f].segment_idx} | word "${word}"`);
+    }
+  });
+  
+  return map;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 📦 ✨ FIXED: BUILD CHUNKS — مزامنة دقيقة مع كل كلمة
+// 🎨 HTML BUILDER — خلفية صفراء + نص أسود + كلمة حالية حمراء مشعة
 // ═════════════════════════════════════════════════════════════════════════════
 
-function buildChunks(wordTimings) {
-  const chunks = [];
-  let currentSentenceIdx = -1;
-  let buffer = [];
+function buildHTML(opts) {
+  const { segment, currentWordIdx, fadeProgress } = opts;
   
-  const flushBuffer = () => {
-    if (buffer.length > 0) {
-      chunks.push({
-        words: buffer.map(w => w.word),
-        wordTimings: [...buffer],
-        start: buffer[0].start,
-        end: buffer[buffer.length - 1].end,
-        hasPower: false,
-        sentence_idx: buffer[0].sentence_idx,
-      });
-      buffer = [];
-    }
-  };
+  const segWords = segment.words || [];
+  const allWordsText = segWords.map(w => w.word);
   
-  for (let i = 0; i < wordTimings.length; i++) {
-    const wt = wordTimings[i];
-    const isPower = isPowerWord(wt.word);
-    const isNewSentence = currentSentenceIdx !== -1 && 
-                          currentSentenceIdx !== wt.sentence_idx;
-    
-    // ✨ عند جملة جديدة: اطبع الـ buffer السابق
-    if (isNewSentence) {
-      flushBuffer();
-    }
-    
-    currentSentenceIdx = wt.sentence_idx;
-    
-    if (isPower) {
-      // ✨ كلمة قوية: اطبع ما قبلها + اعرضها وحدها
-      flushBuffer();
-      chunks.push({
-        words: [wt.word],
-        wordTimings: [wt],
-        start: wt.start,
-        end: wt.end,
-        hasPower: true,
-        sentence_idx: wt.sentence_idx,
-      });
-    } else {
-      // كلمة عادية: أضفها للجملة الحالية
-      buffer.push(wt);
-    }
-  }
-  
-  // اطبع آخر buffer
-  flushBuffer();
-  
-  console.log(`📦 Total chunks: ${chunks.length}`);
-  return chunks;
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 📐 LINE SPLITTING — توزيع ذكي على عدة سطور
-// ═════════════════════════════════════════════════════════════════════════════
-
-function splitChunkIntoLines(words) {
-  if (words.length <= 3) {
-    return [words];
-  }
-  
-  if (words.length <= 6) {
-    const mid = Math.ceil(words.length / 2);
-    return [words.slice(0, mid), words.slice(mid)];
-  }
-  
-  if (words.length <= 9) {
-    const third = Math.ceil(words.length / 3);
-    return [
-      words.slice(0, third),
-      words.slice(third, third * 2),
-      words.slice(third * 2),
-    ];
-  }
-  
-  if (words.length <= 12) {
-    const quarter = Math.ceil(words.length / 4);
-    return [
-      words.slice(0, quarter),
-      words.slice(quarter, quarter * 2),
-      words.slice(quarter * 2, quarter * 3),
-      words.slice(quarter * 3),
-    ];
-  }
-  
-  // جمل طويلة: 5 سطور
-  const fifth = Math.ceil(words.length / 5);
-  return [
-    words.slice(0, fifth),
-    words.slice(fifth, fifth * 2),
-    words.slice(fifth * 2, fifth * 3),
-    words.slice(fifth * 3, fifth * 4),
-    words.slice(fifth * 4),
-  ];
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🎨 HTML BUILDER — جملة كاملة + خلفية تتماشى مع النص
-// ═════════════════════════════════════════════════════════════════════════════
-
-function buildKaraokeHTML(opts) {
-  const {
-    chunk,
-    currentWordIdx,
-    fadeProgress,
-  } = opts;
-  
-  const allWords = chunk.words;
-  const ar = isArabicText(allWords.join(" "));
+  const ar = isArabicText(allWordsText.join(" "));
   const dir = ar ? "rtl" : "ltr";
-  const font = ar
-    ? `"Noto Naskh Arabic","Amiri",serif`
-    : `"Inter","Helvetica Neue",Arial,sans-serif`;
+  const font = ar ? `"Cairo", sans-serif` : `"Inter", sans-serif`;
   
-  // العنوان
   const titleAr = isArabicText(display_title);
-  const titleFont = titleAr
-    ? `"Noto Naskh Arabic","Amiri",serif`
-    : `"Inter","Helvetica Neue",Arial,sans-serif`;
+  const titleFont = titleAr ? `"Cairo", sans-serif` : `"Inter", sans-serif`;
   const titleDir = titleAr ? "rtl" : "ltr";
   
-  // تحقق إذا الـ chunk يحتوي كلمة قوية واحدة فقط
-  const showPowerWordSolo = chunk.hasPower && allWords.length === 1;
-  
-  // ✨ حساب حجم الخط ديناميكياً حسب طول الجملة
+  // حجم الخط
   let fontSize;
-  if (allWords.length <= 4) {
-    fontSize = ar ? 80 : 76;
-  } else if (allWords.length <= 8) {
-    fontSize = ar ? 68 : 64;
-  } else if (allWords.length <= 12) {
-    fontSize = ar ? 58 : 54;
-  } else if (allWords.length <= 16) {
-    fontSize = ar ? 50 : 46;
-  } else {
-    fontSize = ar ? 44 : 40;
-  }
+  const wc = allWordsText.length;
+  if (wc <= 5)       fontSize = ar ? 85 : 80;
+  else if (wc <= 10) fontSize = ar ? 72 : 68;
+  else if (wc <= 15) fontSize = ar ? 60 : 56;
+  else if (wc <= 20) fontSize = ar ? 52 : 48;
+  else               fontSize = ar ? 44 : 40;
   
-  let mainContentHTML = "";
+  // بناء الكلمات مع karaoke
+  let wordIdx = 0;
   
-  if (showPowerWordSolo) {
-    // 🟡 الكلمة القوية وحدها
-    mainContentHTML = `
-      <div class="power-word-container">
-        <div class="power-word-box">
-          <span class="power-word-text">${esc(allWords[0])}</span>
-        </div>
-      </div>
-    `;
-  } else {
-    // 📝 الجملة الكاملة - كل الكلمات تظهر معاً
-    const lines = splitChunkIntoLines(allWords);
+  const wordsHTML = allWordsText.map(word => {
+    const isCurrent = wordIdx === currentWordIdx;
+    const isPast    = wordIdx < currentWordIdx;
     
-    let wordCounter = 0;
-    const linesHTML = lines.map(lineWords => {
-      const wordsHTML = lineWords.map(word => {
-        const isCurrent = wordCounter === currentWordIdx;
-        const isPast    = wordCounter < currentWordIdx;
-        
-        // ✨ Karaoke effect
-        let opacity;
-        let color;
-        if (isCurrent) {
-          opacity = 1.0;
-          color = "#FFD700";        // ⭐ ذهبي للكلمة الحالية
-        } else if (isPast) {
-          opacity = 1.0;
-          color = "#FFFFFF";        // أبيض للسابقة
-        } else {
-          opacity = 0.70;
-          color = "#CCCCCC";        // رمادي فاتح للقادمة
-        }
-        
-        wordCounter++;
-        
-        return `<span class="word" style="opacity: ${opacity}; color: ${color};">${esc(word)}</span>`;
-      }).join(" ");
-      
-      return `<div class="line-container">
-        <span class="line-bg">${wordsHTML}</span>
-      </div>`;
-    }).join("");
+    let color;
+    let textShadow;
+    let opacity;
     
-    mainContentHTML = `
-      <div class="text-container" style="font-size: ${fontSize}px;">
-        ${linesHTML}
-      </div>
-    `;
-  }
+    if (isCurrent) {
+      // ✨ الكلمة الحالية: حمراء مشعة مضيئة
+      color = "#FF1744";
+      textShadow = "0 0 20px rgba(255,23,68,0.9), 0 0 40px rgba(255,23,68,0.6), 0 0 60px rgba(255,23,68,0.3)";
+      opacity = 1.0;
+    } else if (isPast) {
+      // الكلمات السابقة: أسود عادي
+      color = "#000000";
+      textShadow = "none";
+      opacity = 1.0;
+    } else {
+      // الكلمات القادمة: رمادي غامق
+      color = "#555555";
+      textShadow = "none";
+      opacity = 0.75;
+    }
+    
+    wordIdx++;
+    
+    return `<span class="word" style="color:${color};opacity:${opacity};text-shadow:${textShadow};">${esc(word)}</span>`;
+  }).join(" ");
   
   return `<!DOCTYPE html>
 <html lang="${ar?"ar":"en"}">
 <head>
   <meta charset="UTF-8"/>
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@700;800;900&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@700;800;900&family=Inter:wght@700;800;900&display=swap" rel="stylesheet"/>
   <style>
     *{margin:0;padding:0;box-sizing:border-box;}
     html,body{
-      width:${WIDTH}px;
-      height:${HEIGHT}px;
-      overflow:hidden;
-      background:transparent;
+      width:${WIDTH}px;height:${HEIGHT}px;
+      overflow:hidden;background:transparent;
     }
     
-    /* تدرج علوي وسفلي خفيف */
     .overlay-top{
-      position:absolute;
-      top:0;left:0;right:0;
-      height:35%;
-      background:linear-gradient(to bottom,
-        rgba(0,0,0,0.7) 0%,
-        rgba(0,0,0,0.3) 60%,
-        transparent 100%
-      );
-      pointer-events:none;
-      z-index:1;
+      position:absolute;top:0;left:0;right:0;height:35%;
+      background:linear-gradient(to bottom,rgba(0,0,0,0.7) 0%,rgba(0,0,0,0.3) 60%,transparent 100%);
+      pointer-events:none;z-index:1;
     }
-    
     .overlay-bottom{
-      position:absolute;
-      bottom:0;left:0;right:0;
-      height:45%;
-      background:linear-gradient(to top,
-        rgba(0,0,0,0.7) 0%,
-        rgba(0,0,0,0.3) 60%,
-        transparent 100%
-      );
-      pointer-events:none;
-      z-index:1;
+      position:absolute;bottom:0;left:0;right:0;height:45%;
+      background:linear-gradient(to top,rgba(0,0,0,0.7) 0%,rgba(0,0,0,0.3) 60%,transparent 100%);
+      pointer-events:none;z-index:1;
     }
     
-    /* ════════════════════════════════════════════════════════════ */
     /* ✨ العنوان */
-    /* ════════════════════════════════════════════════════════════ */
     .title-container{
-      position:absolute;
-      top:450px;
-      left:50%;
-      transform:translateX(-50%);
-      width:90%;
-      max-width:980px;
-      direction:${titleDir};
-      text-align:center;
-      z-index:20;
+      position:absolute;top:400px;left:50%;transform:translateX(-50%);
+      width:90%;max-width:980px;direction:${titleDir};text-align:center;z-index:20;
     }
-    
     .title-box{
-      display:inline-block;
-      background:#FF0000;
-      padding:22px 50px;
+      display:inline-block;background:#FF0000;padding:20px 45px;
       border-radius:9999px;
-      box-shadow:
-        0 0 50px rgba(255,0,0,0.7),
-        0 10px 30px rgba(0,0,0,0.5);
+      box-shadow:0 0 50px rgba(255,0,0,0.7),0 10px 30px rgba(0,0,0,0.5);
     }
-    
     .title-text{
-      font-family:${titleFont};
-      font-size:${titleAr ? "46px" : "42px"};
-      font-weight:900;
-      color:#FFFFFF;
-      letter-spacing:${titleAr ? "0" : "-0.02em"};
-      display:inline-flex;
-      align-items:center;
-      gap:16px;
-      white-space:nowrap;
+      font-family:${titleFont};font-size:${titleAr?"48px":"44px"};
+      font-weight:900;color:#FFFFFF;
+      display:inline-flex;align-items:center;gap:16px;white-space:nowrap;
       text-shadow:0 2px 6px rgba(0,0,0,0.4);
     }
-    
-    .title-emoji{
-      font-size:${titleAr ? "54px" : "50px"};
-    }
+    .title-emoji{font-size:${titleAr?"54px":"50px"};}
     
     /* ════════════════════════════════════════════════════════════ */
-    /* 📝 ✨ الجملة الكاملة - خلفية تتماشى مع كل سطر */
+    /* ✨ النص — خلفية صفراء مدمجة كما في الصورة                */
     /* ════════════════════════════════════════════════════════════ */
     .text-container{
       position:absolute;
       left:50%;
       top:62%;
-      transform:translate(-50%, -50%);
-      width:90%;
-      max-width:960px;
+      transform:translate(-50%,-50%);
+      width:85%;
+      max-width:920px;
       direction:${dir};
       text-align:center;
       z-index:10;
       opacity:${fadeProgress};
     }
     
-    /* ✨ Container لكل سطر */
-    .line-container{
-      display:block;
-      text-align:center;
-      margin-bottom:10px;
-    }
-    
-    .line-container:last-child{
-      margin-bottom:0;
-    }
-    
-    /* ✨ الخلفية تتماشى مع طول النص */
-    .line-bg{
-      display:inline-block;
-      background:rgba(0,0,0,0.92);
-      padding:12px 28px;
-      border-radius:9999px;
-      max-width:100%;
+    .text-bg{
+      display:inline;
+      background:rgba(255, 215, 0, 0.95);          /* ✨ خلفية صفراء ذهبية */
+      font-family:${font};
+      font-size:${fontSize}px;
+      font-weight:900;
+      line-height:1.65;
+      padding:12px 25px;
+      border-radius:20px;
+      box-decoration-break:clone;
+      -webkit-box-decoration-break:clone;
+      box-shadow:0 8px 30px rgba(0,0,0,0.3);
     }
     
     .word{
-      font-family:${font};
-      font-weight:900;
-      line-height:1.3;
       display:inline;
-      margin:0 5px;
-      transition:opacity 0.15s ease-out, color 0.15s ease-out;
+      transition:color 0.1s ease-out, opacity 0.1s ease-out, text-shadow 0.15s ease-out;
     }
     
-    /* ════════════════════════════════════════════════════════════ */
-    /* 🔥 الكلمة القوية - خلفية حمراء + ذهبي */
-    /* ════════════════════════════════════════════════════════════ */
+    /* ✨ الكلمة القوية */
     .power-word-container{
-      position:absolute;
-      left:50%;
-      top:62%;
-      transform:translate(-50%, -50%);
-      direction:${dir};
-      text-align:center;
-      z-index:10;
+      position:absolute;left:50%;top:62%;
+      transform:translate(-50%,-50%);
+      direction:${dir};text-align:center;z-index:10;
       opacity:${fadeProgress};
     }
-    
-    .power-word-box{
-      display:inline-block;
-      background:#FF0000;
-      padding:36px 72px;
-      border-radius:9999px;
-      box-shadow:
-        0 0 80px rgba(255,0,0,0.8),
-        0 15px 40px rgba(0,0,0,0.6);
-      animation:powerPulse 0.4s ease-out;
-    }
-    
     .power-word-text{
-      font-family:${font};
-      font-size:${ar ? "140px" : "130px"};
-      font-weight:900;
+      display:inline;
+      background:#FF0000;
       color:#FFD700;
-      letter-spacing:${ar ? "0" : "-0.03em"};
-      display:inline-block;
-      text-shadow:0 4px 12px rgba(0,0,0,0.6);
-    }
-    
-    @keyframes powerPulse {
-      0% {
-        transform:scale(0.7);
-        opacity:0;
-      }
-      60% {
-        transform:scale(1.05);
-        opacity:1;
-      }
-      100% {
-        transform:scale(1);
-        opacity:1;
-      }
+      font-family:${font};
+      font-size:${ar?"150px":"140px"};
+      font-weight:900;
+      line-height:1.5;
+      padding:15px 40px;
+      border-radius:9999px;
+      box-decoration-break:clone;
+      -webkit-box-decoration-break:clone;
+      box-shadow:0 0 80px rgba(255,0,0,0.8),0 15px 40px rgba(0,0,0,0.6);
     }
   </style>
 </head>
@@ -584,7 +370,6 @@ function buildKaraokeHTML(opts) {
   <div class="overlay-top"></div>
   <div class="overlay-bottom"></div>
   
-  <!-- ✨ العنوان من Excel -->
   <div class="title-container">
     <div class="title-box">
       <div class="title-text">
@@ -595,119 +380,21 @@ function buildKaraokeHTML(opts) {
     </div>
   </div>
   
-  ${mainContentHTML}
+  ${allWordsText.length === 1 && isPowerWord(allWordsText[0]) ? `
+    <div class="power-word-container">
+      <span class="power-word-text">${esc(allWordsText[0])}</span>
+    </div>
+  ` : `
+    <div class="text-container">
+      <span class="text-bg">${wordsHTML}</span>
+    </div>
+  `}
 </body>
 </html>`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎬 ✨ FIXED: BUILD FRAME STATE MAP — مزامنة دقيقة من Whisper word timings
-// ═════════════════════════════════════════════════════════════════════════════
-
-function buildFrameStateMap() {
-  const wordTimings = buildWordTimeline();
-  const chunks = buildChunks(wordTimings);
-  
-  if (chunks.length === 0) {
-    return [];
-  }
-  
-  const map = new Array(totalFrames).fill(null);
-  
-  for (let f = 0; f < totalFrames; f++) {
-    const t = f / FPS;
-    
-    // ✨ ابحث عن الـ chunk الحالي بدقة باستخدام timings الفعلية
-    let currentChunk = null;
-    let currentChunkIdx = 0;
-    
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      
-      // الـ chunk يبدأ في chunk.start وينتهي في chunk.end
-      if (t >= chunk.start && t < chunk.end) {
-        currentChunk = chunk;
-        currentChunkIdx = i;
-        break;
-      }
-      
-      // إذا الوقت بين chunks، استخدم الـ chunk السابق
-      if (i < chunks.length - 1 && t >= chunk.end && t < chunks[i + 1].start) {
-        currentChunk = chunk;
-        currentChunkIdx = i;
-        break;
-      }
-    }
-    
-    // إذا لم نجد، استخدم آخر chunk أو أول chunk
-    if (!currentChunk) {
-      if (t < chunks[0].start) {
-        currentChunk = chunks[0];
-        currentChunkIdx = 0;
-      } else {
-        currentChunk = chunks[chunks.length - 1];
-        currentChunkIdx = chunks.length - 1;
-      }
-    }
-    
-    // ✨ ابحث عن الكلمة الحالية بدقة باستخدام word timings
-    let currentWordIdx = 0;
-    for (let i = 0; i < currentChunk.wordTimings.length; i++) {
-      const wt = currentChunk.wordTimings[i];
-      
-      // الكلمة الحالية: الوقت بين start و end
-      if (t >= wt.start && t <= wt.end) {
-        currentWordIdx = i;
-        break;
-      }
-      
-      // إذا تجاوزنا الكلمة، حدّث المؤشر
-      if (t > wt.end) {
-        currentWordIdx = i;
-      }
-    }
-    
-    // Fade in بسيط في بداية كل chunk
-    const chunkStartFrame = Math.floor(currentChunk.start * FPS);
-    const framesSinceChunkStart = f - chunkStartFrame;
-    const fadeProgress = Math.max(0, Math.min(framesSinceChunkStart / KCS.FADE_IN_FRAMES, 1.0));
-    
-    map[f] = {
-      chunk_idx:        currentChunkIdx,
-      chunk:            currentChunk,
-      current_word_idx: currentWordIdx,
-      fade_progress:    fadeProgress,
-      sentence_idx:     currentChunk.sentence_idx,
-    };
-  }
-  
-  // إحصائيات
-  console.log("\n📊 Sample sync points:");
-  const sampleEvents = [
-    0, 
-    Math.floor(totalFrames * 0.25), 
-    Math.floor(totalFrames * 0.5), 
-    Math.floor(totalFrames * 0.75)
-  ];
-  
-  sampleEvents.forEach(f => {
-    if (map[f]) {
-      const t = (f / FPS).toFixed(2);
-      const chunk = map[f].chunk;
-      const wordIdx = map[f].current_word_idx;
-      const word = chunk.words[wordIdx] || "?";
-      const wt = chunk.wordTimings[wordIdx];
-      if (wt) {
-        console.log(`   ${t}s → chunk ${map[f].chunk_idx} | word "${word}" (${wt.start.toFixed(2)}s-${wt.end.toFixed(2)}s)`);
-      }
-    }
-  });
-  
-  return map;
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 🖼️ RENDER UNIQUE PNGs
+// 🖼️ RENDER PNGs
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function renderAllPNGs(page, frameStateMap) {
@@ -715,21 +402,17 @@ async function renderAllPNGs(page, frameStateMap) {
   
   for (const state of frameStateMap) {
     if (!state) continue;
-    
     const fadeStage = state.fade_progress >= 1.0 ? "full" : Math.floor(state.fade_progress * 3);
-    const key = `c${state.chunk_idx}_w${state.current_word_idx}_f${fadeStage}`;
-    
-    if (!uniqueStates.has(key)) {
-      uniqueStates.set(key, state);
-    }
+    const key = `s${state.segment_idx}_w${state.current_word_idx}_f${fadeStage}`;
+    if (!uniqueStates.has(key)) uniqueStates.set(key, state);
   }
   
   console.log(`\n  📸 ${uniqueStates.size} unique states`);
   
-  const initHtml = buildKaraokeHTML({
-    chunk:           { words: ["تحميل"], hasPower: false },
-    currentWordIdx:  0,
-    fadeProgress:    1.0,
+  const initHtml = buildHTML({
+    segment: { words: [{ word: "تحميل" }], start: 0, end: 1 },
+    currentWordIdx: 0,
+    fadeProgress: 1.0,
   });
   writeFileSync(`${TMP}/init.html`, initHtml, "utf-8");
   await page.goto(`file://${TMP}/init.html`, { waitUntil: "networkidle" });
@@ -740,10 +423,10 @@ async function renderAllPNGs(page, frameStateMap) {
   let rendered = 0;
   
   for (const [key, state] of uniqueStates) {
-    const html = buildKaraokeHTML({
-      chunk:           state.chunk,
-      currentWordIdx:  state.current_word_idx,
-      fadeProgress:    state.fade_progress,
+    const html = buildHTML({
+      segment:          state.segment,
+      currentWordIdx:   state.current_word_idx,
+      fadeProgress:     state.fade_progress,
     });
     
     const htmlPath = `${TMP}/${key}.html`;
@@ -752,11 +435,7 @@ async function renderAllPNGs(page, frameStateMap) {
     await page.waitForTimeout(40);
     
     const pngPath = `${TMP}/${key}.png`;
-    await page.screenshot({ 
-      path: pngPath, 
-      type: "png", 
-      omitBackground: true 
-    });
+    await page.screenshot({ path: pngPath, type: "png", omitBackground: true });
     pngCache.set(key, pngPath);
     rendered++;
     
@@ -769,7 +448,7 @@ async function renderAllPNGs(page, frameStateMap) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// BUILD FRAME DIRECTORY
+// BUILD FRAME DIR
 // ═════════════════════════════════════════════════════════════════════════════
 
 function buildFrameDir(clipFrameMap, pngCache, idx) {
@@ -781,13 +460,13 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
     if (!state) continue;
     
     const fadeStage = state.fade_progress >= 1.0 ? "full" : Math.floor(state.fade_progress * 3);
-    const key = `c${state.chunk_idx}_w${state.current_word_idx}_f${fadeStage}`;
+    const key = `s${state.segment_idx}_w${state.current_word_idx}_f${fadeStage}`;
     
     const src = pngCache.get(key);
     const dest = `${dir}/frame_${String(f).padStart(6,"0")}.png`;
     if (!src) continue;
     
-    try { symlinkSync(src, dest); } 
+    try { symlinkSync(src, dest); }
     catch { copyFileSync(src, dest); }
   }
   
@@ -795,98 +474,67 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 🎬 PROCESS BACKGROUND — Zoom In + HOOK
+// PROCESS BACKGROUND
 // ═════════════════════════════════════════════════════════════════════════════
 
 function processBackground(videoPath, duration, outPath, idx, isHook = false) {
-  
   const probeResult = spawnSync("ffprobe", [
-    "-v", "error",
-    "-show_entries", "format=duration",
-    "-of", "default=noprint_wrappers=1:nokey=1",
-    videoPath,
+    "-v", "error", "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1", videoPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
   
   const sourceDuration = parseFloat(probeResult.stdout.toString().trim()) || 0;
   
-  const hookTag = isHook ? "🔥 HOOK" : "";
-  console.log(`     [bg ${idx}] ${hookTag} source: ${sourceDuration.toFixed(2)}s | need: ${duration.toFixed(2)}s`);
-  
   let inputArgs;
-  
   if (sourceDuration >= duration + 0.5) {
     inputArgs = ["-i", videoPath];
   } else {
     inputArgs = ["-stream_loop", "-1", "-i", videoPath];
   }
   
-  // Zoom in
   const startScale = 1.0;
   const endScale   = isHook ? 1.4 : 1.15;
   const scaleStep  = (endScale - startScale) / duration;
   
   const zoomFilter = 
     `scale=w='trunc((iw*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':` +
-    `h='trunc((ih*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':` +
-    `eval=frame`;
+    `h='trunc((ih*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':eval=frame`;
   
   const cinematicFilters = [
     "curves=r='0/0 0.3/0.25 0.7/0.78 1/0.92':g='0/0 0.3/0.27 0.7/0.80 1/0.95':b='0/0.05 0.3/0.32 0.7/0.85 1/1.0'",
     "hue=s=0.85",
-    isHook 
-      ? "eq=contrast=1.20:brightness=0.00:saturation=1.05"
-      : "eq=contrast=1.10:brightness=-0.02:saturation=0.95",
+    isHook ? "eq=contrast=1.20:brightness=0.00:saturation=1.05"
+           : "eq=contrast=1.10:brightness=-0.02:saturation=0.95",
     "vignette=PI/4.5",
     "unsharp=5:5:0.6:5:5:0.0",
   ].join(",");
   
   const fadeFilter = isHook
-    ? `fade=t=out:st=${(duration - 0.2).toFixed(3)}:d=0.2`
-    : `fade=t=in:st=0:d=0.3,fade=t=out:st=${(duration - 0.3).toFixed(3)}:d=0.3`;
+    ? `fade=t=out:st=${(duration-0.2).toFixed(3)}:d=0.2`
+    : `fade=t=in:st=0:d=0.3,fade=t=out:st=${(duration-0.3).toFixed(3)}:d=0.3`;
   
   const videoFilter = 
-    `${zoomFilter},` +
-    `crop=${WIDTH}:${HEIGHT}:(iw-${WIDTH})/2:(ih-${HEIGHT})/2,` +
-    `setsar=1,` +
-    `${cinematicFilters},` +
-    `${fadeFilter}`;
+    `${zoomFilter},crop=${WIDTH}:${HEIGHT}:(iw-${WIDTH})/2:(ih-${HEIGHT})/2,` +
+    `setsar=1,${cinematicFilters},${fadeFilter}`;
   
   const r = spawnSync("ffmpeg", [
-    "-y",
-    ...inputArgs,
-    "-t", duration.toFixed(3),
-    "-vf", videoFilter,
-    "-r", String(FPS),
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", isHook ? "18" : "20",
-    "-pix_fmt", "yuv420p",
-    "-an",
-    outPath,
+    "-y", ...inputArgs, "-t", duration.toFixed(3),
+    "-vf", videoFilter, "-r", String(FPS),
+    "-c:v", "libx264", "-preset", "fast", "-crf", isHook ? "18" : "20",
+    "-pix_fmt", "yuv420p", "-an", outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
   
   if (r.status !== 0) {
-    console.error(`     [bg ${idx}] FAILED:`, r.stderr.toString().slice(-300));
-    
     const basicFilter = 
-      `scale=${Math.round(WIDTH * 1.1)}:${Math.round(HEIGHT * 1.1)}:force_original_aspect_ratio=increase,` +
+      `scale=${Math.round(WIDTH*1.1)}:${Math.round(HEIGHT*1.1)}:force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1,${cinematicFilters},${fadeFilter}`;
     
-    const r2 = spawnSync("ffmpeg", [
-      "-y", "-stream_loop", "-1",
-      "-i", videoPath,
-      "-t", duration.toFixed(3),
-      "-vf", basicFilter,
-      "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-      "-pix_fmt", "yuv420p", "-an",
-      outPath,
+    spawnSync("ffmpeg", [
+      "-y", "-stream_loop", "-1", "-i", videoPath,
+      "-t", duration.toFixed(3), "-vf", basicFilter,
+      "-r", String(FPS), "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+      "-pix_fmt", "yuv420p", "-an", outPath,
     ], { stdio: ["ignore", "pipe", "pipe"] });
-    
-    if (r2.status !== 0) {
-      console.error("❌ Background failed");
-      process.exit(1);
-    }
   }
   
   return outPath;
@@ -897,30 +545,28 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 function framesToMov(frameDir, outPath) {
-  const r = spawnSync("ffmpeg",[
+  spawnSync("ffmpeg",[
     "-y","-framerate",String(FPS),
     "-i",`${frameDir}/frame_%06d.png`,
     "-vf",`scale=${WIDTH}:${HEIGHT},format=rgba`,
     "-c:v","png","-an",outPath,
   ],{stdio:["ignore","pipe","pipe"]});
-  if (r.status !== 0) { console.error("❌ frames→mov failed"); process.exit(1); }
   return outPath;
 }
 
 function overlayOnBackground(bgMp4, captionMov, outPath) {
-  const r = spawnSync("ffmpeg",[
+  spawnSync("ffmpeg",[
     "-y","-i",bgMp4,"-i",captionMov,
     "-filter_complex","[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
     "-map","[out]","-c:v","libx264","-preset","fast","-crf","20","-pix_fmt","yuv420p","-an",outPath,
   ],{stdio:["ignore","pipe","pipe"]});
-  if (r.status !== 0) { console.error("❌ Overlay failed"); process.exit(1); }
   return outPath;
 }
 
 function xfadeConcat(clipPaths, clipDurations) {
   if (clipPaths.length === 1) return clipPaths[0];
   
-  const TRANSITIONS = ["fade", "fadeblack", "dissolve", "wiperight", "slideleft"];
+  const TRANSITIONS = ["fade","fadeblack","dissolve","wiperight","slideleft"];
   const XFADE = 0.35;
   
   const filters = [];
@@ -959,38 +605,22 @@ function mergeAudio(videoPath, audioPath, outPath) {
   let finalVideo = videoPath;
   
   if (vDur < aDur - 0.3) {
-    console.log(`⚠️  Video shorter - looping...`);
     const looped = `${TMP}/video_looped.mp4`;
     const r = spawnSync("ffmpeg", [
-      "-y", "-stream_loop", "-1",
-      "-i", videoPath,
-      "-t", aDur.toFixed(3),
-      "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-      "-pix_fmt", "yuv420p", "-an",
-      looped,
+      "-y", "-stream_loop", "-1", "-i", videoPath,
+      "-t", aDur.toFixed(3), "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+      "-pix_fmt", "yuv420p", "-an", looped,
     ], { stdio: ["ignore", "pipe", "pipe"] });
-    
-    if (r.status === 0) {
-      finalVideo = looped;
-    }
+    if (r.status === 0) finalVideo = looped;
   }
   
-  const r = spawnSync("ffmpeg", [
-    "-y",
-    "-i", finalVideo,
-    "-i", audioPath,
-    "-map", "0:v:0",
-    "-map", "1:a:0",
-    "-c:v", "copy",
-    "-c:a", "aac", "-b:a", "192k",
-    "-t", aDur.toFixed(3),
-    outPath,
+  spawnSync("ffmpeg", [
+    "-y", "-i", finalVideo, "-i", audioPath,
+    "-map", "0:v:0", "-map", "1:a:0",
+    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+    "-t", aDur.toFixed(3), outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
   
-  if (r.status !== 0) { 
-    console.error("❌ Merge failed:", r.stderr.toString().slice(-300));
-    process.exit(1); 
-  }
   console.log(`✅ Final: ${aDur.toFixed(3)}s → ${outPath}`);
 }
 
@@ -999,7 +629,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log("\n🚀 Starting KCS Renderer + Per-Word Sync\n");
+  console.log("\n🚀 Starting Renderer — Yellow BG + Red Karaoke\n");
 
   const frameStateMap = buildFrameStateMap();
 
@@ -1025,8 +655,7 @@ async function main() {
   const totalClips = Math.max(1, Math.floor(effectiveDuration / clip_duration));
   const actualClipDuration = effectiveDuration / totalClips;
   
-  console.log(`\n📊 Splitting into ${totalClips} clips × ${actualClipDuration.toFixed(2)}s each`);
-  console.log(`🎥 Available videos: ${videos.length}`);
+  console.log(`📊 ${totalClips} clips × ${actualClipDuration.toFixed(2)}s`);
   
   const finalClips = [], clipDurations = [];
 
@@ -1044,8 +673,7 @@ async function main() {
     const videoIdx = i % videos.length;
     const videoSrc = videos[videoIdx];
     
-    const clipLabel = isHook ? "🔥 HOOK" : `clip ${i+1}`;
-    process.stdout.write(`  [${i+1}/${totalClips}] ${clipDur.toFixed(2)}s ${clipLabel}... `);
+    process.stdout.write(`  [${i+1}/${totalClips}] ${clipDur.toFixed(2)}s ${isHook?"🔥HOOK":""}... `);
 
     const frameDir   = buildFrameDir(clipMap, pngCache, i);
     const captionMov = `${TMP}/caption_${i}.mov`;
@@ -1066,11 +694,10 @@ async function main() {
 
   console.log("🎵 Merging audio...");
   mergeAudio(dissolved, audio, outputPath);
-  console.log(`\n🎉 Final video → ${outputPath}\n`);
+  console.log(`\n🎉 Final → ${outputPath}\n`);
 }
 
 main().catch((err) => {
-  console.error("\n❌ Fatal error in render.mjs:");
-  console.error(err);
+  console.error("\n❌ Fatal:", err);
   process.exit(1);
 });
