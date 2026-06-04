@@ -1,15 +1,15 @@
 name: 🇫🇷 French Videos (Auto + Manual)
 
 on:
-  # ── تلقائي (فعّل بعد الاختبار بإزالة #) ──────────────────
+  # ── تلقائي ──────────────────────────────────────────────────
   # schedule:
   #   - cron: "0 10 * * *"    # فيديو 1 - 10:00 UTC
-  #   - cron: "0 12 * * *"    # فيديو 2 - 12:00 UTC
+  #   - cron: "5 12 * * *"    # فيديو 2 - 12:05 UTC
   #   - cron: "30 16 * * *"   # فيديو 3 - 16:30 UTC
   #   - cron: "0 18 * * *"    # فيديو 4 - 18:00 UTC
   #   - cron: "0 21 * * *"    # فيديو 5 - 21:00 UTC
 
-  # ── يدوي (يعمل دائماً) ────────────────────────────────────
+  # ── يدوي ────────────────────────────────────────────────────
   workflow_dispatch:
     inputs:
       video_number:
@@ -45,70 +45,27 @@ on:
         default: "9x16"
         type: string
 
+concurrency:
+  group: french-video-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   generate_fr:
     name: 🇫🇷 French Video
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
 
-      # ═══════════════════════════════════════════════════════════════
-      # 1. Checkout
-      # ═══════════════════════════════════════════════════════════════
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      # ═══════════════════════════════════════════════════════════════
-      # 2. Setup Python
-      # ═══════════════════════════════════════════════════════════════
       - name: 🐍 Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: 'pip'
 
-      # ═══════════════════════════════════════════════════════════════
-      # 3. Install PyTorch CPU
-      # ═══════════════════════════════════════════════════════════════
-      - name: 🔥 Install PyTorch (CPU)
-        run: |
-          pip install --upgrade pip setuptools wheel
-          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-
-      # ═══════════════════════════════════════════════════════════════
-      # 4. Install WhisperX
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📦 Install WhisperX
-        run: |
-          pip install git+https://github.com/m-bain/whisperX.git
-
-      # ═══════════════════════════════════════════════════════════════
-      # 5. Install Python Dependencies
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📦 Install Python deps
-        run: |
-          pip install -r requirements.txt
-          python -m playwright install chromium
-
-      # ═══════════════════════════════════════════════════════════════
-      # 6. Setup Node.js
-      # ═══════════════════════════════════════════════════════════════
-      - name: 🟢 Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      # ═══════════════════════════════════════════════════════════════
-      # 7. Install Node Dependencies
-      # ═══════════════════════════════════════════════════════════════
-      - name: 📦 Install Node deps
-        working-directory: remotion
-        run: npm install
-
-      # ═══════════════════════════════════════════════════════════════
-      # 8. Install System Dependencies
-      # ═══════════════════════════════════════════════════════════════
       - name: 🔧 Install system deps
         run: |
           sudo apt-get update -q
@@ -123,16 +80,6 @@ jobs:
             fonts-sil-scheherazade
           sudo fc-cache -fv
 
-      # ═══════════════════════════════════════════════════════════════
-      # 9. Install Playwright Chromium (Node)
-      # ═══════════════════════════════════════════════════════════════
-      - name: 🌐 Install Playwright Chromium
-        working-directory: remotion
-        run: npx playwright install chromium
-
-      # ═══════════════════════════════════════════════════════════════
-      # 10. Cache WhisperX Models
-      # ═══════════════════════════════════════════════════════════════
       - name: 💾 Cache WhisperX models
         uses: actions/cache@v4
         with:
@@ -143,22 +90,51 @@ jobs:
           key: whisperx-models-v5
           restore-keys: whisperx-models-
 
-      # ═══════════════════════════════════════════════════════════════
-      # 11. Restore DB
-      # ═══════════════════════════════════════════════════════════════
+      - name: 💾 Cache PyTorch
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pytorch-cpu-${{ runner.os }}-py3.11
+          restore-keys: pytorch-cpu-
+
+      - name: 🔥 Install PyTorch (CPU)
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+      - name: 📦 Install WhisperX
+        run: |
+          pip install git+https://github.com/m-bain/whisperX.git
+
+      - name: 📦 Install Python deps
+        run: |
+          pip install -r requirements.txt
+
+      - name: 🟢 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: 'npm'
+          cache-dependency-path: remotion/package-lock.json
+
+      - name: 📦 Install Node deps
+        working-directory: remotion
+        run: npm ci
+
+      - name: 🌐 Install Playwright Chromium
+        run: |
+          pip install playwright
+          python -m playwright install chromium --with-deps
+
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
         with:
-          name: vsg-database
+          name: vsg-database-fr
           if_no_artifact_found: ignore
           search_artifacts: true
 
-      # ═══════════════════════════════════════════════════════════════
-      # 12. 🇫🇷 Run French Generator
-      # ═══════════════════════════════════════════════════════════════
       - name: 🇫🇷 Generate + Publish French
         env:
-          # ── Gemini (30 keys) ───────────────────────────────
           GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
           GEMINI_API_KEY_1:   ${{ secrets.GEMINI_API_KEY_1 }}
           GEMINI_API_KEY_2:   ${{ secrets.GEMINI_API_KEY_2 }}
@@ -189,28 +165,24 @@ jobs:
           GEMINI_API_KEY_27:  ${{ secrets.GEMINI_API_KEY_27 }}
           GEMINI_API_KEY_28:  ${{ secrets.GEMINI_API_KEY_28 }}
           GEMINI_API_KEY_29:  ${{ secrets.GEMINI_API_KEY_29 }}
-          # ── Video APIs ─────────────────────────────────────
           PIXABAY_API_KEY:    ${{ secrets.PIXABAY_API_KEY }}
           PIXABAY_API_KEY_1:  ${{ secrets.PIXABAY_API_KEY_1 }}
           PEXELS_API_KEY:     ${{ secrets.PEXELS_API_KEY }}
           PEXELS_API_KEY_1:   ${{ secrets.PEXELS_API_KEY_1 }}
-          # ── Groq ───────────────────────────────────────────
           GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
           GROQ_API_KEY_1:     ${{ secrets.GROQ_API_KEY_1 }}
-          # ── Facebook الفرنسية ──────────────────────────────
-          FB_PAGE_ID:         ${{ secrets.FB_PAGE_ID_FR2 }}
-          FB_PAGE_TOKEN:      ${{ secrets.FB_PAGE_TOKEN_FR2 }}
+          FB_PAGE_ID:         ${{ secrets.FB_PAGE_ID_FR }}
+          FB_PAGE_TOKEN:      ${{ secrets.FB_PAGE_TOKEN_FR }}
+          HF_TOKEN:           ${{ secrets.HF_TOKEN }}
         run: |
           FLAGS="--lang fr --publish-fb"
 
-          # إذا تشغيل يدوي مع رقم فيديو محدد
           if [ -n "${{ github.event.inputs.video_number }}" ]; then
             FLAGS="$FLAGS --video-number ${{ github.event.inputs.video_number }}"
           else
             FLAGS="$FLAGS --auto-next"
           fi
 
-          # إذا تشغيل يدوي مع خيارات
           if [ "${{ github.event.inputs.force }}" = "true" ]; then
             FLAGS="$FLAGS --force"
           fi
@@ -226,9 +198,6 @@ jobs:
             --formats "${{ github.event.inputs.formats || '9x16' }}" \
             $FLAGS
 
-      # ═══════════════════════════════════════════════════════════════
-      # 13. Upload Videos
-      # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload videos
         if: always()
         uses: actions/upload-artifact@v4
@@ -238,9 +207,6 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      # ═══════════════════════════════════════════════════════════════
-      # 14. Upload Subtitles
-      # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload subtitles
         if: always()
         uses: actions/upload-artifact@v4
@@ -250,9 +216,6 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-      # ═══════════════════════════════════════════════════════════════
-      # 15. Upload Thumbnails
-      # ═══════════════════════════════════════════════════════════════
       - name: 📤 Upload thumbnails
         if: always()
         uses: actions/upload-artifact@v4
@@ -262,14 +225,11 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-      # ═══════════════════════════════════════════════════════════════
-      # 16. Save DB
-      # ═══════════════════════════════════════════════════════════════
       - name: 📤 Save DB
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vsg-database
+          name: vsg-database-fr
           path: vsg.db
           retention-days: 90
           overwrite: true
