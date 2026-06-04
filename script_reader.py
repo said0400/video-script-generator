@@ -20,7 +20,6 @@ from tags_parser import (
     strip_tags_from_text,
     auto_correct_tag,
     DEFAULT_TAG,
-    VALID_TAGS,
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -148,12 +147,12 @@ def process_tagged_content(
     Returns: list of dicts:
       [
         {
-          "raw_tag":     "intrigue",
-          "final_tag":   "intrigue",
-          "tag_source":  "exact_match",
-          "text":        "النص بدون tag",
+          "raw_tag":       "intrigue",
+          "final_tag":     "intrigue",
+          "tag_source":    "exact_match",
+          "text":          "النص بدون tag",
           "text_with_tag": "[intrigue] النص...",
-          "line":        1,
+          "line":          1,
         },
         ...
       ]
@@ -255,8 +254,7 @@ def _read_excel(path: Path) -> list[dict]:
         str(c) if c is not None else ""
         for c in rows[0]
     ]
-    col_map = _detect_columns(headers)
-
+    col_map  = _detect_columns(headers)
     detected = sorted(col_map.keys())
     print(
         f"  📊 Detected {len(detected)} columns: "
@@ -358,7 +356,6 @@ def validate_scripts(
             )
             continue
 
-        # تحقق من tags
         for lang_key, lang_name in [
             ("ar_content", "AR"),
             ("en_content", "EN"),
