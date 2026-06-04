@@ -4,13 +4,29 @@ groq
 openpyxl
 requests
 playwright
-
 # ── Audio / Video ────────────────────────────────────────────────
 ffmpeg-python
 numpy<2.0
-
 # ── ✨ WhisperX Dependencies (سيُثبّت من GitHub) ────────────────
 # لا نضع whisperx هنا - يُثبّت في GitHub Actions
 faster-whisper>=1.0.0
 ctranslate2>=4.4.0
 transformers>=4.36.0
+tokenizers>=0.15.0
+huggingface_hub>=0.20.0
+# ── PyTorch Audio (مطلوب لـ WhisperX alignment) ──────────────────
+# torch و torchaudio يُثبّتان في GitHub Actions من whl/cpu
+# ── Alignment Models (مطلوبة لـ word-level sync) ─────────────────
+pyannote.audio>=3.1.0
+pyannote.core>=5.0.0
+pyannote.pipeline>=3.0.1
+# ── Audio Processing ──────────────────────────────────────────────
+soundfile>=0.12.1
+librosa>=0.10.0
+audioread>=3.0.0
+scipy>=1.11.0
+# ── NLP / Text ───────────────────────────────────────────────────
+nltk>=3.8.1
+# ── Utilities ────────────────────────────────────────────────────
+tqdm>=4.65.0
+more-itertools>=9.1.0
