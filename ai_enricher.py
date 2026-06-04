@@ -27,7 +27,7 @@ import time
 
 from groq import Groq
 
-from tags_parser import VALID_TAG_NAMES, DEFAULT_TAG
+from tags_parser import VALID_TAG_NAMES, DEFAULT_TAG, auto_correct_tag
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -342,7 +342,6 @@ Example: ["intrigue","desire","confident"]"""
         if tag in VALID_TAG_NAMES:
             cleaned_tags.append(tag)
         else:
-            from tags_parser import auto_correct_tag
             corrected, _ = auto_correct_tag(tag)
             cleaned_tags.append(
                 corrected if corrected else DEFAULT_TAG
@@ -871,9 +870,9 @@ Example: crying woman eyes closeup"""
 
 def enrich_record(
     record:  dict,
-    lang:    str             = "ar",
+    lang:    str              = "ar",
     tagged:  list[dict] | None = None,
-    verbose: bool            = True,
+    verbose: bool             = True,
 ) -> dict:
     """
     تطبيق كل عمليات Groq على record واحد.
