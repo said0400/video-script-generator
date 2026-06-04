@@ -1,9 +1,6 @@
 """
 sync.py — Word-level audio synchronization
-✨ FIXED: إجبار التزامن الكامل مع الصوت الفعلي
-- offset detection: نكتشف متى يبدأ الكلام ونعوّض
-- VAD: نتجاهل الصمت والموسيقى
-- كل كلمة مربوطة بالصوت الفعلي 100%
+✨ FIXED + IMPROVED: مزامنة 100% مع الصوت الفعلي
 """
 
 from __future__ import annotations
@@ -53,14 +50,12 @@ def get_audio_duration(audio_path: str) -> float:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✨ NEW: DETECT REAL SPEECH START (الحل الأساسي)
+# DETECT REAL SPEECH START
 # ═════════════════════════════════════════════════════════════════════════════
 
 def detect_speech_start(audio_path: str) -> float:
     """
-    يكتشف متى يبدأ الكلام الفعلي في الملف الصوتي
-    باستخدام ffmpeg silencedetect — لا يحتاج أي مكتبة إضافية.
-    يرجع الـ offset بالثواني.
+    يكتشف متى يبدأ الكلام الفعلي في الملف الصوتي.
     """
     try:
         result = subprocess.run(
@@ -72,9 +67,6 @@ def detect_speech_start(audio_path: str) -> float:
             capture_output=True, text=True, timeout=30,
         )
         output = result.stderr
-
-        # نبحث عن silence_end — هو متى انتهى الصمت وبدأ الكلام
-        import re
         matches = re.findall(r"silence_end:\s*([\d.]+)", output)
 
         if matches:
@@ -82,7 +74,6 @@ def detect_speech_start(audio_path: str) -> float:
             print(f"  🎯 Speech starts at: {speech_start:.3f}s")
             return speech_start
         else:
-            # لا صمت في البداية = يبدأ من 0
             print(f"  🎯 Speech starts at: 0.000s (no silence detected)")
             return 0.0
 
@@ -153,43 +144,23 @@ def _load_align_model(lang: str):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# EXTRACT TRANSCRIPT FROM WHISPERX
+# EXTRACT TRANSCRIPT
 # ═════════════════════════════════════════════════════════════════════════════
 
 def extract_transcript_from_audio(audio_path: str, lang: str = "ar") -> dict:
     """
-    ✨ FIXED: استخراج النص + تطبيق offset إجباري لضمان التزامن 100%
-
-    Returns: {
-        "sentences": ["جملة 1", "جملة 2", ...],
-        "aligned": [
-            {
-                "sentence": "...",
-                "start": 0.0,
-                "end": 3.5,
-                "words": [
-                    {"word": "أنت", "start": 0.25, "end": 0.61},
-                    ...
-                ]
-            },
-        ],
-        "timeline": [...],
-        "total_duration": 50.0,
-        "success": True
-    }
+    استخراج النص + تطبيق offset إجباري لضمان التزامن 100%
     """
     print(f"\n  🎤 Extracting transcript from {Path(audio_path).name} (lang={lang})")
 
     audio_duration = get_audio_duration(audio_path)
-
-    # ✨ الخطوة الأولى: اكتشف متى يبدأ الكلام الفعلي
     speech_start_offset = detect_speech_start(audio_path)
 
     result = _extract_whisperx_full(
         audio_path,
         lang,
         audio_duration,
-        speech_start_offset,   # ✨ نمرره إجبارياً
+        speech_start_offset,
     )
 
     if result["success"]:
@@ -209,7 +180,7 @@ def _extract_whisperx_full(
     audio_path:           str,
     lang:                 str,
     audio_duration:       float,
-    speech_start_offset:  float = 0.0,   # ✨ الإضافة الجوهرية
+    speech_start_offset:  float = 0.0,
 ) -> dict:
     """استخراج كامل من WhisperX مع تطبيق offset إجباري."""
 
@@ -230,12 +201,10 @@ def _extract_whisperx_full(
         if model is None:
             return result
 
-        # ── 1. Load audio ────────────────────────────────────────────────────
         audio = whisperx.load_audio(audio_path)
         print(f"  🎵 Audio duration: {audio_duration:.2f}s")
         print(f"  ⏩ Speech offset:  {speech_start_offset:.3f}s")
 
-        # ── 2. Transcribe ────────────────────────────────────────────────────
         print(f"  📝 Transcribing...")
         start_time = time.time()
 
@@ -252,7 +221,6 @@ def _extract_whisperx_full(
         if not segments_raw:
             return result
 
-        # ── 3. Align words ───────────────────────────────────────────────────
         print(f"  🎯 Aligning words...")
         start_time = time.time()
 
@@ -270,14 +238,12 @@ def _extract_whisperx_full(
                     return_char_alignments=False,
                 )
                 aligned_segments = aligned_result.get("segments", [])
-
                 align_time = time.time() - start_time
                 print(f"  ⏱️  Aligned in {align_time:.1f}s")
             except Exception as e:
                 print(f"  ⚠️  Alignment failed: {e}")
                 aligned_segments = None
 
-        # ── 4. Build sentences + words ───────────────────────────────────────
         sentences      = []
         all_words_flat = []
 
@@ -350,17 +316,22 @@ def _extract_whisperx_full(
             print(f"  ⚠️  No sentences extracted")
             return result
 
-        # ── 5. ✨ FORCE OFFSET: تطبيق الـ offset الإجباري ────────────────────
+        # ✨ تطبيق offset
         all_words_flat = _apply_speech_offset(
             all_words_flat,
             speech_start_offset,
             audio_duration,
         )
 
-        # ── 6. Normalize timestamps ──────────────────────────────────────────
-        all_words_flat = _normalize_word_timestamps(all_words_flat, audio_duration)
+        # ✨ Normalize (مع تجاوز offset check إذا طبّقنا speech offset)
+        skip_check = (speech_start_offset > 0.01)
+        all_words_flat = _normalize_word_timestamps(
+            all_words_flat,
+            audio_duration,
+            skip_offset_check=skip_check,
+        )
 
-        # ── 7. إعادة بناء aligned من الـ normalized words ────────────────────
+        # إعادة بناء aligned
         aligned_normalized = []
         for s_idx in range(len(sentences)):
             sw = [w for w in all_words_flat if w["s_idx"] == s_idx]
@@ -375,7 +346,6 @@ def _extract_whisperx_full(
                     ],
                 })
 
-        # ── 8. Build timeline ────────────────────────────────────────────────
         timeline = sorted(
             [
                 {
@@ -388,7 +358,6 @@ def _extract_whisperx_full(
             key=lambda x: x["time"],
         )
 
-        # ── 9. Final report ──────────────────────────────────────────────────
         print(f"  ✅ Extracted: {len(sentences)} sentences, {len(all_words_flat)} words")
         print(f"  🔍 Sync check:")
         for w in all_words_flat[:5]:
@@ -412,7 +381,7 @@ def _extract_whisperx_full(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✨ NEW: APPLY SPEECH OFFSET (الحل الإجباري)
+# APPLY SPEECH OFFSET
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _apply_speech_offset(
@@ -421,16 +390,7 @@ def _apply_speech_offset(
     audio_duration:       float,
 ) -> list[dict]:
     """
-    ✨ الحل الإجباري لمشكلة سبق النص للصوت.
-
-    WhisperX يعطي timestamps بناءً على الصوت الخام.
-    لكن الملف النهائي يحتوي موسيقى + صمت في البداية.
-    هذه الدالة تضيف الـ offset الفعلي على كل timestamps.
-
-    مثال:
-      الموسيقى تدوم 1.5 ثانية قبل الكلام
-      WhisperX يعطي أول كلمة عند 0.2s
-      النتيجة الصحيحة = 0.2 + 1.5 = 1.7s
+    الحل الإجباري لمشكلة سبق النص للصوت.
     """
     if not words or speech_start_offset <= 0.01:
         return words
@@ -443,7 +403,6 @@ def _apply_speech_offset(
         fw["start"] = round(w["start"] + speech_start_offset, 4)
         fw["end"]   = round(w["end"]   + speech_start_offset, 4)
 
-        # لا يتجاوز مدة الصوت
         if fw["end"] > audio_duration:
             fw["end"] = audio_duration
         if fw["start"] >= audio_duration:
@@ -460,16 +419,19 @@ def _apply_speech_offset(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TIMESTAMP NORMALIZATION
+# TIMESTAMP NORMALIZATION (مع skip_offset_check)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _normalize_word_timestamps(
-    words:          list[dict],
-    audio_duration: float,
+    words:             list[dict],
+    audio_duration:    float,
+    skip_offset_check: bool = False,
 ) -> list[dict]:
     """
-    إصلاح كل مشاكل التوقيت في word timestamps.
-    يعمل بعد _apply_speech_offset.
+    إصلاح كل مشاكل التوقيت.
+    
+    skip_offset_check: إذا True، نتخطى إصلاح offset البداية
+                      (نستخدمه عندما _apply_speech_offset تم تطبيقه)
     """
     if not words:
         return []
@@ -478,16 +440,19 @@ def _normalize_word_timestamps(
 
     fixed = [dict(w) for w in words]
 
-    # ── 1. تصحيح offset متبقي (إذا WhisperX أعاد timestamps صغيرة جداً) ──
-    first_start = fixed[0]["start"]
-    if first_start > MAX_INITIAL_OFFSET:
-        offset = first_start - 0.2
-        print(f"  ⚠️  Residual offset: {first_start:.2f}s → subtracting {offset:.2f}s")
-        for w in fixed:
-            w["start"] = max(0, w["start"] - offset)
-            w["end"]   = max(0.1, w["end"] - offset)
+    # ── 1. تصحيح offset (فقط إذا لم نطبّق speech offset) ──
+    if not skip_offset_check:
+        first_start = fixed[0]["start"]
+        if first_start > MAX_INITIAL_OFFSET:
+            offset = first_start - 0.2
+            print(f"  ⚠️  Residual offset: {first_start:.2f}s → subtracting {offset:.2f}s")
+            for w in fixed:
+                w["start"] = max(0, w["start"] - offset)
+                w["end"]   = max(0.1, w["end"] - offset)
+    else:
+        print(f"  ℹ️  Skipping offset check (speech offset already applied)")
 
-    # ── 2. إصلاح التداخلات ────────────────────────────────────────────────
+    # ── 2. إصلاح التداخلات ──
     duplicates = 0
     for i in range(1, len(fixed)):
         prev = fixed[i - 1]
@@ -504,7 +469,7 @@ def _normalize_word_timestamps(
     if duplicates > 0:
         print(f"  🔧 Fixed {duplicates} overlapping timestamps")
 
-    # ── 3. مدد منطقية ────────────────────────────────────────────────────
+    # ── 3. مدد منطقية ──
     too_short = too_long = 0
     for w in fixed:
         duration = w["end"] - w["start"]
@@ -518,7 +483,7 @@ def _normalize_word_timestamps(
     if too_short: print(f"  🔧 Extended {too_short} short words")
     if too_long:  print(f"  🔧 Capped {too_long} long words")
 
-    # ── 4. لا يتجاوز الصوت ───────────────────────────────────────────────
+    # ── 4. لا يتجاوز الصوت ──
     if audio_duration > 0:
         for w in fixed:
             if w["end"]   > audio_duration:
@@ -527,7 +492,7 @@ def _normalize_word_timestamps(
                 w["start"] = audio_duration - MIN_WORD_DURATION
                 w["end"]   = audio_duration
 
-    # ── 5. تقريب ────────────────────────────────────────────────────────
+    # ── 5. تقريب ──
     for w in fixed:
         w["start"] = round(w["start"], 4)
         w["end"]   = round(w["end"],   4)
