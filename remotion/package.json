@@ -2,12 +2,15 @@
   "name": "video-renderer",
   "version": "1.0.0",
   "type": "module",
-  "description": "Playwright-based video renderer with Arabic/English support",
+  "description": "Playwright-based video renderer with Arabic/French/English support",
   "scripts": {
     "render": "node render.mjs",
     "install-browsers": "playwright install chromium --with-deps"
   },
   "dependencies": {
     "playwright": "1.44.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }
