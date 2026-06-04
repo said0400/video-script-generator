@@ -245,15 +245,49 @@ jobs:
       # ═══════════════════════════════════════════════════════════════
       - name: 🎬 Run generator + publish
         env:
-          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_API_KEY_1: ${{ secrets.GEMINI_API_KEY_1 }}
-          GEMINI_API_KEY_2: ${{ secrets.GEMINI_API_KEY_2 }}
-          GEMINI_API_KEY_3: ${{ secrets.GEMINI_API_KEY_3 }}
-          PIXABAY_API_KEY:  ${{ secrets.PIXABAY_API_KEY }}
-          PEXELS_API_KEY:   ${{ secrets.PEXELS_API_KEY }}
-          GROQ_API_KEY:     ${{ secrets.GROQ_API_KEY }}
-          FB_PAGE_ID1:      ${{ secrets.FB_PAGE_ID1 }}
-          FB_PAGE_TOKEN:    ${{ secrets.FB_PAGE_TOKEN }}
+          # ── Gemini TTS (30 مفتاح) ──────────────────────────────
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_1:   ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2:   ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3:   ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4:   ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5:   ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6:   ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7:   ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_API_KEY_8:   ${{ secrets.GEMINI_API_KEY_8 }}
+          GEMINI_API_KEY_9:   ${{ secrets.GEMINI_API_KEY_9 }}
+          GEMINI_API_KEY_10:  ${{ secrets.GEMINI_API_KEY_10 }}
+          GEMINI_API_KEY_11:  ${{ secrets.GEMINI_API_KEY_11 }}
+          GEMINI_API_KEY_12:  ${{ secrets.GEMINI_API_KEY_12 }}
+          GEMINI_API_KEY_13:  ${{ secrets.GEMINI_API_KEY_13 }}
+          GEMINI_API_KEY_14:  ${{ secrets.GEMINI_API_KEY_14 }}
+          GEMINI_API_KEY_15:  ${{ secrets.GEMINI_API_KEY_15 }}
+          GEMINI_API_KEY_16:  ${{ secrets.GEMINI_API_KEY_16 }}
+          GEMINI_API_KEY_17:  ${{ secrets.GEMINI_API_KEY_17 }}
+          GEMINI_API_KEY_18:  ${{ secrets.GEMINI_API_KEY_18 }}
+          GEMINI_API_KEY_19:  ${{ secrets.GEMINI_API_KEY_19 }}
+          GEMINI_API_KEY_20:  ${{ secrets.GEMINI_API_KEY_20 }}
+          GEMINI_API_KEY_21:  ${{ secrets.GEMINI_API_KEY_21 }}
+          GEMINI_API_KEY_22:  ${{ secrets.GEMINI_API_KEY_22 }}
+          GEMINI_API_KEY_23:  ${{ secrets.GEMINI_API_KEY_23 }}
+          GEMINI_API_KEY_24:  ${{ secrets.GEMINI_API_KEY_24 }}
+          GEMINI_API_KEY_25:  ${{ secrets.GEMINI_API_KEY_25 }}
+          GEMINI_API_KEY_26:  ${{ secrets.GEMINI_API_KEY_26 }}
+          GEMINI_API_KEY_27:  ${{ secrets.GEMINI_API_KEY_27 }}
+          GEMINI_API_KEY_28:  ${{ secrets.GEMINI_API_KEY_28 }}
+          GEMINI_API_KEY_29:  ${{ secrets.GEMINI_API_KEY_29 }}
+          # ── Pixabay (2 مفتاح) ──────────────────────────────────
+          PIXABAY_API_KEY:    ${{ secrets.PIXABAY_API_KEY }}
+          PIXABAY_API_KEY_1:  ${{ secrets.PIXABAY_API_KEY_1 }}
+          # ── Pexels (2 مفتاح) ───────────────────────────────────
+          PEXELS_API_KEY:     ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_API_KEY_1:   ${{ secrets.PEXELS_API_KEY_1 }}
+          # ── Groq (2 مفتاح) ────────────────────────────────────
+          GROQ_API_KEY:       ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY_1:     ${{ secrets.GROQ_API_KEY_1 }}
+          # ── Facebook ──────────────────────────────────────────
+          FB_PAGE_ID1:        ${{ secrets.FB_PAGE_ID1 }}
+          FB_PAGE_TOKEN:      ${{ secrets.FB_PAGE_TOKEN }}
         run: |
           FLAGS=""
 
