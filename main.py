@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-🎬 Video Generator — Visual Addiction System (VAS)
-✨ NEW: النص يُستخرج من WhisperX (مزامنة 100%)
+🎬 Video Generator — Multi-Language + Auto Schedule
+✨ Features:
+  - 3 languages (AR, FR, EN)
+  - Auto-next video (for cron scheduling)
+  - Loop when content ends
+  - Per-language voice config
+  - WhisperX transcript sync
+  - Facebook multi-page publishing
 """
 
 from __future__ import annotations
@@ -19,14 +25,15 @@ from db            import (init_db, is_render_done, get_render_output,
                             print_db_summary, is_published, mark_published,
                             get_pending_publish, close_thread_conn,
                             has_ai_cache, get_ai_cache, save_ai_cache,
-                            clear_ai_cache, show_ai_cache)
+                            clear_ai_cache, show_ai_cache,
+                            get_next_video_number, mark_video_published_for_lang)
 from script_reader import (read_scripts, validate_scripts,
                             process_tagged_content,
                             print_scripts_summary)
 from tags_parser   import (print_tags_summary, strip_tags_from_text,
                             DEFAULT_TAG, VALID_TAGS)
 from ai_enricher   import enrich_record, AIEnrichmentError
-from tts           import synthesize_speech, VOICES
+from tts           import synthesize_speech, VOICES, VOICE_CONFIGS
 from video_sources import fetch_videos_for_script
 from srt           import generate_srt, generate_word_srt
 from export        import export_all
@@ -45,6 +52,13 @@ RENDER_SCRIPT = Path("remotion/render.mjs")
 
 CLIP_DURATION = 3.0
 
+# ✨ تسريع لكل لغة
+SPEED_MULTIPLIER = {
+    "ar": 1.15,
+    "fr": 1.05,
+    "en": 1.15,
+}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CLI
@@ -52,24 +66,25 @@ CLIP_DURATION = 3.0
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="🎬 Video Generator with VAS + AI Enrichment",
+        description="🎬 Video Generator — Multi-Language",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     
     p.add_argument("input_file",      type=str, nargs="?", default=None)
     p.add_argument("--output-dir",    type=str, default="output")
-    p.add_argument("--video-number",  type=str, default=None)
+    p.add_argument("--video-number",  type=str, default=None,
+                   help="Process specific video number")
     
-    p.add_argument("--voice-en",      type=str, default="male_smooth",
-                   choices=list(VOICES.keys()))
-    p.add_argument("--voice-ar",      type=str, default="female_warm",
-                   choices=list(VOICES.keys()))
+    # ✨ NEW: Language
+    p.add_argument("--lang",          type=str, default="ar",
+                   choices=["ar", "fr", "en"],
+                   help="Language to process")
     
-    p.add_argument("--music-volume",  type=float, default=0.12)
-    p.add_argument("--sfx-type",      type=str, default="swoosh",
-                   choices=["swoosh","whoosh"])
+    # ✨ NEW: Auto-next (للجدولة التلقائية)
+    p.add_argument("--auto-next",     action="store_true",
+                   help="Automatically pick next unpublished video")
     
-    p.add_argument("--formats",       type=str, default="1x1,16x9")
+    p.add_argument("--formats",       type=str, default="9x16")
     p.add_argument("--no-export",     action="store_true")
     
     p.add_argument("--script-only",   action="store_true")
@@ -79,10 +94,6 @@ def parse_args() -> argparse.Namespace:
     
     p.add_argument("--publish-fb",    action="store_true")
     p.add_argument("--no-publish",    action="store_true")
-    p.add_argument("--fb-lang",       type=str, default="ar",
-                   choices=["ar","en","both"])
-    p.add_argument("--fb-reel",       action="store_true", default=True)
-    p.add_argument("--publish-pending", action="store_true")
     
     p.add_argument("--show-ai-cache", type=str, nargs="?", const="all", default=None)
     p.add_argument("--clear-ai-cache", type=str, default=None)
@@ -122,44 +133,75 @@ def _should_publish(args):
 # 🧠 AI ENRICHMENT
 # ═════════════════════════════════════════════════════════════════════════════
 
-def get_or_create_ai_data(record: dict, force_ai: bool = False) -> dict:
+def get_or_create_ai_data(record: dict, lang: str, force_ai: bool = False) -> dict:
     video_number = str(record["number"])
     title        = record.get("title", "")
+    cache_key    = f"{video_number}_{lang}"
     
-    if not force_ai and has_ai_cache(video_number):
-        cached = get_ai_cache(video_number)
-        if cached:
-            if cached.get("hook_keyword") and cached.get("attractive_title"):
-                print(f"\n  ♻️  Using cached AI data for #{video_number}")
-                return cached
-            else:
-                print(f"\n  🔄 Cache exists but missing new fields - regenerating...")
+    if not force_ai and has_ai_cache(cache_key):
+        cached = get_ai_cache(cache_key)
+        if cached and cached.get("hook_keyword"):
+            print(f"\n  ♻️  Using cached AI data for #{video_number} ({lang.upper()})")
+            return cached
     
-    ar_tagged = None
-    en_tagged = None
+    # ✨ بناء record مع المحتوى حسب اللغة
+    content_key = f"{lang}_content" if lang != "en" else "en_content"
+    if lang == "ar":
+        content_key = "ar_content"
+    elif lang == "fr":
+        content_key = "fr_content"
+    else:
+        content_key = "en_content"
     
-    if record.get("ar_content", "").strip():
-        print(f"\n  🏷️  Parsing AR tags...")
-        ar_tagged = process_tagged_content(record["ar_content"], lang="ar")
+    content = record.get(content_key, "").strip()
+    if not content:
+        # Fallback: ابحث عن أي عمود محتوى
+        for key in ["content", "text", "script"]:
+            content = record.get(key, "").strip()
+            if content:
+                break
     
-    if record.get("en_content", "").strip():
-        print(f"\n  🏷️  Parsing EN tags...")
-        en_tagged = process_tagged_content(record["en_content"], lang="en")
+    if not content:
+        raise AIEnrichmentError(f"No content found for #{video_number} ({lang.upper()})")
+    
+    # بناء record مُعدّل للـ enricher
+    enricher_record = {
+        "number": video_number,
+        "title": title,
+        "ar_content": content if lang == "ar" else "",
+        "en_content": content if lang == "en" else "",
+        "fr_content": content if lang == "fr" else "",
+    }
+    
+    # Parse tags
+    tagged = None
+    if content:
+        print(f"\n  🏷️  Parsing {lang.upper()} tags...")
+        tagged = process_tagged_content(content, lang=lang)
     
     try:
+        # ✨ نمرر المحتوى حسب اللغة
+        if lang == "fr":
+            enricher_record["en_content"] = content  # Groq يفهم الفرنسية كـ "en" أيضاً
+        
         enriched = enrich_record(
-            record,
-            ar_tagged=ar_tagged,
-            en_tagged=en_tagged,
+            enricher_record,
+            ar_tagged=tagged if lang == "ar" else None,
+            en_tagged=tagged if lang in ("en", "fr") else None,
             verbose=True,
         )
+        
+        # ✨ حفظ tagged في المكان الصحيح
+        if lang == "fr":
+            enriched["fr_tagged"] = tagged
+        
     except AIEnrichmentError as e:
         print(f"\n  ❌ AI ENRICHMENT FAILED:")
         print(f"     {e}")
         raise
     
-    save_ai_cache(video_number, title, enriched)
-    print(f"  💾 AI data cached for video #{video_number}")
+    save_ai_cache(cache_key, title, enriched)
+    print(f"  💾 AI data cached for #{video_number} ({lang.upper()})")
     
     return enriched
 
@@ -178,7 +220,6 @@ def save_manifest(
     real_duration: float = None,
     whisper_sentences: list = None,
 ) -> Path:
-    # ✨ NEW: استخدم النص المستخرج من WhisperX إذا متوفر
     sentences_for_display = whisper_sentences if whisper_sentences else script_data["sentences"]
     
     manifest = {
@@ -187,10 +228,8 @@ def save_manifest(
         "emoji_left":    script_data.get("emoji_left", "🔥"),
         "emoji_right":   script_data.get("emoji_right", "💥"),
         
-        # ✨ النص من WhisperX (الذي يقوله الصوت فعلياً)
         "sentences":     sentences_for_display,
         "tagged_sentences": script_data.get("tagged_sentences", []),
-        
         "audio":         str(Path(str(audio_path)).resolve()),
         "videos":        [str(Path(str(p)).resolve()) for p in video_paths],
         "duration_s":    real_duration or float(script_data["estimated_seconds"]),
@@ -198,17 +237,13 @@ def save_manifest(
         "content_type":  CONTENT_TYPE,
         
         "power_words":          script_data.get("power_words", []),
-        "pattern_interrupts":   script_data.get("pattern_interrupts", []),
-        "engagement_questions": script_data.get("engagement_questions", []),
         "accent_colors":        script_data.get("accent_colors", []),
-        "keywords":             script_data.get("visual_keywords", []),
         "analysis":             script_data.get("analysis", {}),
         
         "clip_duration":        CLIP_DURATION,
         "has_hook":             bool(script_data.get("has_hook", True)),
         "hook_keyword":         script_data.get("hook_keyword", ""),
         
-        # ✨ word_timeline + aligned من WhisperX مباشرة (دقة 100%)
         "word_timeline": timeline or [],
         "aligned":       aligned  or [],
     }
@@ -237,26 +272,55 @@ def _render_node(manifest_path: Path, output_base: str) -> Path:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🎯 AUDIO PIPELINE (مُحدّث - يستخدم WhisperX للنص)
+# ✨ SPEED UP AUDIO (تسريع حسب اللغة)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _speed_up_audio(audio_path: str, speed: float, output_path: str) -> str:
+    """تسريع الصوت باستخدام ffmpeg atempo."""
+    if abs(speed - 1.0) < 0.01:
+        return audio_path  # لا تغيير
+    
+    print(f"  ⏩ Speeding up audio: {speed}x")
+    
+    r = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", audio_path,
+            "-filter:a", f"atempo={speed}",
+            "-c:a", "aac", "-b:a", "192k",
+            output_path,
+        ],
+        capture_output=True, text=True,
+    )
+    
+    if r.returncode != 0:
+        print(f"  ⚠️  Speed up failed: {r.stderr[-150:]}")
+        return audio_path
+    
+    print(f"  ✅ Audio sped up to {speed}x")
+    return output_path
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# AUDIO PIPELINE
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_audio(
     script_data: dict,
-    voice_key: str,
     output_base: str,
-    music_volume: float,
-    sfx_type: str,
+    music_volume: float = 0.12,
+    sfx_type: str = "swoosh",
 ) -> tuple[Path, float, list, list, list]:
-    """
-    ✨ NEW: ترجع 5 قيم بدل 4:
-    audio_path, real_dur, timeline, aligned, whisper_sentences
-    """
+    
     tagged_sentences = script_data["tagged_sentences"]
-    lang = script_data.get("lang", "en")
+    lang = script_data.get("lang", "ar")
+    
+    # ✨ Voice config حسب اللغة
+    voice_config = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
+    voice_key = voice_config["voice_key"]
     
     print(f"\n  🎙️  {lang.upper()} TTS (voice={voice_key})")
     
-    # ── 1. TTS ──────────────────────────────────────────────────────────────
     synthesize_speech(
         tagged_sentences=tagged_sentences,
         output_path=f"{output_base}_voice",
@@ -279,7 +343,7 @@ def produce_audio(
             real_dur = measured
             print(f"  📏 Real duration: {real_dur:.3f}s")
 
-    # ── 2. ✨ NEW: استخراج النص من WhisperX ─────────────────────────────────
+    # ✨ WhisperX transcript
     timeline, aligned, whisper_sentences = [], [], []
     
     if wav_path:
@@ -290,17 +354,8 @@ def produce_audio(
                 whisper_sentences = transcript["sentences"]
                 aligned = transcript["aligned"]
                 timeline = transcript["timeline"]
-                
-                print(f"  ✅ WhisperX transcript: {len(whisper_sentences)} sentences, {len(timeline)} events")
-                
-                # ✨ مقارنة الكلمات الأصلية مع المستخرجة
-                original_words = sum(len(s["text"].split()) for s in tagged_sentences)
-                extracted_words = sum(len(s.split()) for s in whisper_sentences)
-                diff = abs(original_words - extracted_words)
-                if diff > 5:
-                    print(f"  ℹ️  Word count diff: original={original_words}, extracted={extracted_words} (diff={diff})")
+                print(f"  ✅ WhisperX: {len(whisper_sentences)} sentences, {len(timeline)} events")
             else:
-                print(f"  ⚠️  WhisperX extraction failed - using original sentences")
                 whisper_sentences = [s["text"] for s in tagged_sentences]
         except Exception as e:
             print(f"  ⚠️  Transcript error: {e}")
@@ -308,11 +363,10 @@ def produce_audio(
     else:
         whisper_sentences = [s["text"] for s in tagged_sentences]
 
-    # ── 3. Audio mixing ─────────────────────────────────────────────────────
+    # Audio mixing
     clip_dur = _clip_durations_from_aligned(aligned, real_dur, len(whisper_sentences))
     mixed_out = f"{output_base}_audio_mixed.aac"
-    print(f"  🎚️  Mixing (music={music_volume}, sfx={sfx_type})")
-
+    
     try:
         final_audio = mix_voice_music_sfx(
             voice_path=wav_path or f"{output_base}_voice_0.wav",
@@ -323,6 +377,14 @@ def produce_audio(
             music_volume=music_volume,
             seed=hash(script_data["title"]) % 10000,
         )
+        
+        # ✨ تسريع حسب اللغة
+        speed = SPEED_MULTIPLIER.get(lang, 1.0)
+        if speed != 1.0:
+            sped_out = f"{output_base}_audio_fast.aac"
+            final_audio_path = _speed_up_audio(str(final_audio), speed, sped_out)
+            final_audio = Path(final_audio_path)
+        
         dur = get_audio_duration(str(final_audio))
         if dur >= 5:
             real_dur = dur
@@ -335,351 +397,193 @@ def produce_audio(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# VERSION PIPELINE
-# ═════════════════════════════════════════════════════════════════════════════
-
-def produce_version(
-    *,
-    script_data: dict,
-    voice_key: str,
-    output_base: str,
-    video_paths: list,
-    label: str,
-    music_volume: float,
-    sfx_type: str,
-    export_formats: list[str],
-    video_number: str,
-    lang: str,
-    force: bool = False,
-    record: dict = None,
-    ai_data: dict = None,
-    should_publish: bool = True,
-    fb_lang: str = "ar",
-    fb_reel: bool = True,
-) -> dict:
-    result = {
-        "label":     label,
-        "final":     None,
-        "srt":       None,
-        "word_srt":  None,
-        "exports":   {},
-        "published": False,
-    }
-
-    if not force and is_render_done(video_number, lang):
-        existing = get_render_output(video_number, lang)
-        print(f"  ⏭️  {label} already rendered → {Path(existing).name}")
-        result["final"] = Path(existing)
-
-        if should_publish and record and ai_data and not is_published(video_number, lang):
-            _do_publish(existing, record, ai_data, lang, fb_reel, video_number)
-            result["published"] = True
-
-        return result
-
-    mark_render_start(video_number, lang)
-
-    try:
-        # ✨ NEW: produce_audio ترجع 5 قيم
-        audio_path, real_dur, timeline, aligned, whisper_sentences = produce_audio(
-            script_data=script_data,
-            voice_key=voice_key,
-            output_base=output_base,
-            music_volume=music_volume,
-            sfx_type=sfx_type,
-        )
-        
-        # ✨ NEW: تمرير whisper_sentences إلى manifest
-        manifest = save_manifest(
-            script_data=script_data,
-            video_paths=video_paths,
-            audio_path=audio_path,
-            out=output_base,
-            timeline=timeline,
-            aligned=aligned,
-            real_duration=real_dur,
-            whisper_sentences=whisper_sentences,
-        )
-        
-        final_video = _render_node(manifest, output_base)
-
-        if aligned:
-            result["srt"]      = generate_srt(aligned, f"{output_base}.srt")
-            result["word_srt"] = generate_word_srt(aligned, f"{output_base}_words.srt")
-
-        if export_formats:
-            result["exports"] = export_all(str(final_video), output_base, export_formats)
-
-        mark_render_done(video_number, lang, str(final_video), real_dur)
-        result["final"] = final_video
-
-        if should_publish and record and ai_data:
-            published = _do_publish(
-                str(final_video), record, ai_data, lang, fb_reel, video_number
-            )
-            result["published"] = published
-
-    except Exception as e:
-        mark_render_failed(video_number, lang, str(e))
-        raise
-
-    finally:
-        close_thread_conn()
-
-    return result
-
-
-def _do_publish(video_path, record, ai_data, lang, as_reel, video_number):
-    fb_lang_key = lang if lang in ("ar", "en") else "ar"
-    
-    captions = ai_data.get("captions", {})
-    ai_caption = captions.get(fb_lang_key, "")
-    
-    if not ai_caption:
-        print(f"  ⚠️  No AI caption for {fb_lang_key} — using title")
-        ai_caption = record.get("title", "")
-    
-    try:
-        publish_to_facebook(
-            video_path=video_path,
-            record=record,
-            lang=fb_lang_key,
-            as_reel=as_reel,
-            ai_caption=ai_caption,
-        )
-        mark_published(video_number, lang)
-        return True
-    except Exception as e:
-        print(f"  ❌ Publish ({lang.upper()}) failed: {e}")
-        return False
-
-
-# ═════════════════════════════════════════════════════════════════════════════
 # PROCESS ONE VIDEO
 # ═════════════════════════════════════════════════════════════════════════════
 
-def process_video(record, args, out_dir, thumbnail_queue, should_publish):
+def process_video(
+    record: dict,
+    args: argparse.Namespace,
+    out_dir: str,
+    should_publish: bool,
+) -> None:
     num   = record["number"]
     title = record["title"]
+    lang  = args.lang
 
     print(f"\n{'═'*65}")
-    print(f"  🎬  Video #{num}:  {title}")
+    print(f"  🎬  Video #{num} ({lang.upper()}):  {title}")
     print(f"{'═'*65}")
 
-    out_base       = str(Path(out_dir) / f"video_{num}")
+    out_base       = str(Path(out_dir) / f"video_{num}_{lang}")
     export_formats = [] if args.no_export else [
         f.strip() for f in args.formats.split(",") if f.strip()
     ]
 
+    # ── 1. AI Enrichment ─────────────────────────────────────────────────────
     try:
-        ai_data = get_or_create_ai_data(record, force_ai=args.force_ai)
+        ai_data = get_or_create_ai_data(record, lang, force_ai=args.force_ai)
     except AIEnrichmentError as e:
         print(f"\n  ⛔ VIDEO #{num} STOPPED: AI enrichment failed")
         print(f"     {e}")
         return
     
-    ar_tagged = ai_data.get("ar_tagged") or []
-    en_tagged = ai_data.get("en_tagged") or []
+    # ── 2. Get tagged sentences ──────────────────────────────────────────────
+    tag_key = f"{lang}_tagged" if lang != "fr" else "fr_tagged"
+    if tag_key not in ai_data:
+        tag_key = "en_tagged" if lang in ("en", "fr") else "ar_tagged"
     
-    if ar_tagged:
-        print(f"\n  🇸🇦  Arabic content:")
-        print_tags_summary(ar_tagged, lang="ar")
+    tagged = ai_data.get(tag_key) or ai_data.get("ar_tagged") or ai_data.get("en_tagged") or []
     
-    if en_tagged:
-        print(f"\n  🇬🇧  English content:")
-        print_tags_summary(en_tagged, lang="en")
+    if not tagged:
+        print(f"  ❌ No tagged content for #{num} ({lang.upper()})")
+        return
     
-    attractive = ai_data.get("attractive_title", {})
-    if attractive:
-        print(f"\n  📌 Display Title: {attractive.get('emoji_left', '🔥')} {attractive.get('title', '')} {attractive.get('emoji_right', '💥')}")
+    if tagged:
+        print(f"\n  🏷️  {lang.upper()} content:")
+        print_tags_summary(tagged, lang=lang)
     
+    # ── 3. Build script data ─────────────────────────────────────────────────
+    script_data = _build_script_data(record, lang, ai_data, tagged)
+    
+    if not script_data:
+        print(f"  ❌ Cannot build script data for #{num}")
+        return
+    
+    save_script_meta(num, title, script_data, None)
+    
+    # ── 4. Script-only mode ──────────────────────────────────────────────────
     if args.script_only:
-        _display_script_only(record, ai_data)
+        _display_script_only(record, ai_data, tagged, lang)
         return
     
-    ar_data = None
-    en_data = None
-    
-    if ar_tagged:
-        ar_data = _build_script_data(record, "ar", ai_data)
-    
-    if en_tagged:
-        en_data = _build_script_data(record, "en", ai_data)
-    
-    if not ar_data and not en_data:
-        print(f"  ❌ No valid content for #{num}")
-        return
-    
-    save_script_meta(num, title, en_data or {}, ar_data)
-    
+    # ── 5. Fetch videos ──────────────────────────────────────────────────────
     print(f"\n  📹 Fetching stock videos ({CLIP_DURATION}s per clip)...")
     visual_keywords = ai_data.get("visual_keywords", [])
     hook_keyword    = ai_data.get("hook_keyword", "")
     
-    primary_data = ar_data or en_data
-    
-    total_duration = primary_data["estimated_seconds"]
+    total_duration = script_data["estimated_seconds"]
     n_clips = max(1, int(total_duration / CLIP_DURATION))
     
-    print(f"  📊 Total duration: {total_duration}s → {n_clips} clips × {CLIP_DURATION}s each")
-    if hook_keyword:
-        print(f"  🔥 HOOK keyword: '{hook_keyword}'")
+    print(f"  📊 Duration: {total_duration}s → {n_clips} clips")
     
     clip_keywords = []
-    
     if hook_keyword:
         clip_keywords.append([hook_keyword, "dramatic close-up", "intense moment"])
-        remaining_clips = n_clips - 1
+        remaining = n_clips - 1
     else:
-        remaining_clips = n_clips
+        remaining = n_clips
     
-    flat_keywords = []
+    flat_kw = []
     for kws in visual_keywords:
         if isinstance(kws, list):
-            flat_keywords.extend(kws)
+            flat_kw.extend(kws)
+    if not flat_kw:
+        flat_kw = ["person thinking", "emotional moment", "deep thought"]
     
-    if not flat_keywords:
-        flat_keywords = ["person thinking", "emotional moment", "deep thought"]
+    for i in range(remaining):
+        idx = i % len(flat_kw)
+        clip_keywords.append([
+            flat_kw[idx],
+            flat_kw[(idx+1) % len(flat_kw)],
+            flat_kw[(idx+2) % len(flat_kw)],
+        ])
     
-    for i in range(remaining_clips):
-        base_idx = i % len(flat_keywords)
-        kws_for_clip = [
-            flat_keywords[base_idx],
-            flat_keywords[(base_idx + 1) % len(flat_keywords)],
-            flat_keywords[(base_idx + 2) % len(flat_keywords)],
-        ]
-        clip_keywords.append(kws_for_clip)
-    
-    clip_dur = [CLIP_DURATION] * n_clips
-    
-    vid_dir = str(Path(out_dir) / f"videos_{num}")
+    vid_dir = str(Path(out_dir) / f"videos_{num}_{lang}")
     
     try:
         video_paths = fetch_videos_for_script(
             keywords_per_sentence=clip_keywords,
-            clip_durations=clip_dur,
+            clip_durations=[CLIP_DURATION] * n_clips,
             output_dir=vid_dir,
         )
     except Exception as e:
         print(f"  ❌ Video fetch failed: {e}")
         return
 
+    # ── 6. Audio-only mode ───────────────────────────────────────────────────
     if args.no_video:
-        for data, voice, suffix in [
-            (en_data, args.voice_en, "en"),
-            (ar_data, args.voice_ar, "ar"),
-        ]:
-            if data:
-                print(f"\n  🎵 {suffix.upper()} audio only...")
-                try:
-                    produce_audio(
-                        data, voice, f"{out_base}_{suffix}",
-                        args.music_volume, args.sfx_type
-                    )
-                except Exception as e:
-                    print(f"  ❌ {suffix} audio: {e}")
+        print(f"\n  🎵 {lang.upper()} audio only...")
+        try:
+            produce_audio(script_data, out_base)
+        except Exception as e:
+            print(f"  ❌ Audio error: {e}")
         return
 
-    hook_thumb = (ai_data.get("analysis", {}).get("topic_summary") or 
-                  primary_data["sentences"][0] if primary_data["sentences"] else title)
+    # ── 7. Produce audio + render ────────────────────────────────────────────
+    mark_render_start(num, lang)
     
     try:
-        html_path = generate_thumbnail_html(
-            title=title,
-            hook=hook_thumb,
-            tone=ai_data.get("analysis", {}).get("tone", "energetic"),
-            output_path=f"{out_base}_thumbnail.html",
+        audio_path, real_dur, timeline, aligned, whisper_sentences = produce_audio(
+            script_data, out_base,
         )
-        thumbnail_queue.append((str(html_path), f"{out_base}_thumbnail.png"))
+        
+        manifest = save_manifest(
+            script_data=script_data,
+            video_paths=video_paths,
+            audio_path=audio_path,
+            out=out_base,
+            timeline=timeline,
+            aligned=aligned,
+            real_duration=real_dur,
+            whisper_sentences=whisper_sentences,
+        )
+        
+        final_video = _render_node(manifest, out_base)
+
+        if aligned:
+            generate_srt(aligned, f"{out_base}.srt")
+            generate_word_srt(aligned, f"{out_base}_words.srt")
+
+        if export_formats:
+            export_all(str(final_video), out_base, export_formats)
+
+        mark_render_done(num, lang, str(final_video), real_dur)
+        
+        # ── 8. Publish ───────────────────────────────────────────────────────
+        if should_publish:
+            _do_publish(str(final_video), record, ai_data, lang, num)
+        
+        # ── 9. Summary ───────────────────────────────────────────────────────
+        mb = final_video.stat().st_size / 1_048_576 if final_video.exists() else 0
+        print(f"\n  ✅ Video #{num} ({lang.upper()}) → {final_video.name} ({mb:.1f} MB)")
+        
     except Exception as e:
-        print(f"  ⚠️  Thumbnail HTML: {e}")
+        mark_render_failed(num, lang, str(e))
+        print(f"\n  ❌ Render failed: {e}")
 
-    publish_langs = {"both": {"ar", "en"}, "ar": {"ar"}, "en": {"en"}}.get(
-        args.fb_lang, {"ar"}
-    )
 
-    versions = []
+def _do_publish(video_path, record, ai_data, lang, video_number):
+    """نشر فيديو على Facebook."""
+    captions = ai_data.get("captions", {})
+    ai_caption = captions.get(lang, captions.get("ar", captions.get("en", "")))
     
-    if en_data:
-        versions.append(dict(
-            script_data=en_data,
-            voice_key=args.voice_en,
-            output_base=f"{out_base}_en",
-            label="🇬🇧 English",
-            lang="en",
-        ))
+    if not ai_caption:
+        ai_caption = record.get("title", "")
     
-    if ar_data:
-        versions.append(dict(
-            script_data=ar_data,
-            voice_key=args.voice_ar,
-            output_base=f"{out_base}_ar",
-            label="🇸🇦 Arabic",
-            lang="ar",
-        ))
-
-    shared = dict(
-        video_paths=video_paths,
-        music_volume=args.music_volume,
-        sfx_type=args.sfx_type,
-        export_formats=export_formats,
-        video_number=num,
-        force=args.force,
-        record=record,
-        ai_data=ai_data,
-        fb_reel=args.fb_reel,
-    )
-
-    print(f"\n  📽️  Rendering {len(versions)} version(s) in parallel...")
-    outputs: dict[str, dict] = {}
-
-    with ThreadPoolExecutor(max_workers=len(versions)) as pool:
-        future_map = {
-            pool.submit(
-                produce_version,
-                **v,
-                **shared,
-                should_publish=(should_publish and v["lang"] in publish_langs),
-            ): v["lang"]
-            for v in versions
-        }
-        for future in as_completed(future_map):
-            lang_key = future_map[future]
-            try:
-                outputs[lang_key] = future.result()
-            except Exception as e:
-                print(f"\n  ❌ {lang_key.upper()} render failed: {e}")
-                outputs[lang_key] = {"error": str(e)}
-
-    print(f"\n  {'─'*55}")
-    print(f"  📦  Video #{num} — {title}")
-    for lk, res in outputs.items():
-        if res.get("final"):
-            f   = res["final"]
-            mb  = f.stat().st_size / 1_048_576 if f.exists() else 0
-            pub = "📘 Published" if res.get("published") else ""
-            print(f"     ✅ {lk.upper():6} → {f.name}  ({mb:.1f} MB) {pub}")
-            if res.get("srt"):
-                print(f"        📄 SRT: {res['srt'].name}")
-            for fmt, fp in res.get("exports", {}).items():
-                if fp:
-                    print(f"        📦 {fmt}: {fp.name}")
-        elif res.get("error"):
-            print(f"     ❌ {lk.upper():6} → {res['error'][:60]}")
+    try:
+        publish_to_facebook(
+            video_path=video_path,
+            record=record,
+            lang=lang,
+            as_reel=True,
+            ai_caption=ai_caption,
+        )
+        mark_video_published_for_lang(video_number, lang)
+        print(f"  📘 Published on Facebook ({lang.upper()})")
+    except Exception as e:
+        print(f"  ❌ Publish failed: {e}")
 
 
-def _build_script_data(record, lang, ai_data):
-    tagged_key = f"{lang}_tagged"
-    tagged_sentences = ai_data.get(tagged_key, []) or []
-    
-    if not tagged_sentences:
+def _build_script_data(record, lang, ai_data, tagged):
+    """بناء script_data من tagged sentences."""
+    if not tagged:
         return None
     
-    sentences_clean = [s["text"] for s in tagged_sentences]
+    sentences_clean = [s["text"] for s in tagged]
     full_script = " ".join(sentences_clean)
     
     tags_summary = {}
-    for sent in tagged_sentences:
+    for sent in tagged:
         tag = sent.get("final_tag", DEFAULT_TAG)
         tags_summary[tag] = tags_summary.get(tag, 0) + 1
     
@@ -696,97 +600,40 @@ def _build_script_data(record, lang, ai_data):
         "hook":              sentences_clean[0] if sentences_clean else "",
         "full_script":       full_script,
         "sentences":         sentences_clean,
-        "tagged_sentences":  tagged_sentences,
+        "tagged_sentences":  tagged,
         "tags_summary":      tags_summary,
         "estimated_seconds": _estimate_duration(full_script),
         "word_count":        len(full_script.split()),
         "lang":              lang,
         "content_type":      CONTENT_TYPE,
         
-        "power_words":          ai_data.get("power_words", {}).get(lang, []),
-        "pattern_interrupts":   ai_data.get("pattern_interrupts", {}).get(lang, []),
-        "engagement_questions": ai_data.get("engagement_questions", {}).get(lang, []),
-        "accent_colors":        ai_data.get("accent_colors", []),
-        "visual_keywords":      ai_data.get("visual_keywords", []),
-        "analysis":             ai_data.get("analysis", {}),
-        
-        "hook_keyword":         ai_data.get("hook_keyword", ""),
-        "has_hook":             bool(ai_data.get("hook_keyword", "")),
+        "power_words":       ai_data.get("power_words", {}).get(lang,
+                             ai_data.get("power_words", {}).get("ar",
+                             ai_data.get("power_words", {}).get("en", []))),
+        "accent_colors":     ai_data.get("accent_colors", []),
+        "visual_keywords":   ai_data.get("visual_keywords", []),
+        "analysis":          ai_data.get("analysis", {}),
+        "hook_keyword":      ai_data.get("hook_keyword", ""),
+        "has_hook":          bool(ai_data.get("hook_keyword", "")),
     }
 
 
-def _display_script_only(record, ai_data):
-    print(f"\n  📝 Script preview:")
+def _display_script_only(record, ai_data, tagged, lang):
+    """عرض السكريبت فقط."""
+    print(f"\n  📝 Script preview ({lang.upper()}):")
     
-    attractive = ai_data.get("attractive_title", {})
-    if attractive:
-        print(f"\n  📌 Display Title:")
-        print(f"     {attractive.get('emoji_left', '🔥')} {attractive.get('title', '')} {attractive.get('emoji_right', '💥')}")
-    
-    ar_tagged = ai_data.get("ar_tagged") or []
-    en_tagged = ai_data.get("en_tagged") or []
-    
-    if ar_tagged:
-        print(f"\n  🇸🇦 Arabic ({len(ar_tagged)} sentences):")
-        for i, sent in enumerate(ar_tagged, 1):
-            tag = sent.get("final_tag", DEFAULT_TAG)
-            text = sent["text"][:70]
-            print(f"     {i:>2}. [{tag:12}] {text}")
-    
-    if en_tagged:
-        print(f"\n  🇬🇧 English ({len(en_tagged)} sentences):")
-        for i, sent in enumerate(en_tagged, 1):
+    if tagged:
+        print(f"\n  {len(tagged)} sentences:")
+        for i, sent in enumerate(tagged, 1):
             tag = sent.get("final_tag", DEFAULT_TAG)
             text = sent["text"][:70]
             print(f"     {i:>2}. [{tag:12}] {text}")
     
     analysis = ai_data.get("analysis", {})
     if analysis:
-        print(f"\n  📊 AI Analysis:")
-        print(f"     Type      : {analysis.get('content_type')}")
-        print(f"     Emotion   : {analysis.get('primary_emotion')}")
-        print(f"     Intensity : {analysis.get('intensity')}/10")
-        print(f"     Tone      : {analysis.get('tone')}")
-    
-    if ai_data.get("hook_keyword"):
-        print(f"\n  🔥 Hook keyword: '{ai_data['hook_keyword']}'")
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# PUBLISH PENDING
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _publish_pending(args, all_scripts):
-    pending = get_pending_publish(
-        lang=None if args.fb_lang == "both" else args.fb_lang
-    )
-
-    if not pending:
-        print("  ✅ No pending videos to publish")
-        return
-
-    print(f"\n  📘 Publishing {len(pending)} pending video(s)...")
-    scripts_map = {str(s["number"]): s for s in all_scripts}
-
-    for item in pending:
-        vnum   = str(item["video_number"])
-        lang   = item["lang"]
-        path   = item["output_path"]
-        record = scripts_map.get(vnum, {"title": f"Video #{vnum}",
-                                        "en_content": "", "ar_content": ""})
-
-        print(f"\n  [{vnum}] {record.get('title','?')} ({lang.upper()}) → {Path(path).name}")
-        
-        ai_data = get_ai_cache(vnum)
-        if not ai_data:
-            print(f"  ⚠️  No AI cache for #{vnum} - using basic caption")
-            ai_data = {"captions": {}}
-        
-        success = _do_publish(path, record, ai_data, lang, args.fb_reel, vnum)
-        if success:
-            print(f"  ✅ Published")
-        else:
-            print(f"  ❌ Failed")
+        print(f"\n  📊 Analysis:")
+        print(f"     Type: {analysis.get('content_type')}")
+        print(f"     Emotion: {analysis.get('primary_emotion')}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -797,11 +644,9 @@ def main() -> None:
     args = parse_args()
     init_db()
 
+    # Cache management
     if args.show_ai_cache is not None:
-        if args.show_ai_cache == "all":
-            show_ai_cache()
-        else:
-            show_ai_cache(args.show_ai_cache)
+        show_ai_cache(args.show_ai_cache if args.show_ai_cache != "all" else None)
         return
     
     if args.clear_ai_cache is not None:
@@ -810,38 +655,36 @@ def main() -> None:
             print(f"  🗑️  Cleared {count} AI cache entries")
         else:
             count = clear_ai_cache(args.clear_ai_cache)
-            print(f"  🗑️  Cleared {count} entry for video #{args.clear_ai_cache}")
+            print(f"  🗑️  Cleared {count} entry")
         return
 
     if not args.input_file:
         print("❌ Error: input_file is required")
         sys.exit(1)
     
+    lang = args.lang
     will_publish = _should_publish(args)
 
     print(f"\n{'═'*62}")
-    print(f"  🚀  Video Generator — VAS + AI + WhisperX")
+    print(f"  🚀  Video Generator — {lang.upper()}")
     print(f"{'═'*62}")
     print(f"  Input      : {args.input_file}")
-    print(f"  Voice EN   : {args.voice_en}  |  AR: {args.voice_ar}")
-    print(f"  Music      : {args.music_volume}  |  SFX: {args.sfx_type}")
+    print(f"  Language   : {lang.upper()}")
     print(f"  Output     : {args.output_dir}")
-    print(f"  Renderer   : {RENDER_SCRIPT.name}")
     print(f"  Clip Dur   : {CLIP_DURATION}s")
-    print(f"  FB Publish : {'✅ AUTO' if will_publish else '❌ OFF'}  |  Lang: {args.fb_lang}")
-    print(f"  Force AI   : {'✅' if args.force_ai else '❌'}")
+    print(f"  Speed      : {SPEED_MULTIPLIER.get(lang, 1.0)}x")
+    print(f"  Auto-next  : {'✅' if args.auto_next else '❌'}")
+    print(f"  FB Publish : {'✅' if will_publish else '❌'}")
     print()
     print_db_summary()
 
     if will_publish:
         print(f"\n📘 Checking Facebook credentials...")
         if not check_credentials():
-            if args.publish_fb:
-                print("  ⚠️  Credentials invalid — publish will fail")
-            else:
-                print("  ⚠️  Credentials invalid — auto-publish disabled")
-                will_publish = False
+            print("  ⚠️  FB credentials invalid — auto-publish disabled")
+            will_publish = False
 
+    # Read scripts
     print(f"\n📖  Reading scripts...")
     try:
         all_scripts = read_scripts(args.input_file)
@@ -851,7 +694,6 @@ def main() -> None:
 
     valid, errors = validate_scripts(all_scripts)
     if errors:
-        print(f"\n⚠️  Validation warnings:")
         for err in errors:
             print(err)
 
@@ -861,11 +703,21 @@ def main() -> None:
 
     print_scripts_summary(valid)
 
-    if args.publish_pending:
-        _publish_pending(args, all_scripts)
-        return
-
-    if args.video_number:
+    # ✨ Auto-next: اختر الفيديو التالي تلقائياً
+    if args.auto_next:
+        next_num = get_next_video_number(lang, [str(s["number"]) for s in valid])
+        
+        if next_num is None:
+            # ✨ Loop: أعد من البداية
+            print(f"\n  🔄 All videos published for {lang.upper()} — looping from start!")
+            from db import reset_published_for_lang
+            reset_published_for_lang(lang)
+            next_num = str(valid[0]["number"])
+        
+        print(f"\n  🎯 Auto-next: Video #{next_num}")
+        valid = [s for s in valid if str(s["number"]) == next_num]
+    
+    elif args.video_number:
         valid = [s for s in valid if str(s["number"]) == str(args.video_number)]
         if not valid:
             print(f"❌  Video #{args.video_number} not found")
@@ -873,47 +725,26 @@ def main() -> None:
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    success = failed = skipped = 0
-    thumbnail_queue: list[tuple[str, str]] = []
+    success = failed = 0
 
     for i, record in enumerate(valid, 1):
         print(f"\n[{i}/{len(valid)}]")
-
-        en_done = is_render_done(record["number"], "en") and not args.force
-        ar_done = (
-            is_render_done(record["number"], "ar") or
-            not record["ar_content"].strip()
-        ) and not args.force
-
-        if en_done and ar_done and not args.script_only and not args.no_video:
-            print(f"  ⏭️  Video #{record['number']} already rendered")
-
-            if will_publish:
-                ai_data = get_ai_cache(str(record["number"]))
-                if not ai_data:
-                    ai_data = {"captions": {}}
-                
-                out_base = str(Path(args.output_dir) / f"video_{record['number']}")
-                for lang in (["ar","en"] if args.fb_lang=="both" else [args.fb_lang]):
-                    if not is_published(record["number"], lang):
-                        path = f"{out_base}_{lang}_final.mp4"
-                        if Path(path).exists():
-                            print(f"  📘 Publishing unpublished {lang.upper()}...")
-                            _do_publish(path, record, ai_data, lang,
-                                       args.fb_reel, record["number"])
-                        else:
-                            print(f"  ⚠️  File not found: {Path(path).name}")
-                    else:
-                        print(f"  ✅ {lang.upper()} already published")
-            skipped += 1
+        
+        # Skip if already done
+        if not args.force and is_render_done(record["number"], lang):
+            if will_publish and not is_published(record["number"], lang):
+                # Already rendered but not published
+                out_base = str(Path(args.output_dir) / f"video_{record['number']}_{lang}")
+                path = f"{out_base}_final.mp4"
+                if Path(path).exists():
+                    ai_data = get_ai_cache(f"{record['number']}_{lang}") or {"captions": {}}
+                    _do_publish(path, record, ai_data, lang, record["number"])
+            else:
+                print(f"  ⏭️  Video #{record['number']} ({lang.upper()}) already done")
             continue
 
         try:
-            process_video(
-                record, args, args.output_dir,
-                thumbnail_queue,
-                should_publish=will_publish,
-            )
+            process_video(record, args, args.output_dir, should_publish=will_publish)
             success += 1
         except KeyboardInterrupt:
             print("\n⛔  Interrupted")
@@ -922,7 +753,25 @@ def main() -> None:
             print(f"  ❌  Error: {e}")
             failed += 1
 
-    if thumbnail_queue and not args.script_only and not args.no_video:
+    # Thumbnail
+    thumbnail_queue = []
+    for record in valid:
+        out_base = str(Path(args.output_dir) / f"video_{record['number']}_{lang}")
+        html_path = f"{out_base}_thumbnail.html"
+        png_path = f"{out_base}_thumbnail.png"
+        if not Path(png_path).exists():
+            try:
+                generate_thumbnail_html(
+                    title=record["title"],
+                    hook=record.get("title", ""),
+                    tone="energetic",
+                    output_path=html_path,
+                )
+                thumbnail_queue.append((html_path, png_path))
+            except Exception:
+                pass
+    
+    if thumbnail_queue:
         print(f"\n🖼️  Rendering {len(thumbnail_queue)} thumbnail(s)...")
         try:
             render_thumbnails_batch(thumbnail_queue)
@@ -930,8 +779,7 @@ def main() -> None:
             print(f"  ⚠️  Thumbnail error: {e}")
 
     print(f"\n{'═'*62}")
-    print(f"  ✅  Done — {success} success | {failed} failed | {skipped} skipped")
-    print(f"  📁  Output: {args.output_dir}/")
+    print(f"  ✅  Done ({lang.upper()}) — {success} success | {failed} failed")
     print_db_summary()
     print(f"{'═'*62}\n")
 
