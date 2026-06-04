@@ -52,7 +52,6 @@ const FPS    = 30;
 const WIDTH  = 1080;
 const HEIGHT = 1920;
 
-// حد الصمت — فجوة أكبر من هذا بين جملتين = إخفاء النص
 const SILENCE_THRESHOLD = 0.15;
 
 const safeOut = outputPath
@@ -179,7 +178,6 @@ function buildFrameStateMap() {
     }));
   }
 
-  // Fallback: توزيع متساوٍ
   if (segments.length === 0) {
     console.log("⚠️  No aligned segments - using equal split");
     const perSentence =
@@ -205,7 +203,6 @@ function buildFrameStateMap() {
     }
   }
 
-  // Log segments
   console.log(`\n📊 Segments (${segments.length}):`);
   segments.forEach((seg, i) => {
     const preview = (seg.sentence || "").substring(0, 50);
@@ -216,13 +213,11 @@ function buildFrameStateMap() {
     );
   });
 
-  // Build frame map
   const map = new Array(totalFrames).fill(null);
 
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
 
-    // ابحث عن الـ segment الحالي
     let currentSeg    = null;
     let currentSegIdx = -1;
 
@@ -235,7 +230,6 @@ function buildFrameStateMap() {
     }
 
     if (!currentSeg) {
-      // قبل بداية أول جملة
       if (segments.length > 0 && t < segments[0].start) {
         map[f] = {
           segment_idx:      -1,
@@ -246,7 +240,6 @@ function buildFrameStateMap() {
         continue;
       }
 
-      // بعد نهاية آخر جملة
       const lastSeg = segments[segments.length - 1];
       if (lastSeg && t >= lastSeg.end) {
         map[f] = {
@@ -258,7 +251,6 @@ function buildFrameStateMap() {
         continue;
       }
 
-      // بين جملتين — تحقق من حجم الفجوة
       let prevSeg = null;
       let nextSeg = null;
 
@@ -281,7 +273,6 @@ function buildFrameStateMap() {
           : 999;
 
       if (gapSize > SILENCE_THRESHOLD) {
-        // صمت حقيقي → أخفِ النص
         map[f] = {
           segment_idx:      -1,
           segment:          null,
@@ -289,7 +280,6 @@ function buildFrameStateMap() {
           fade_progress:    0,
         };
       } else {
-        // فجوة صغيرة → استمر بآخر جملة
         const fallbackSeg = prevSeg || segments[0];
         const fallbackIdx = prevSeg
           ? segments.indexOf(prevSeg)
@@ -304,7 +294,6 @@ function buildFrameStateMap() {
       continue;
     }
 
-    // ابحث عن الكلمة الحالية
     let currentWordIdx = -1;
     const segWords     = currentSeg.words || [];
 
@@ -318,7 +307,6 @@ function buildFrameStateMap() {
       }
     }
 
-    // Fade in
     const segStartFrame = Math.floor(currentSeg.start * FPS);
     const framesSince   = Math.max(0, f - segStartFrame);
     const fadeProgress  = Math.min(framesSince / 4, 1.0);
@@ -331,7 +319,6 @@ function buildFrameStateMap() {
     };
   }
 
-  // Debug sample
   console.log("\n📊 Sample sync:");
   [0, 0.25, 0.5, 0.75].forEach((pct) => {
     const f = Math.floor(totalFrames * pct);
@@ -362,7 +349,6 @@ function buildFrameStateMap() {
 function buildHTML(opts) {
   const { segment, currentWordIdx, fadeProgress } = opts;
 
-  // صمت → شاشة شفافة فارغة
   if (!segment || !segment.words || segment.words.length === 0) {
     return (
       `<!DOCTYPE html><html>` +
@@ -386,7 +372,6 @@ function buildHTML(opts) {
   const titleFont = getFontFamily(display_title);
   const titleDir  = getDir(display_title);
 
-  // حجم الخط حسب عدد الكلمات
   const wc = allWordsText.length;
   let fontSize;
   if      (wc <= 5)  fontSize = ar ? 85 : 80;
@@ -398,7 +383,6 @@ function buildHTML(opts) {
   const showPowerSolo =
     allWordsText.length === 1 && isPowerWord(allWordsText[0]);
 
-  // بناء الكلمات مع karaoke
   let wordIdx = 0;
   const wordsHTML = allWordsText
     .map((word) => {
@@ -456,8 +440,6 @@ function buildHTML(opts) {
       width:${WIDTH}px; height:${HEIGHT}px;
       overflow:hidden; background:transparent;
     }
-
-    /* ── Overlays ── */
     .overlay-top {
       position:absolute; top:0; left:0; right:0; height:35%;
       background:linear-gradient(
@@ -478,8 +460,6 @@ function buildHTML(opts) {
       );
       pointer-events:none; z-index:1;
     }
-
-    /* ── Title ── */
     .title-container {
       position:absolute; top:400px; left:50%;
       transform:translateX(-50%);
@@ -505,8 +485,6 @@ function buildHTML(opts) {
       text-shadow:0 2px 6px rgba(0,0,0,0.4);
     }
     .title-emoji { font-size:${titleAr ? "54px" : "50px"}; }
-
-    /* ── Text Box ── */
     .text-container {
       position:absolute;
       left:50%; top:62%;
@@ -537,8 +515,6 @@ function buildHTML(opts) {
         opacity     0.1s  ease-out,
         text-shadow 0.15s ease-out;
     }
-
-    /* ── Power Word ── */
     .power-word-container {
       position:absolute; left:50%; top:62%;
       transform:translate(-50%, -50%);
@@ -564,7 +540,6 @@ function buildHTML(opts) {
 <body>
   <div class="overlay-top"></div>
   <div class="overlay-bottom"></div>
-
   <div class="title-container">
     <div class="title-box">
       <div class="title-text">
@@ -574,7 +549,6 @@ function buildHTML(opts) {
       </div>
     </div>
   </div>
-
   ${mainContent}
 </body>
 </html>`;
@@ -609,8 +583,7 @@ async function renderAllPNGs(page, frameStateMap) {
 
   console.log(`\n  📸 ${uniqueStates.size} unique states`);
 
-  // ── Warmup: تحميل الخطوط العربية والإنجليزية ──────────────────────────
-  // نستخدم نص عربي لتحميل Noto Naskh Arabic
+  // Warmup عربي
   const initHtmlAr = buildHTML({
     segment: {
       words: [{ word: "مرحبا", start: 0, end: 1 }],
@@ -626,7 +599,7 @@ async function renderAllPNGs(page, frameStateMap) {
   });
   await page.waitForTimeout(1000);
 
-  // نستخدم نص إنجليزي/فرنسي لتحميل Noto Sans
+  // Warmup إنجليزي/فرنسي
   const initHtmlEn = buildHTML({
     segment: {
       words: [{ word: "Hello", start: 0, end: 1 }],
@@ -644,7 +617,6 @@ async function renderAllPNGs(page, frameStateMap) {
 
   console.log("  ✅ Fonts loaded (AR + EN/FR)");
 
-  // ── Render PNGs ───────────────────────────────────────────────────────
   const pngCache = new Map();
   let rendered   = 0;
 
@@ -801,7 +773,6 @@ function processBackground(
   );
 
   if (r.status !== 0) {
-    // Fallback 1
     const basicFilter =
       `scale=${Math.round(WIDTH * 1.1)}:` +
       `${Math.round(HEIGHT * 1.1)}:` +
@@ -825,7 +796,6 @@ function processBackground(
 
     if (r.status !== 0) {
       console.error(`❌ BG failed for clip ${idx}`);
-      // Fallback 2 — minimal
       spawnSync(
         "ffmpeg",
         [
@@ -918,8 +888,10 @@ function xfadeConcat(clipPaths, clipDurations) {
   for (let i = 1; i < clipPaths.length; i++) {
     offset += clipDurations[i - 1] - XFADE;
     if (offset < 0) offset = 0;
-    const out   = i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
-    const trans = TRANSITIONS[(i - 1) % TRANSITIONS.length];
+    const out   =
+      i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
+    const trans =
+      TRANSITIONS[(i - 1) % TRANSITIONS.length];
     filters.push(
       `${last}[${i}:v]xfade=transition=${trans}:` +
       `duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
@@ -945,11 +917,17 @@ function xfadeConcat(clipPaths, clipDurations) {
   if (r.status !== 0) {
     console.error("⚠️  xfade failed - using concat");
     const lst = `${TMP}/list.txt`;
-    writeFileSync(lst, clipPaths.map((p) => `file '${p}'`).join("\n"));
+    writeFileSync(
+      lst,
+      clipPaths.map((p) => `file '${p}'`).join("\n"),
+    );
     const raw = `${TMP}/raw.mp4`;
     spawnSync(
       "ffmpeg",
-      ["-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", raw],
+      [
+        "-y", "-f", "concat", "-safe", "0",
+        "-i", lst, "-c", "copy", raw,
+      ],
       { stdio: "inherit" },
     );
     return raw;
@@ -1048,7 +1026,7 @@ async function main() {
   await browser.close();
   console.log(`✅ ${pngCache.size} PNGs done\n`);
 
-  const totalClips        =
+  const totalClips =
     Math.max(1, Math.floor(effectiveDuration / clip_duration));
   const actualClipDuration = effectiveDuration / totalClips;
 
@@ -1057,13 +1035,14 @@ async function main() {
   );
   console.log(`🎥 Videos: ${videos.length}`);
 
-  const finalClips:    string[] = [];
-  const clipDurations: number[] = [];
+  // ✅ JavaScript خالص — بدون TypeScript syntax
+  const finalClips    = [];
+  const clipDurations = [];
 
   console.log("\n🎬 Processing clips...");
 
   for (let i = 0; i < totalClips; i++) {
-    const clipStart =  i      * actualClipDuration;
+    const clipStart = i * actualClipDuration;
     const clipEnd   = Math.min(
       (i + 1) * actualClipDuration,
       effectiveDuration,
@@ -1086,7 +1065,8 @@ async function main() {
     const captionMov = `${TMP}/caption_${i}.mov`;
     framesToMov(frameDir, captionMov);
 
-    const bgMp4 = `${TMP}/bg_${String(i).padStart(3, "0")}.mp4`;
+    const bgMp4 =
+      `${TMP}/bg_${String(i).padStart(3, "0")}.mp4`;
     processBackground(videoSrc, clipDur, bgMp4, i, isHook);
 
     const finalClip =
