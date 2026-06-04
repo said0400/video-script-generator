@@ -1,11 +1,8 @@
 """
-facebook.py — Auto-publish videos to Facebook Page as Reels.
-✨ NEW: يستخدم AI-generated captions من Groq
-
-السلوك:
-  - يستقبل ai_caption من main.py
-  - إذا لم يصل caption → يستخدم title فقط
-  - validation كامل قبل الرفع (size + duration)
+facebook.py — Auto-publish videos to Facebook Pages
+✨ يدعم 3 صفحات (AR, FR, EN)
+✨ الـ credentials تأتي من environment variables:
+   FB_PAGE_ID + FB_PAGE_TOKEN (يُمرران من workflow)
 """
 
 from __future__ import annotations
@@ -31,25 +28,31 @@ MAX_DESC_LEN   = 63206
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_creds() -> tuple[str, str]:
-    page_id = os.environ.get("FB_PAGE_ID1", "").strip()
+    """
+    ✨ يقرأ credentials من البيئة.
+    الـ workflow يمرر FB_PAGE_ID و FB_PAGE_TOKEN حسب اللغة.
+    """
+    page_id = os.environ.get("FB_PAGE_ID", "").strip()
     token   = os.environ.get("FB_PAGE_TOKEN", "").strip()
+    
     if not page_id or not token:
         raise RuntimeError(
             "Missing Facebook credentials.\n"
-            "  Set FB_PAGE_ID1    = Facebook Page numeric ID\n"
-            "  Set FB_PAGE_TOKEN = long-lived Page Access Token"
+            "  Set FB_PAGE_ID and FB_PAGE_TOKEN in workflow env."
         )
     return page_id, token
 
 
 def credentials_available() -> bool:
+    """هل credentials موجودة في البيئة؟"""
     return bool(
-        os.environ.get("FB_PAGE_ID1", "").strip() and
+        os.environ.get("FB_PAGE_ID", "").strip() and
         os.environ.get("FB_PAGE_TOKEN", "").strip()
     )
 
 
 def check_credentials() -> bool:
+    """تحقق من صحة credentials مع Facebook API."""
     try:
         page_id, token = _get_creds()
         r = requests.get(
@@ -60,7 +63,8 @@ def check_credentials() -> bool:
         r.raise_for_status()
         d    = r.json()
         fans = d.get("fan_count", 0)
-        print(f"  ✅ Facebook: '{d.get('name')}' (ID:{d.get('id')}, Followers:{fans:,})")
+        name = d.get("name", "Unknown")
+        print(f"  ✅ Facebook: '{name}' (ID:{d.get('id')}, Followers:{fans:,})")
         return True
     except Exception as e:
         print(f"  ❌ Facebook credentials invalid: {e}")
@@ -72,6 +76,7 @@ def check_credentials() -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _probe_video_duration(path: str) -> float:
+    """احصل على مدة الفيديو بالثواني."""
     try:
         r = subprocess.run(
             ["ffprobe", "-v", "error",
@@ -85,6 +90,7 @@ def _probe_video_duration(path: str) -> float:
 
 
 def _validate_video(video_path: str, as_reel: bool = True) -> tuple[float, float]:
+    """تحقق شامل من الفيديو قبل الرفع."""
     if not Path(video_path).exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
 
@@ -99,23 +105,19 @@ def _validate_video(video_path: str, as_reel: bool = True) -> tuple[float, float
 
     duration = _probe_video_duration(video_path)
     if duration <= 0:
-        raise ValueError("Could not determine video duration (corrupt file?)")
+        raise ValueError("Could not determine video duration")
 
     if as_reel:
         if duration < MIN_DURATION_S:
-            raise ValueError(
-                f"Video too short: {duration:.1f}s (min {MIN_DURATION_S}s for Reels)"
-            )
+            raise ValueError(f"Video too short: {duration:.1f}s (min {MIN_DURATION_S}s)")
         if duration > MAX_DURATION_S:
-            raise ValueError(
-                f"Video too long: {duration:.1f}s (max {MAX_DURATION_S}s for Reels)"
-            )
+            raise ValueError(f"Video too long: {duration:.1f}s (max {MAX_DURATION_S}s)")
 
     return mb, duration
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CAPTION BUILDER (uses AI caption if available)
+# CAPTION BUILDER
 # ═════════════════════════════════════════════════════════════════════════════
 
 def build_caption(
@@ -123,23 +125,19 @@ def build_caption(
     lang: str = "ar",
     ai_caption: str = "",
 ) -> str:
-    """
-    بناء الـ caption للنشر.
-    
-    ✨ الأولوية:
-      1. ai_caption إذا كان متاحاً (من Groq)
-      2. title فقط كـ fallback
-    """
+    """بناء الـ caption للنشر."""
     if ai_caption and ai_caption.strip():
-        # استخدم AI caption كما هو (يحتوي على hook + content + hashtags)
         return ai_caption[:MAX_DESC_LEN]
     
-    # Fallback بسيط
     title = record.get("title", "")
-    if lang == "ar":
-        cta = "اكتب رأيك في التعليقات 👇"
-    else:
-        cta = "Tell me in the comments 👇"
+    
+    cta_map = {
+        "ar": "اكتب رأيك في التعليقات 👇",
+        "fr": "Dis-moi ton avis en commentaire 👇",
+        "en": "Tell me in the comments 👇",
+    }
+    
+    cta = cta_map.get(lang, cta_map["en"])
     
     parts = []
     if title:
@@ -160,6 +158,7 @@ def _upload_as_reel(
     page_id: str,
     token: str,
 ) -> dict:
+    """رفع الفيديو كـ Reel."""
     mb, duration = _validate_video(video_path, as_reel=True)
     file_size    = os.path.getsize(video_path)
 
@@ -222,6 +221,7 @@ def _upload_as_video(
     page_id: str,
     token: str,
 ) -> dict:
+    """رفع كـ فيديو عادي."""
     mb, duration = _validate_video(video_path, as_reel=False)
 
     print(f"  📤 Uploading as Video ({mb:.1f} MB, {duration:.1f}s)...")
@@ -254,12 +254,13 @@ def publish_to_facebook(
     lang: str = "ar",
     as_reel: bool = True,
     retries: int = 3,
-    ai_caption: str = "",  # ✨ NEW
+    ai_caption: str = "",
 ) -> dict:
     """
     نشر فيديو على Facebook Page.
     
-    ✨ NEW: ai_caption يأتي من Groq (caption ذكي)
+    ✨ الـ credentials تأتي من البيئة (FB_PAGE_ID + FB_PAGE_TOKEN)
+    ✨ الـ workflow يمرر credentials الصفحة الصحيحة حسب اللغة
     """
     if not Path(video_path).exists():
         raise FileNotFoundError(f"Video not found: {video_path}")
@@ -271,7 +272,7 @@ def publish_to_facebook(
     print(f"\n  📘 Publishing to Facebook...")
     print(f"     Title  : {title[:60]}")
     print(f"     Lang   : {lang.upper()} | Type: {'Reel' if as_reel else 'Video'}")
-    print(f"     Caption: {len(description)} chars ({'✨ AI' if ai_caption else 'basic'})")
+    print(f"     Caption: {len(description)} chars")
 
     # Pre-validation
     try:
@@ -310,12 +311,14 @@ def publish_to_facebook(
 
             print(f"  ⚠️  Facebook error (code={err_code}): {err_msg[:100]}")
 
+            # Token expired
             if err_code in (190, 102, 463, 467):
                 raise RuntimeError(
                     f"Facebook token expired (code={err_code}). "
                     "Please refresh FB_PAGE_TOKEN."
                 )
 
+            # Reel failed → try regular video
             if _as_reel and attempt == 0:
                 print(f"  ↩️  Reel failed — retrying as regular video...")
                 _as_reel = False
