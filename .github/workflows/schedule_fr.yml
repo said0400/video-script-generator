@@ -100,7 +100,7 @@ jobs:
       - name: 🔥 Install PyTorch (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install torch torchaudio \
+          pip install torch==2.4.0 torchaudio==2.4.0 \
             --index-url https://download.pytorch.org/whl/cpu
 
       - name: 📦 Install WhisperX
@@ -125,10 +125,14 @@ jobs:
             npm install
           fi
 
-      - name: 🌐 Install Playwright Chromium
+      - name: 🌐 Install Playwright Chromium (Python)
         run: |
           pip install playwright
           python -m playwright install chromium --with-deps
+
+      - name: 🌐 Install Playwright Chromium (Node)
+        working-directory: remotion
+        run: npx playwright install chromium --with-deps
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
