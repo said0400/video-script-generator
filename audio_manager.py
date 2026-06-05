@@ -1,8 +1,8 @@
 """
 audio_manager.py — Background music and SFX mixing
-✨ يدعم تسريع مختلف لكل لغة
 ✨ EQ تلقائي حسب اللغة
 ✨ Ducking تلقائي للموسيقى عند بداية كل جملة
+✨ Compressor احترافي على الصوت
 ✨ ملفات مؤقتة آمنة
 ✨ مسارات مطلقة
 """
@@ -35,21 +35,18 @@ SFX_POOLS: dict[str, Path] = {
 
 # ✨ EQ settings حسب اللغة
 LANG_EQ: dict[str, str] = {
-    # العربية: bass أكثر + warmth (دفء في الصوت)
     "ar": (
         "equalizer=f=80:width_type=o:width=2:g=3,"
         "equalizer=f=200:width_type=o:width=2:g=2,"
         "equalizer=f=3000:width_type=o:width=2:g=-1,"
         "equalizer=f=8000:width_type=o:width=2:g=-2"
     ),
-    # الفرنسية: mid range واضح + وضوح الحروف
     "fr": (
         "equalizer=f=80:width_type=o:width=2:g=1,"
         "equalizer=f=1000:width_type=o:width=2:g=2,"
         "equalizer=f=2500:width_type=o:width=2:g=3,"
         "equalizer=f=8000:width_type=o:width=2:g=1"
     ),
-    # الإنجليزية: crisp treble + وضوح عالي
     "en": (
         "equalizer=f=80:width_type=o:width=2:g=1,"
         "equalizer=f=500:width_type=o:width=2:g=-1,"
@@ -58,20 +55,29 @@ LANG_EQ: dict[str, str] = {
     ),
 }
 
+# ✨ Compressor settings — يجعل الصوت أكثر ثباتاً واحترافية
+COMPRESSOR_FILTER = (
+    "acompressor="
+    "threshold=-18dB:"   # يبدأ الضغط عند -18dB
+    "ratio=4:1:"         # نسبة الضغط 4:1
+    "attack=5:"          # سرعة الاستجابة 5ms
+    "release=60:"        # سرعة الإفراج 60ms
+    "makeup=3dB:"        # تعويض 3dB بعد الضغط
+    "knee=2dB"           # knee ناعم
+)
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _make_temp_path(prefix: str, suffix: str = ".wav") -> str:
-    """إنشاء مسار مؤقت آمن."""
     fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
     os.close(fd)
     return path
 
 
 def _safe_unlink(path: str | Path) -> None:
-    """حذف ملف بأمان بدون استثناء."""
     try:
         Path(path).unlink(missing_ok=True)
     except Exception:
@@ -86,7 +92,6 @@ def get_music_file(
     content_type: str = "motivational",
     seed:         int = None,
 ) -> Path | None:
-    """اختيار موسيقى عشوائية من المجلد."""
     all_files: list[Path] = []
 
     for pool_dir in MUSIC_POOLS.values():
@@ -111,7 +116,6 @@ def get_sfx_file(
     sfx_type: str = "swoosh",
     seed:     int = None,
 ) -> Path | None:
-    """اختيار SFX عشوائي."""
     pool_dir = SFX_POOLS.get(sfx_type)
     if not pool_dir or not pool_dir.exists():
         return None
@@ -124,6 +128,46 @@ def get_sfx_file(
         return None
 
     return random.Random(seed).choice(files)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✨ COMPRESSOR — يجعل الصوت أكثر ثباتاً واحترافية
+# ═════════════════════════════════════════════════════════════════════════════
+
+def apply_compressor(
+    audio_path:  str,
+    output_path: str,
+) -> str:
+    """
+    تطبيق Compressor احترافي على الصوت.
+
+    - يضغط الـ peaks العالية (لا تشويش)
+    - يرفع الـ valleys المنخفضة (لا صوت خافت)
+    - نتيجة: صوت أكثر ثباتاً ووضوحاً
+    """
+    if not Path(audio_path).exists():
+        return audio_path
+
+    print("  🎛️  Applying audio compressor...")
+
+    r = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", audio_path,
+            "-af", COMPRESSOR_FILTER,
+            "-c:a", "pcm_s16le",
+            output_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    if r.returncode != 0:
+        print("  ⚠️  Compressor failed — using original audio")
+        return audio_path
+
+    print("  ✅ Compressor applied")
+    return output_path
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -158,7 +202,7 @@ def apply_eq(
     )
 
     if r.returncode != 0:
-        print(f"  ⚠️  EQ failed — using original audio")
+        print("  ⚠️  EQ failed — using original audio")
         return audio_path
 
     print(f"  ✅ EQ applied ({lang.upper()})")
@@ -176,51 +220,25 @@ def _build_ducking_filter(
     duck_volume:  float = 0.06,
     fade_time:    float = 0.3,
 ) -> str:
-    """
-    بناء filter للـ Ducking التلقائي.
-
-    عند بداية كل جملة:
-    - الموسيقى تنخفض من music_volume إلى duck_volume في fade_time ثانية
-    - ثم ترجع ببطء بعد انتهاء الجملة
-
-    Args:
-        aligned:      بيانات الجمل من WhisperX
-        voice_dur:    مدة الصوت الكاملة
-        music_volume: مستوى الموسيقى الطبيعي
-        duck_volume:  مستوى الموسيقى عند الـ ducking
-        fade_time:    زمن الـ fade بالثواني
-
-    Returns:
-        ffmpeg filter string
-    """
     if not aligned or len(aligned) == 0:
-        # بدون aligned: حجم ثابت
         return f"volume={music_volume}"
 
-    # بناء volume automation
-    # نبدأ بالحجم الطبيعي
     volume_points = [f"0/{music_volume}"]
 
     for seg in aligned:
         start = float(seg.get("start", 0))
         end   = float(seg.get("end", start + 1))
 
-        # قبل الجملة بـ fade_time: ابدأ الخفض
         duck_start = max(0, start - fade_time)
-        # عند بداية الجملة: أدنى مستوى
-        # عند نهاية الجملة: ابدأ الرجوع
-        # بعد الجملة بـ fade_time: الحجم الطبيعي
-        duck_end = min(voice_dur, end + fade_time)
+        duck_end   = min(voice_dur, end + fade_time)
 
         volume_points.append(f"{duck_start:.3f}/{music_volume}")
         volume_points.append(f"{start:.3f}/{duck_volume}")
         volume_points.append(f"{end:.3f}/{duck_volume}")
         volume_points.append(f"{duck_end:.3f}/{music_volume}")
 
-    # نهاية بالحجم الطبيعي
     volume_points.append(f"{voice_dur:.3f}/{music_volume}")
 
-    # إزالة التكرار وترتيب النقاط
     seen_times  : set[str]  = set()
     clean_points: list[str] = []
     for point in volume_points:
@@ -249,10 +267,6 @@ def mix_audio(
     lang:         str        = "ar",
     aligned:      list[dict] = None,
 ) -> Path:
-    """
-    Mix voiceover مع background music.
-    ✨ يدعم Ducking تلقائي عند بداية كل جملة.
-    """
     voice_dur = get_audio_duration(voice_path)
     if voice_dur <= 0:
         voice_dur = 60.0
@@ -265,7 +279,6 @@ def mix_audio(
         f"lang={lang.upper()}"
     )
 
-    # ✨ بناء filter الموسيقى مع Ducking
     if aligned and len(aligned) > 0:
         print(
             f"  🦆 Ducking: {len(aligned)} sentences → "
@@ -332,7 +345,6 @@ def build_sfx_track(
     sfx_type:       str = "swoosh",
     output_path:    str = None,
 ) -> Path | None:
-    """Build SFX track عند الانتقالات."""
     if n_clips <= 1:
         return None
 
@@ -400,7 +412,7 @@ def build_sfx_track(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# FULL PIPELINE — مع EQ + Ducking
+# FULL PIPELINE — مع Compressor + EQ + Ducking
 # ═════════════════════════════════════════════════════════════════════════════
 
 def mix_voice_music_sfx(
@@ -417,16 +429,25 @@ def mix_voice_music_sfx(
 ) -> Path:
     """
     Full audio pipeline:
-      1. EQ على الصوت حسب اللغة
-      2. اختيار موسيقى خلفية
-      3. دمج الصوت مع الموسيقى + Ducking
-      4. إضافة SFX عند الانتقالات
+      1. ✨ Compressor على الصوت
+      2. ✨ EQ على الصوت حسب اللغة
+      3. اختيار موسيقى خلفية
+      4. دمج الصوت مع الموسيقى + Ducking
+      5. إضافة SFX عند الانتقالات
     """
-    # ── 1. ✨ EQ على الصوت حسب اللغة ─────────────────────────────────────────
-    eq_path = _make_temp_path("voice_eq_", ".wav")
-    voice_eq = apply_eq(voice_path, eq_path, lang=lang)
+    # ── 1. ✨ Compressor أولاً ────────────────────────────────────────────────
+    comp_path = _make_temp_path("voice_comp_", ".wav")
+    voice_processed = apply_compressor(voice_path, comp_path)
 
-    # ── 2. اختيار الموسيقى ───────────────────────────────────────────────────
+    # ── 2. ✨ EQ بعد Compressor ───────────────────────────────────────────────
+    eq_path = _make_temp_path("voice_eq_", ".wav")
+    voice_eq = apply_eq(voice_processed, eq_path, lang=lang)
+
+    # تنظيف Compressor temp إذا لم يُستخدم
+    if voice_processed != voice_path:
+        _safe_unlink(comp_path)
+
+    # ── 3. اختيار الموسيقى ───────────────────────────────────────────────────
     music_file = get_music_file(content_type, seed=seed)
 
     if music_file is None:
@@ -434,7 +455,7 @@ def mix_voice_music_sfx(
         _safe_unlink(eq_path)
         return Path(voice_path)
 
-    # ── 3. ✨ Mix مع Ducking ──────────────────────────────────────────────────
+    # ── 4. ✨ Mix مع Ducking ──────────────────────────────────────────────────
     p          = Path(output_path)
     mixed_path = _make_temp_path(f"{p.stem}_vm_", ".aac")
 
@@ -454,7 +475,7 @@ def mix_voice_music_sfx(
         _safe_unlink(mixed_path)
         return Path(voice_path)
 
-    # ── 4. إضافة SFX ─────────────────────────────────────────────────────────
+    # ── 5. إضافة SFX ─────────────────────────────────────────────────────────
     sfx_tmp_path: str | None = None
 
     if clip_durations and len(clip_durations) > 1:
