@@ -63,9 +63,9 @@ concurrency:
 
 jobs:
 
-  # ══════════════════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   # Arabic
-  # ══════════════════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   generate_ar:
     name: 🇸🇦 Arabic Video
     runs-on: ubuntu-latest
@@ -133,8 +133,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: 'npm'
-          cache-dependency-path: remotion/package-lock.json
 
       - name: 📦 Install Node deps
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
@@ -208,12 +206,12 @@ jobs:
             FLAGS="$FLAGS --auto-next"
           fi
 
-          [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}"   = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish }}"    = "true" ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish }}"    = "false" ] && FLAGS="$FLAGS --no-publish"
-          [ "${{ github.event.inputs.script_only }}" = "true" ] && FLAGS="$FLAGS --script-only"
-          [ "${{ github.event.inputs.no_video }}"   = "true" ] && FLAGS="$FLAGS --no-video"
+          [ "${{ github.event.inputs.force }}"       = "true"  ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"    = "true"  ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish }}"     = "true"  ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.publish }}"     = "false" ] && FLAGS="$FLAGS --no-publish"
+          [ "${{ github.event.inputs.script_only }}" = "true"  ] && FLAGS="$FLAGS --script-only"
+          [ "${{ github.event.inputs.no_video }}"    = "true"  ] && FLAGS="$FLAGS --no-video"
 
           python main.py "scripts/videos_ar.xlsx" \
             --output-dir output \
@@ -266,9 +264,9 @@ jobs:
           overwrite: true
 
 
-  # ══════════════════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   # French
-  # ══════════════════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   generate_fr:
     name: 🇫🇷 French Video
     runs-on: ubuntu-latest
@@ -336,8 +334,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: 'npm'
-          cache-dependency-path: remotion/package-lock.json
 
       - name: 📦 Install Node deps
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
@@ -411,12 +407,12 @@ jobs:
             FLAGS="$FLAGS --auto-next"
           fi
 
-          [ "${{ github.event.inputs.force }}"       = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}"    = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish }}"     = "true" ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.force }}"       = "true"  ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"    = "true"  ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish }}"     = "true"  ] && FLAGS="$FLAGS --publish-fb"
           [ "${{ github.event.inputs.publish }}"     = "false" ] && FLAGS="$FLAGS --no-publish"
-          [ "${{ github.event.inputs.script_only }}" = "true" ] && FLAGS="$FLAGS --script-only"
-          [ "${{ github.event.inputs.no_video }}"    = "true" ] && FLAGS="$FLAGS --no-video"
+          [ "${{ github.event.inputs.script_only }}" = "true"  ] && FLAGS="$FLAGS --script-only"
+          [ "${{ github.event.inputs.no_video }}"    = "true"  ] && FLAGS="$FLAGS --no-video"
 
           python main.py "scripts/videos_fr.xlsx" \
             --output-dir output \
@@ -469,9 +465,9 @@ jobs:
           overwrite: true
 
 
-  # ══════════════════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   # English
-  # ══════════════════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   generate_en:
     name: 🇺🇸 English Video
     runs-on: ubuntu-latest
@@ -539,8 +535,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: 'npm'
-          cache-dependency-path: remotion/package-lock.json
 
       - name: 📦 Install Node deps
         if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
@@ -614,12 +608,12 @@ jobs:
             FLAGS="$FLAGS --auto-next"
           fi
 
-          [ "${{ github.event.inputs.force }}"       = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}"    = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish }}"     = "true" ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.force }}"       = "true"  ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"    = "true"  ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish }}"     = "true"  ] && FLAGS="$FLAGS --publish-fb"
           [ "${{ github.event.inputs.publish }}"     = "false" ] && FLAGS="$FLAGS --no-publish"
-          [ "${{ github.event.inputs.script_only }}" = "true" ] && FLAGS="$FLAGS --script-only"
-          [ "${{ github.event.inputs.no_video }}"    = "true" ] && FLAGS="$FLAGS --no-video"
+          [ "${{ github.event.inputs.script_only }}" = "true"  ] && FLAGS="$FLAGS --script-only"
+          [ "${{ github.event.inputs.no_video }}"    = "true"  ] && FLAGS="$FLAGS --no-video"
 
           python main.py "scripts/videos_en.xlsx" \
             --output-dir output \
