@@ -115,8 +115,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: 'npm'
-          cache-dependency-path: remotion/package-lock.json
 
       - name: 📦 Install Node deps
         working-directory: remotion
@@ -189,11 +187,11 @@ jobs:
             FLAGS="$FLAGS --auto-next"
           fi
 
-          [ "${{ github.event.inputs.force }}"      = "true" ] && \
+          [ "${{ github.event.inputs.force }}"    = "true" ] && \
             FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}"   = "true" ] && \
+          [ "${{ github.event.inputs.force_ai }}" = "true" ] && \
             FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish }}"    = "false" ] && \
+          [ "${{ github.event.inputs.publish }}"  = "false" ] && \
             FLAGS="$FLAGS --no-publish"
 
           python main.py "scripts/videos_fr.xlsx" \
