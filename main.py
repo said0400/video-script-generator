@@ -16,6 +16,7 @@ import argparse
 import json
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 from db import (
@@ -85,94 +86,30 @@ def parse_args() -> argparse.Namespace:
         description="🎬 Video Generator — Multi-Language",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-
     p.add_argument(
-        "input_file",
-        type=str,
-        nargs="?",
-        default=None,
+        "input_file", type=str, nargs="?", default=None,
         help="Path to scripts Excel file",
     )
+    p.add_argument("--output-dir",     type=str, default="output")
+    p.add_argument("--video-number",   type=str, default=None)
     p.add_argument(
-        "--output-dir",
-        type=str,
-        default="output",
-        help="Output directory",
-    )
-    p.add_argument(
-        "--video-number",
-        type=str,
-        default=None,
-        help="Process specific video number",
-    )
-    p.add_argument(
-        "--lang",
-        type=str,
-        default="ar",
+        "--lang", type=str, default="ar",
         choices=["ar", "fr", "en"],
-        help="Language to process",
     )
+    p.add_argument("--auto-next",      action="store_true")
+    p.add_argument("--formats",        type=str, default="9x16")
+    p.add_argument("--no-export",      action="store_true")
+    p.add_argument("--script-only",    action="store_true")
+    p.add_argument("--no-video",       action="store_true")
+    p.add_argument("--force",          action="store_true")
+    p.add_argument("--force-ai",       action="store_true")
+    p.add_argument("--publish-fb",     action="store_true")
+    p.add_argument("--no-publish",     action="store_true")
     p.add_argument(
-        "--auto-next",
-        action="store_true",
-        help="Automatically pick next unpublished video",
+        "--show-ai-cache", type=str, nargs="?",
+        const="all", default=None,
     )
-    p.add_argument(
-        "--formats",
-        type=str,
-        default="9x16",
-        help="Export formats (comma-separated: 9x16,1x1,16x9,4x5)",
-    )
-    p.add_argument(
-        "--no-export",
-        action="store_true",
-        help="Skip additional format exports",
-    )
-    p.add_argument(
-        "--script-only",
-        action="store_true",
-        help="Show script preview only (no audio/video)",
-    )
-    p.add_argument(
-        "--no-video",
-        action="store_true",
-        help="Audio only (skip video render)",
-    )
-    p.add_argument(
-        "--force",
-        action="store_true",
-        help="Force re-render (ignore resume)",
-    )
-    p.add_argument(
-        "--force-ai",
-        action="store_true",
-        help="Force re-generate AI data",
-    )
-    p.add_argument(
-        "--publish-fb",
-        action="store_true",
-        help="Auto-publish to Facebook after render",
-    )
-    p.add_argument(
-        "--no-publish",
-        action="store_true",
-        help="Disable Facebook publishing",
-    )
-    p.add_argument(
-        "--show-ai-cache",
-        type=str,
-        nargs="?",
-        const="all",
-        default=None,
-        help="Show AI cache (optional: cache_key)",
-    )
-    p.add_argument(
-        "--clear-ai-cache",
-        type=str,
-        default=None,
-        help="Clear AI cache (use 'all' to clear everything)",
-    )
-
+    p.add_argument("--clear-ai-cache", type=str, default=None)
     return p.parse_args()
 
 
@@ -202,7 +139,6 @@ def _clip_durations_from_aligned(
         ]
         if sum(durations) > 0.5:
             return durations
-
     per = real_dur / max(n_sentences, 1)
     return [per] * n_sentences
 
@@ -224,11 +160,67 @@ def _get_content_for_lang(record: dict, lang: str) -> str:
         content = record.get("fr_content", "").strip()
     else:
         content = record.get("en_content", "").strip()
-
     if not content:
         content = record.get("content", "").strip()
-
     return content
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✅ TRIM SILENCE
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _trim_silence(
+    audio_path:  str,
+    output_path: str,
+    threshold:   str   = "-35dB",
+    duration:    float = 0.1,
+) -> str:
+    """
+    قطع الصمت من بداية ونهاية الصوت.
+    يحل مشكلة speech_start_offset الكبيرة من Gemini TTS.
+    """
+    print("  ✂️  Trimming silence from audio...")
+
+    r = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", audio_path,
+            "-af",
+            (
+                f"silenceremove="
+                f"start_periods=1:"
+                f"start_duration={duration}:"
+                f"start_threshold={threshold}:"
+                f"stop_periods=-1:"
+                f"stop_duration={duration}:"
+                f"stop_threshold={threshold}"
+            ),
+            "-c:a", "pcm_s16le",
+            output_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    if r.returncode != 0:
+        print("  ⚠️  Trim failed — using original audio")
+        return audio_path
+
+    trimmed_dur  = get_audio_duration(output_path)
+    original_dur = get_audio_duration(audio_path)
+
+    if trimmed_dur < 3.0:
+        print(
+            f"  ⚠️  Trim result too short ({trimmed_dur:.1f}s) "
+            f"— using original"
+        )
+        return audio_path
+
+    print(
+        f"  ✅ Trimmed: {original_dur:.1f}s → {trimmed_dur:.1f}s "
+        f"(removed {original_dur - trimmed_dur:.1f}s silence)"
+    )
+    return output_path
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -256,7 +248,6 @@ def get_or_create_ai_data(
             return cached
 
     content = _get_content_for_lang(record, lang)
-
     if not content:
         raise AIEnrichmentError(
             f"No content found for #{video_number} ({lang.upper()})"
@@ -283,7 +274,6 @@ def get_or_create_ai_data(
         f"  💾 AI data cached for "
         f"#{video_number} ({lang.upper()})"
     )
-
     return enriched
 
 
@@ -307,7 +297,7 @@ def _speed_up_audio(
             "ffmpeg", "-y",
             "-i", audio_path,
             "-filter:a", f"atempo={speed}",
-            "-c:a", "aac", "-b:a", "192k",
+            "-c:a", "pcm_s16le",
             output_path,
         ],
         capture_output=True,
@@ -432,6 +422,7 @@ def produce_audio(
 
     print(f"\n  🎙️  {lang.upper()} TTS (voice={voice_key})")
 
+    # ── 1. TTS ───────────────────────────────────────────────────────────────
     synthesize_speech(
         tagged_sentences = tagged_sentences,
         output_path      = f"{output_base}_voice",
@@ -441,9 +432,9 @@ def produce_audio(
 
     out_dir        = Path(output_base).parent
     prefix         = Path(output_base).name
-    wav_candidates = (
-        sorted(out_dir.glob(f"{prefix}_voice_*.wav")) +
-        sorted(out_dir.glob(f"{prefix}_voice*.wav"))
+    wav_candidates = sorted(
+        list(out_dir.glob(f"{prefix}_voice_*.wav")) +
+        list(out_dir.glob(f"{prefix}_voice*.wav"))
     )
 
     real_dur = float(script_data["estimated_seconds"])
@@ -455,6 +446,18 @@ def produce_audio(
             real_dur = measured
             print(f"  📏 Raw voice duration: {real_dur:.3f}s")
 
+    # ── 2. ✅ قطع الصمت قبل أي معالجة ─────────────────────────────────────
+    if wav_path:
+        trimmed_path = f"{output_base}_voice_trimmed.wav"
+        wav_path_trimmed = _trim_silence(wav_path, trimmed_path)
+        if wav_path_trimmed != wav_path:
+            wav_path = wav_path_trimmed
+            measured_trimmed = get_audio_duration(wav_path)
+            if measured_trimmed >= 5:
+                real_dur = measured_trimmed
+                print(f"  📏 Trimmed duration: {real_dur:.3f}s")
+
+    # ── 3. تسريع الصوت قبل WhisperX ─────────────────────────────────────────
     speed = SPEED_MULTIPLIER.get(lang, 1.0)
     if wav_path and speed != 1.0:
         sped_path   = f"{output_base}_voice_fast.wav"
@@ -466,6 +469,7 @@ def produce_audio(
                 real_dur = measured_fast
                 print(f"  📏 Sped-up duration: {real_dur:.3f}s")
 
+    # ── 4. WhisperX ──────────────────────────────────────────────────────────
     timeline:          list = []
     aligned:           list = []
     whisper_sentences: list = []
@@ -498,6 +502,7 @@ def produce_audio(
             s["text"] for s in tagged_sentences
         ]
 
+    # ── 5. خلط الموسيقى ──────────────────────────────────────────────────────
     clip_dur  = _clip_durations_from_aligned(
         aligned, real_dur, len(whisper_sentences)
     )
@@ -583,6 +588,25 @@ def _build_script_data(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ✅ REBUILD TAGGED WITH TEXT_WITH_TAG
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _rebuild_text_with_tag(tagged: list[dict]) -> list[dict]:
+    """
+    ✅ إصلاح: إعادة بناء text_with_tag بعد AI enrichment.
+    يضمن أن كل جملة لديها text_with_tag محدَّث بعد تعيين final_tag.
+    """
+    for sent in tagged:
+        final_tag = sent.get("final_tag")
+        text      = sent.get("text", "")
+        if final_tag:
+            sent["text_with_tag"] = f"[{final_tag}] {text}"
+        else:
+            sent["text_with_tag"] = text
+    return tagged
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # PUBLISH
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -601,7 +625,6 @@ def _do_publish(
         captions.get("en") or
         ""
     )
-
     if not ai_caption:
         ai_caption = record.get("title", "")
 
@@ -650,7 +673,6 @@ def process_video(
 
     # ── 1. Parse tagged content ───────────────────────────────────────────────
     content = _get_content_for_lang(record, lang)
-
     if not content:
         print(f"  ❌ No content for #{num} ({lang.upper()})")
         return
@@ -675,7 +697,9 @@ def process_video(
         print(f"     {e}")
         return
 
+    # ✅ استخدام tagged المُحدَّث من AI + إعادة بناء text_with_tag
     tagged = ai_data.get("tagged") or tagged
+    tagged = _rebuild_text_with_tag(tagged)
 
     # ── 3. Build script data ──────────────────────────────────────────────────
     script_data = _build_script_data(record, lang, ai_data, tagged)
@@ -822,7 +846,6 @@ def process_video(
     except Exception as e:
         mark_render_failed(num, lang, str(e))
         print(f"\n  ❌ Render failed: {e}")
-        import traceback
         traceback.print_exc()
 
 
@@ -834,6 +857,7 @@ def main() -> None:
     args = parse_args()
     init_db()
 
+    # ── Cache management ──────────────────────────────────────────────────────
     if args.show_ai_cache is not None:
         show_ai_cache(
             args.show_ai_cache
@@ -899,6 +923,7 @@ def main() -> None:
 
     print_scripts_summary(valid)
 
+    # ── Auto-next ─────────────────────────────────────────────────────────────
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
         next_num  = get_next_video_number(lang, available)
@@ -976,7 +1001,6 @@ def main() -> None:
             break
         except Exception as e:
             print(f"  ❌  Unexpected error: {e}")
-            import traceback
             traceback.print_exc()
             failed += 1
 
