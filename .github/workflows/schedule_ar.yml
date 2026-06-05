@@ -63,8 +63,7 @@ jobs:
       - name: 🔧 Install system deps
         run: |
           sudo apt-get update -q
-          
-          # 1. تثبيت كافة الحزم الأساسية للنظام ولـ Playwright باستثناء الحزم الصوتية المتغيرة
+
           sudo apt-get install -y \
             ffmpeg libsndfile1 \
             libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
@@ -75,9 +74,9 @@ jobs:
             fonts-noto fonts-noto-core fonts-hosny-amiri \
             fonts-sil-scheherazade || true
 
-          # 2. حيلة ذكية لتثبيت مكتبة الصوت المتوافقة (سواء كانت البيئة Ubuntu 24.04 الجديدة أو 22.04 القديمة)
-          sudo apt-get install -y libasound2t64 libasound2-dev || sudo apt-get install -y libasound2 libasound2-dev || true
-          
+          sudo apt-get install -y libasound2t64 libasound2-dev || \
+            sudo apt-get install -y libasound2 libasound2-dev || true
+
           sudo fc-cache -fv
 
       - name: 💾 Cache WhisperX models
@@ -103,13 +102,19 @@ jobs:
           pip install torch==2.4.0 torchaudio==2.4.0 \
             --index-url https://download.pytorch.org/whl/cpu
 
-      - name: 📦 Install WhisperX
+      - name: 📦 Install WhisperX 3.3.1
         run: |
-          pip install git+https://github.com/m-bain/whisperX.git
+          pip install whisperx==3.3.1
 
       - name: 📦 Install Python deps
         run: |
           pip install -r requirements.txt
+
+      - name: 🔧 Force PyTorch 2.4 (بعد requirements)
+        run: |
+          pip install torch==2.4.0 torchaudio==2.4.0 \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --force-reinstall
 
       - name: 🟢 Setup Node.js 20
         uses: actions/setup-node@v4
