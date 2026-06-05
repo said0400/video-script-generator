@@ -9,6 +9,7 @@
   - WhisperX transcript sync
   - Facebook multi-page publishing
   - EQ + Ducking audio pipeline
+  - Custom Hook from AI
 """
 
 from __future__ import annotations
@@ -335,7 +336,7 @@ def _speed_up_audio(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MANIFEST
+# MANIFEST — مع custom_hook
 # ═════════════════════════════════════════════════════════════════════════════
 
 def save_manifest(
@@ -348,6 +349,7 @@ def save_manifest(
     real_duration:     float = None,
     whisper_sentences: list = None,
 ) -> Path:
+    """حفظ manifest.json لـ render.mjs."""
     sentences_for_display = (
         whisper_sentences
         if whisper_sentences
@@ -370,7 +372,7 @@ def save_manifest(
         "duration_s":    real_duration or float(
             script_data["estimated_seconds"]
         ),
-        "lang":          script_data.get("lang", "ar"),
+        "lang":          script_data.get("lang",         "ar"),
         "content_type":  CONTENT_TYPE,
         "power_words":   script_data.get("power_words",   []),
         "accent_colors": script_data.get("accent_colors", []),
@@ -378,6 +380,8 @@ def save_manifest(
         "clip_duration": CLIP_DURATION,
         "has_hook":      bool(script_data.get("has_hook", True)),
         "hook_keyword":  script_data.get("hook_keyword",  ""),
+        # ✅ custom_hook من AI
+        "custom_hook":   script_data.get("custom_hook",   ""),
         "word_timeline": timeline or [],
         "aligned":       aligned  or [],
     }
@@ -425,7 +429,7 @@ def _render_node(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AUDIO PIPELINE — مع EQ + Ducking
+# AUDIO PIPELINE
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_audio(
@@ -468,7 +472,7 @@ def produce_audio(
     else:
         wav_path = None
 
-    # ── 2. قطع الصمت من البداية ──────────────────────────────────────────────
+    # ── 2. قطع الصمت ─────────────────────────────────────────────────────────
     if wav_path:
         trimmed_path     = f"{output_base}_voice_trimmed.wav"
         wav_path_trimmed = _trim_silence(wav_path, trimmed_path)
@@ -524,11 +528,11 @@ def produce_audio(
             s["text"] for s in tagged_sentences
         ]
 
-    # ── 5. ✨ خلط الموسيقى مع EQ + Ducking ───────────────────────────────────
-    clip_dur      = _clip_durations_from_aligned(
+    # ── 5. خلط الموسيقى مع EQ + Ducking ─────────────────────────────────────
+    clip_dur       = _clip_durations_from_aligned(
         aligned, real_dur, len(whisper_sentences)
     )
-    mixed_out     = f"{output_base}_audio_mixed.aac"
+    mixed_out      = f"{output_base}_audio_mixed.aac"
     fallback_voice = wav_path or f"{output_base}_voice_0.wav"
 
     try:
@@ -540,8 +544,8 @@ def produce_audio(
             sfx_type       = sfx_type,
             music_volume   = music_volume,
             seed           = hash(script_data["title"]) % 10000,
-            lang           = lang,     # ✅ EQ حسب اللغة
-            aligned        = aligned,  # ✅ Ducking حسب الجمل
+            lang           = lang,
+            aligned        = aligned,
         )
         dur = get_audio_duration(str(final_audio))
         if dur >= 5:
@@ -556,7 +560,7 @@ def produce_audio(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# BUILD SCRIPT DATA
+# BUILD SCRIPT DATA — مع custom_hook
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _build_script_data(
@@ -605,6 +609,8 @@ def _build_script_data(
         "visual_keywords":   ai_data.get("visual_keywords", []),
         "analysis":          ai_data.get("analysis",        {}),
         "hook_keyword":      ai_data.get("hook_keyword",    ""),
+        # ✅ custom_hook من AI
+        "custom_hook":       ai_data.get("custom_hook",     ""),
         "has_hook":          bool(ai_data.get("hook_keyword", "")),
     }
 
@@ -725,6 +731,11 @@ def process_video(
     if not script_data:
         print(f"  ❌ Cannot build script data for #{num}")
         return
+
+    # ✅ طباعة custom_hook
+    custom_hook = script_data.get("custom_hook", "")
+    if custom_hook:
+        print(f"  🪝 Custom Hook: '{custom_hook}'")
 
     save_script_meta(
         video_number = num,
