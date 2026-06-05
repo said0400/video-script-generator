@@ -3,6 +3,7 @@ ai_enricher.py — Smart AI Assistant powered by Groq
 ✨ يولّد كل شيء عدا النصوص الرئيسية (التي تأتي من Excel)
 ✨ يدعم عدة مفاتيح Groq مع تدوير فوري عند rate limit
 ✨ يدعم 3 لغات (AR, FR, EN) بشكل صحيح
+✨ Hook مخصص + Keywords محسّنة لكل جملة
 """
 
 from __future__ import annotations
@@ -53,7 +54,6 @@ _GROQ_KEYS:    list[str] = []
 
 
 def _load_groq_keys() -> list[str]:
-    """تحميل كل مفاتيح Groq من البيئة."""
     keys: list[str] = []
     main = os.environ.get("GROQ_API_KEY", "").strip()
     if main:
@@ -66,7 +66,6 @@ def _load_groq_keys() -> list[str]:
 
 
 def _get_client() -> Groq:
-    """احصل على Groq client مع تدوير المفاتيح."""
     global _GROQ_KEYS, _groq_key_idx
 
     if not _GROQ_KEYS:
@@ -85,7 +84,6 @@ def _get_client() -> Groq:
 
 
 def _rotate_groq_key() -> None:
-    """تدوير مفتاح Groq عند الفشل."""
     global _groq_key_idx
     n = len(_GROQ_KEYS)
     if n > 1:
@@ -103,7 +101,6 @@ def _rotate_groq_key() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _clean_json(raw: str) -> str:
-    """تنظيف JSON من Markdown."""
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     raw = re.sub(r"\s*```$", "", raw)
     return raw.strip()
@@ -115,7 +112,6 @@ def _call_groq(
     temperature:    float = 0.7,
     operation_name: str   = "AI call",
 ) -> str:
-    """استدعاء Groq مع retry + key rotation."""
     global _GROQ_KEYS
 
     if not _GROQ_KEYS:
@@ -187,7 +183,6 @@ def _parse_json_response(
     expected_type: type,
     operation:     str,
 ):
-    """تحليل JSON response مع validation."""
     try:
         cleaned = _clean_json(raw)
         data    = json.loads(cleaned)
@@ -219,7 +214,6 @@ def analyze_content(
     content: str,
     lang:    str = "ar",
 ) -> dict:
-    """تحليل المحتوى وفهم طبيعته."""
     lang_name = LANG_NAMES.get(lang, "Arabic")
 
     prompt = f"""You are an expert content analyst for short-form viral videos.
@@ -288,7 +282,6 @@ def suggest_tags_for_sentences(
     context:                dict,
     lang:                   str = "ar",
 ) -> list[str]:
-    """اقتراح tags لجمل بدون tags."""
     if not sentences_needing_tags:
         return []
 
@@ -352,7 +345,6 @@ def generate_power_words(
     lang:    str = "ar",
     count:   int = 10,
 ) -> list[str]:
-    """استخراج الكلمات القوية نفسياً من النص."""
     if not content or not content.strip():
         raise AIEnrichmentError(
             "Cannot generate power words from empty content"
@@ -412,7 +404,7 @@ Example: ["word1","word2","word3",...]"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4️⃣ VISUAL KEYWORDS
+# 4️⃣ ✨ VISUAL KEYWORDS — محسّنة لكل جملة بشكل منفصل
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_visual_keywords(
@@ -420,7 +412,10 @@ def generate_visual_keywords(
     title:     str,
     context:   dict,
 ) -> list[list[str]]:
-    """توليد visual keywords لكل جملة."""
+    """
+    توليد visual keywords لكل جملة بشكل مخصص.
+    ✨ كل جملة تحصل على keywords تصف مشهدها الخاص.
+    """
     if not sentences:
         raise AIEnrichmentError(
             "Cannot generate keywords for empty sentences"
@@ -429,23 +424,40 @@ def generate_visual_keywords(
     n            = len(sentences)
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "neutral")
+    tone         = context.get("tone", "energetic")
 
     sentences_text = "\n".join(
         f"{i+1}. {s[:200]}"
         for i, s in enumerate(sentences)
     )
 
-    prompt = f"""You are a stock footage director.
+    prompt = f"""You are an expert stock footage director for viral short-form videos.
 
 Video title: "{title}"
 Content type: {content_type}
-Emotion: {emotion}
+Primary emotion: {emotion}
+Tone: {tone}
 
-For each sentence, suggest 3 VISUAL search terms
-(English only, 2-5 words each) for Pexels/Pixabay stock footage.
+TASK: For EACH sentence, suggest 3 HIGHLY SPECIFIC visual search terms.
+The keywords must visually represent EXACTLY what the sentence is saying.
 
-GOOD: "person looking through window", "couple arguing tension"
-BAD:  "success", "freedom", "life"
+Rules:
+- English only
+- 2-5 words per keyword
+- CONCRETE and VISUAL (not abstract)
+- Match the EMOTION of each sentence
+- Each sentence should have DIFFERENT keywords
+
+EXAMPLES OF GOOD keywords:
+- "woman staring intensely window rain"
+- "businessman reading paper coffee morning"
+- "couple arguing kitchen dramatic"
+- "child laughing playground sunny"
+
+EXAMPLES OF BAD keywords:
+- "success" (too abstract)
+- "life" (too vague)
+- "motivation" (not visual)
 
 Sentences ({n} total):
 {sentences_text}
@@ -455,13 +467,12 @@ Format: [["kw1","kw2","kw3"],...]"""
 
     raw      = _call_groq(
         prompt,
-        max_tokens     = 1500,
-        temperature    = 0.5,
+        max_tokens     = 2000,
+        temperature    = 0.6,
         operation_name = "Visual Keywords",
     )
     keywords = _parse_json_response(raw, list, "Visual Keywords")
 
-    # ✅ إصلاح: max(1, n // 2) لمنع الشرط الخاطئ عند n=1
     if len(keywords) < max(1, n // 2):
         raise AIEnrichmentError(
             f"❌ Visual Keywords: got {len(keywords)} rows, "
@@ -469,9 +480,9 @@ Format: [["kw1","kw2","kw3"],...]"""
         )
 
     defaults = [
-        "person thinking deeply",
-        "emotional moment close-up",
-        "mysterious atmosphere",
+        "person thinking deeply window",
+        "emotional close-up face reaction",
+        "mysterious dark atmosphere cinematic",
     ]
     result: list[list[str]] = []
 
@@ -505,7 +516,6 @@ def generate_pattern_interrupts(
     lang:    str = "ar",
     count:   int = 6,
 ) -> dict[str, list[str]]:
-    """توليد رسائل مقاطعة قصيرة."""
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "curiosity")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
@@ -569,7 +579,6 @@ def generate_engagement_questions(
     lang:    str = "ar",
     count:   int = 6,
 ) -> dict[str, list[str]]:
-    """توليد أسئلة تفاعل."""
     content_type = context.get("content_type", "general")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
 
@@ -634,7 +643,6 @@ def generate_hashtags(
     lang:    str = "ar",
     count:   int = 12,
 ) -> dict[str, list[str]]:
-    """توليد هاشتاقات."""
     content_type = context.get("content_type", "general")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
 
@@ -696,7 +704,6 @@ def generate_captions(
     hashtags: dict[str, list[str]],
     lang:     str = "ar",
 ) -> dict[str, str]:
-    """توليد caption احترافي للنشر."""
     lang_name = LANG_NAMES.get(lang, "Arabic")
     ar_tags   = " ".join(hashtags.get("ar", [])[:10])
     en_tags   = " ".join(hashtags.get("en", [])[:10])
@@ -759,7 +766,6 @@ Return ONLY JSON:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def suggest_accent_colors(context: dict) -> list[str]:
-    """اقتراح ألوان مناسبة."""
     emotion      = context.get("primary_emotion", "curiosity")
     content_type = context.get("content_type", "general")
     intensity    = context.get("intensity", 7)
@@ -803,7 +809,7 @@ Example: ["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🔟 HOOK KEYWORD
+# 🔟 HOOK KEYWORD — للفيديو الخلفي
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_hook_keyword(
@@ -811,7 +817,6 @@ def generate_hook_keyword(
     content: str,
     context: dict,
 ) -> str:
-    """توليد كلمة مفتاحية صادمة للـ HOOK."""
     if not content or not content.strip():
         return "shocking dramatic moment"
 
@@ -851,6 +856,94 @@ Example: crying woman eyes closeup"""
 
     print(f"  ✅ Hook keyword: '{keyword}'")
     return keyword
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✨ 1️⃣1️⃣ CUSTOM HOOK SENTENCE — جملة Hook مخصصة
+# ═════════════════════════════════════════════════════════════════════════════
+
+def generate_custom_hook(
+    title:   str,
+    content: str,
+    context: dict,
+    lang:    str = "ar",
+) -> str:
+    """
+    ✨ توليد جملة Hook مخصصة تُعرض في أول 3 ثواني.
+    بدلاً من أول جملة من السكريبت.
+
+    أمثلة:
+    - AR: "هل تعلم أن 90٪ من الناس لا يعرفون هذا؟"
+    - FR: "Ce secret va changer ta vie..."
+    - EN: "Most people never discover this..."
+    """
+    lang_name    = LANG_NAMES.get(lang, "Arabic")
+    content_type = context.get("content_type", "general")
+    emotion      = context.get("primary_emotion", "curiosity")
+    tone         = context.get("tone", "mysterious")
+
+    prompt = f"""You are a viral content expert specializing in \
+short-form video hooks that STOP the scroll.
+
+Create ONE powerful HOOK sentence in {lang_name} for this video.
+
+Title: "{title}"
+Type: {content_type} | Emotion: {emotion} | Tone: {tone}
+
+Content preview:
+{content[:500]}
+
+The hook must:
+- Be in {lang_name} ONLY
+- Maximum 10 words
+- Create INSTANT curiosity or shock
+- Make the viewer NEED to watch more
+- Sound like a secret or revelation
+- Can use numbers, questions, or bold statements
+
+GOOD examples in Arabic:
+- "90٪ من الناس لا يعرفون هذا السر"
+- "هناك كلمة واحدة تغيّر كل شيء"
+- "توقف... هذا سيصدمك"
+- "لا أحد يخبرك بهذه الحقيقة"
+
+GOOD examples in French:
+- "Ce que personne ne te dit..."
+- "Le secret que 90% ignorent"
+- "Stop. Ça va tout changer"
+
+GOOD examples in English:
+- "Nobody tells you this truth"
+- "90% of people get this wrong"
+- "This changes everything..."
+
+Return ONLY the hook sentence, nothing else."""
+
+    try:
+        raw  = _call_groq(
+            prompt,
+            max_tokens     = 80,
+            temperature    = 0.9,
+            operation_name = f"Custom Hook ({lang.upper()})",
+        )
+        hook = raw.strip().split("\n")[0].strip()
+        hook = hook.strip('"').strip("'").strip()
+
+        # تنظيف من أي prefix غير مرغوب
+        for prefix in ["hook:", "answer:", "result:", "→", ":"]:
+            if hook.lower().startswith(prefix):
+                hook = hook[len(prefix):].strip()
+
+        if hook and 3 <= len(hook.split()) <= 15:
+            print(f"  ✅ Custom hook: '{hook}'")
+            return hook
+        else:
+            print(f"  ⚠️  Hook too short/long — using title")
+            return title
+
+    except Exception as e:
+        print(f"  ⚠️  Custom hook failed: {e} — using title")
+        return title
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -920,7 +1013,7 @@ def enrich_record(
     # ── 3. Power Words ───────────────────────────────────────────────────────
     power_words = generate_power_words(content, analysis, lang)
 
-    # ── 4. Visual Keywords ───────────────────────────────────────────────────
+    # ── 4. ✨ Visual Keywords — محسّنة لكل جملة ──────────────────────────────
     sentences_for_keywords = (
         [s["text"] for s in tagged]
         if tagged
@@ -953,10 +1046,15 @@ def enrich_record(
     # ── 9. Accent Colors ─────────────────────────────────────────────────────
     accent_colors = suggest_accent_colors(analysis)
 
-    # ── 10. Hook Keyword ─────────────────────────────────────────────────────
+    # ── 10. Hook Keyword — للفيديو الخلفي ────────────────────────────────────
     hook_keyword = generate_hook_keyword(title, content, analysis)
 
-    # ── 11. Title + Emojis ───────────────────────────────────────────────────
+    # ── 11. ✨ Custom Hook Sentence — جملة Hook مخصصة ────────────────────────
+    custom_hook = generate_custom_hook(
+        title, content, analysis, lang
+    )
+
+    # ── 12. Title + Emojis ───────────────────────────────────────────────────
     attractive_title = {
         "title":       title,
         "emoji_left":  DEFAULT_EMOJI_LEFT,
@@ -965,7 +1063,8 @@ def enrich_record(
 
     if verbose:
         print(f"  {'─' * 50}")
-        print(f"  ✅ AI enrichment complete (10/10 operations)")
+        print(f"  ✅ AI enrichment complete (11/11 operations)")
+        print(f"  🪝 Hook: '{custom_hook}'")
         print(
             f"  📌 Final: "
             f"{attractive_title['emoji_left']} "
@@ -983,6 +1082,7 @@ def enrich_record(
         "captions":             captions,
         "accent_colors":        accent_colors,
         "hook_keyword":         hook_keyword,
+        "custom_hook":          custom_hook,      # ✅ جديد
         "attractive_title":     attractive_title,
         "tagged":               tagged,
         "lang":                 lang,
