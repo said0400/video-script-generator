@@ -9,47 +9,40 @@ on:
         default: "ar"
         type: choice
         options: ["ar", "fr", "en"]
-
       video_number:
         description: "🎬 Video number (empty = auto next)"
         required: false
         default: ""
         type: string
-
       force:
         description: "⚡ Force re-render?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
-
       force_ai:
         description: "🤖 Force re-generate AI?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
-
       publish:
         description: "📘 Publish to Facebook?"
         required: true
         default: "true"
         type: choice
         options: ["true", "false"]
-
       formats:
         description: "📐 Export formats (9x16,1x1,16x9,4x5)"
         required: true
         default: "9x16"
         type: string
-
       script_only:
         description: "📝 Script preview only?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
-
       no_video:
         description: "🎵 Audio only?"
         required: true
@@ -86,15 +79,20 @@ jobs:
       - name: 🔧 Install system deps
         run: |
           sudo apt-get update -q
+
           sudo apt-get install -y \
-            ffmpeg libsndfile1 libasound2-dev libasound2t64 \
+            ffmpeg libsndfile1 \
             libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
             libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
             libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
             libxcomposite1 libxdamage1 libxext6 libxfixes3 \
             libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
             fonts-noto fonts-noto-core fonts-hosny-amiri \
-            fonts-sil-scheherazade
+            fonts-sil-scheherazade || true
+
+          sudo apt-get install -y libasound2t64 libasound2-dev || \
+            sudo apt-get install -y libasound2 libasound2-dev || true
+
           sudo fc-cache -fv
 
       - name: 💾 Cache WhisperX models
@@ -111,13 +109,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pytorch-cpu-${{ runner.os }}-py3.11
+          key: pytorch-cpu-${{ runner.os }}-py3.11-v24
           restore-keys: pytorch-cpu-
 
-      - name: 🔥 Install PyTorch (CPU)
+      - name: 🔥 Install PyTorch 2.4 (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install torch torchaudio \
+          pip install torch==2.4.0 torchaudio==2.4.0 \
             --index-url https://download.pytorch.org/whl/cpu
 
       - name: 📦 Install WhisperX
@@ -144,10 +142,13 @@ jobs:
             npm install
           fi
 
-      - name: 🌐 Install Playwright Chromium
-        run: |
-          pip install playwright
-          python -m playwright install chromium --with-deps
+      - name: 🌐 Install Playwright Chromium (Python)
+        run: python -m playwright install chromium
+
+      - name: 🌐 Install Playwright Chromium (Node)
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        working-directory: remotion
+        run: npx playwright install chromium
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
@@ -287,15 +288,20 @@ jobs:
       - name: 🔧 Install system deps
         run: |
           sudo apt-get update -q
+
           sudo apt-get install -y \
-            ffmpeg libsndfile1 libasound2-dev libasound2t64 \
+            ffmpeg libsndfile1 \
             libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
             libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
             libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
             libxcomposite1 libxdamage1 libxext6 libxfixes3 \
             libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
             fonts-noto fonts-noto-core fonts-hosny-amiri \
-            fonts-sil-scheherazade
+            fonts-sil-scheherazade || true
+
+          sudo apt-get install -y libasound2t64 libasound2-dev || \
+            sudo apt-get install -y libasound2 libasound2-dev || true
+
           sudo fc-cache -fv
 
       - name: 💾 Cache WhisperX models
@@ -312,13 +318,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pytorch-cpu-${{ runner.os }}-py3.11
+          key: pytorch-cpu-${{ runner.os }}-py3.11-v24
           restore-keys: pytorch-cpu-
 
-      - name: 🔥 Install PyTorch (CPU)
+      - name: 🔥 Install PyTorch 2.4 (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install torch torchaudio \
+          pip install torch==2.4.0 torchaudio==2.4.0 \
             --index-url https://download.pytorch.org/whl/cpu
 
       - name: 📦 Install WhisperX
@@ -345,10 +351,13 @@ jobs:
             npm install
           fi
 
-      - name: 🌐 Install Playwright Chromium
-        run: |
-          pip install playwright
-          python -m playwright install chromium --with-deps
+      - name: 🌐 Install Playwright Chromium (Python)
+        run: python -m playwright install chromium
+
+      - name: 🌐 Install Playwright Chromium (Node)
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        working-directory: remotion
+        run: npx playwright install chromium
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
@@ -488,15 +497,20 @@ jobs:
       - name: 🔧 Install system deps
         run: |
           sudo apt-get update -q
+
           sudo apt-get install -y \
-            ffmpeg libsndfile1 libasound2-dev libasound2t64 \
+            ffmpeg libsndfile1 \
             libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
             libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
             libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
             libxcomposite1 libxdamage1 libxext6 libxfixes3 \
             libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
             fonts-noto fonts-noto-core fonts-hosny-amiri \
-            fonts-sil-scheherazade
+            fonts-sil-scheherazade || true
+
+          sudo apt-get install -y libasound2t64 libasound2-dev || \
+            sudo apt-get install -y libasound2 libasound2-dev || true
+
           sudo fc-cache -fv
 
       - name: 💾 Cache WhisperX models
@@ -513,13 +527,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pytorch-cpu-${{ runner.os }}-py3.11
+          key: pytorch-cpu-${{ runner.os }}-py3.11-v24
           restore-keys: pytorch-cpu-
 
-      - name: 🔥 Install PyTorch (CPU)
+      - name: 🔥 Install PyTorch 2.4 (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install torch torchaudio \
+          pip install torch==2.4.0 torchaudio==2.4.0 \
             --index-url https://download.pytorch.org/whl/cpu
 
       - name: 📦 Install WhisperX
@@ -546,10 +560,13 @@ jobs:
             npm install
           fi
 
-      - name: 🌐 Install Playwright Chromium
-        run: |
-          pip install playwright
-          python -m playwright install chromium --with-deps
+      - name: 🌐 Install Playwright Chromium (Python)
+        run: python -m playwright install chromium
+
+      - name: 🌐 Install Playwright Chromium (Node)
+        if: ${{ inputs.script_only == 'false' && inputs.no_video == 'false' }}
+        working-directory: remotion
+        run: npx playwright install chromium
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
