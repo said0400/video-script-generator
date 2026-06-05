@@ -4,6 +4,7 @@
 // ✨ خطوط محلية (بدون Google Fonts)
 // ✨ مزامنة 100% من WhisperX
 // ✨ يدعم AR, FR, EN
+// ✨ تأثيرات Ken Burns + فلاتر سينمائية + انتقالات سلسة
 
 import {
   readFileSync,
@@ -587,8 +588,7 @@ async function renderAllPNGs(page, frameStateMap) {
   const initHtmlAr = buildHTML({
     segment: {
       words: [{ word: "مرحبا", start: 0, end: 1 }],
-      start: 0,
-      end:   1,
+      start: 0, end: 1,
     },
     currentWordIdx: 0,
     fadeProgress:   1.0,
@@ -603,8 +603,7 @@ async function renderAllPNGs(page, frameStateMap) {
   const initHtmlEn = buildHTML({
     segment: {
       words: [{ word: "Hello", start: 0, end: 1 }],
-      start: 0,
-      end:   1,
+      start: 0, end: 1,
     },
     currentWordIdx: 0,
     fadeProgress:   1.0,
@@ -694,7 +693,7 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PROCESS BACKGROUND
+// ✨ PROCESS BACKGROUND — Ken Burns + فلاتر سينمائية محسّنة
 // ═══════════════════════════════════════════════════════════════════════════
 
 function processBackground(
@@ -723,39 +722,99 @@ function processBackground(
       ? ["-i", videoPath]
       : ["-stream_loop", "-1", "-i", videoPath];
 
-  const startScale = 1.0;
-  const endScale   = isHook ? 1.4 : 1.15;
-  const scaleStep  =
-    (endScale - startScale) / Math.max(duration, 0.1);
+  // ✨ Ken Burns: اختر نوع الحركة بناءً على index الكليب
+  const motionType = idx % 4;
+  let zoomFilter;
 
-  const zoomFilter =
-    `scale=` +
-    `w='trunc((iw*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':` +
-    `h='trunc((ih*(${startScale}+${scaleStep.toFixed(6)}*t))/2)*2':` +
-    `eval=frame`;
+  if (isHook) {
+    // Hook: zoom in قوي ومسرع للاهتمام الفوري
+    zoomFilter =
+      `scale=w='trunc((iw*1.5)/2)*2':h='trunc((ih*1.5)/2)*2',` +
+      `zoompan=` +
+      `z='min(zoom+0.0015,1.5)':` +
+      `x='iw/2-(iw/zoom/2)':` +
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:` +
+      `s=${WIDTH}x${HEIGHT}:` +
+      `fps=${FPS}`;
+  } else if (motionType === 0) {
+    // Slow Zoom In — ناعم جداً
+    zoomFilter =
+      `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
+      `zoompan=` +
+      `z='min(zoom+0.0008,1.3)':` +
+      `x='iw/2-(iw/zoom/2)':` +
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:` +
+      `s=${WIDTH}x${HEIGHT}:` +
+      `fps=${FPS}`;
+  } else if (motionType === 1) {
+    // Slow Zoom Out — يبدأ مكبّراً ثم يبتعد
+    zoomFilter =
+      `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
+      `zoompan=` +
+      `z='max(zoom-0.0008,1.0)':` +
+      `x='iw/2-(iw/zoom/2)':` +
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:` +
+      `s=${WIDTH}x${HEIGHT}:` +
+      `fps=${FPS}`;
+  } else if (motionType === 2) {
+    // Pan Right + slight zoom — تحريك يميناً ببطء
+    zoomFilter =
+      `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
+      `zoompan=` +
+      `z='1.1':` +
+      `x='if(gte(x,iw/10),x-0.5,iw/10)':` +
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:` +
+      `s=${WIDTH}x${HEIGHT}:` +
+      `fps=${FPS}`;
+  } else {
+    // Pan Left + slight zoom — تحريك يساراً ببطء
+    zoomFilter =
+      `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
+      `zoompan=` +
+      `z='1.1':` +
+      `x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':` +
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:` +
+      `s=${WIDTH}x${HEIGHT}:` +
+      `fps=${FPS}`;
+  }
 
+  // ✨ فلاتر سينمائية محسّنة — ناعمة ومريحة للعين
   const cinematicFilters = [
-    "curves=r='0/0 0.3/0.25 0.7/0.78 1/0.92':" +
-      "g='0/0 0.3/0.27 0.7/0.80 1/0.95':" +
-      "b='0/0.05 0.3/0.32 0.7/0.85 1/1.0'",
-    "hue=s=0.85",
+    // تصحيح الألوان — دفء خفيف
+    "curves=r='0/0 0.3/0.28 0.7/0.76 1/0.92':" +
+      "g='0/0 0.3/0.28 0.7/0.78 1/0.94':" +
+      "b='0/0.02 0.3/0.30 0.7/0.82 1/0.98'",
+    // تشبّع خفيف
+    "hue=s=0.9",
+    // تباين ناعم
     isHook
-      ? "eq=contrast=1.20:brightness=0.00:saturation=1.05"
-      : "eq=contrast=1.10:brightness=-0.02:saturation=0.95",
-    "vignette=PI/4.5",
-    "unsharp=5:5:0.6:5:5:0.0",
-  ].join(",");
+      ? "eq=contrast=1.15:brightness=0.02:saturation=1.1:gamma=1.0"
+      : "eq=contrast=1.08:brightness=-0.01:saturation=0.95:gamma=0.98",
+    // Vignette خفيف جداً
+    "vignette=PI/5:eval=frame",
+    // Unsharp mask خفيف للوضوح
+    "unsharp=3:3:0.4:3:3:0.0",
+    // Film grain خفيف جداً
+    isHook ? "" : "noise=alls=2:allf=t+u",
+  ].filter(Boolean).join(",");
 
+  // ✨ Fade ناعم جداً
   const safeDur    = Math.max(duration, 0.5);
-  const fadeFilter = isHook
-    ? `fade=t=out:st=${(safeDur - 0.2).toFixed(3)}:d=0.2`
-    : `fade=t=in:st=0:d=0.3,` +
-      `fade=t=out:st=${(safeDur - 0.3).toFixed(3)}:d=0.3`;
+  const fadeInDur  = Math.min(0.4, safeDur * 0.1);
+  const fadeOutDur = Math.min(0.4, safeDur * 0.1);
+  const fadeFilter =
+    `fade=t=in:st=0:d=${fadeInDur.toFixed(3)},` +
+    `fade=t=out:st=${(safeDur - fadeOutDur).toFixed(3)}:d=${fadeOutDur.toFixed(3)}`;
 
   const videoFilter =
     `${zoomFilter},` +
-    `crop=${WIDTH}:${HEIGHT}:(iw-${WIDTH})/2:(ih-${HEIGHT})/2,` +
-    `setsar=1,${cinematicFilters},${fadeFilter}`;
+    `${cinematicFilters},` +
+    `${fadeFilter}`;
 
   let r = spawnSync(
     "ffmpeg",
@@ -765,7 +824,7 @@ function processBackground(
       "-vf", videoFilter,
       "-r", String(FPS),
       "-c:v", "libx264", "-preset", "fast",
-      "-crf", isHook ? "18" : "20",
+      "-crf", isHook ? "17" : "19",
       "-pix_fmt", "yuv420p", "-an",
       outPath,
     ],
@@ -773,21 +832,23 @@ function processBackground(
   );
 
   if (r.status !== 0) {
-    const basicFilter =
-      `scale=${Math.round(WIDTH * 1.1)}:` +
-      `${Math.round(HEIGHT * 1.1)}:` +
-      `force_original_aspect_ratio=increase,` +
+    console.error(`⚠️  Ken Burns failed for clip ${idx} — using simple scale`);
+
+    // Fallback: simple cinematic بدون zoompan
+    const simpleFilter =
+      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1,` +
-      `${cinematicFilters},${fadeFilter}`;
+      `${cinematicFilters},` +
+      `${fadeFilter}`;
 
     r = spawnSync(
       "ffmpeg",
       [
         "-y", "-stream_loop", "-1", "-i", videoPath,
         "-t", duration.toFixed(3),
-        "-vf", basicFilter,
+        "-vf", simpleFilter,
         "-r", String(FPS),
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "21",
         "-pix_fmt", "yuv420p", "-an",
         outPath,
       ],
@@ -795,18 +856,17 @@ function processBackground(
     );
 
     if (r.status !== 0) {
-      console.error(`❌ BG failed for clip ${idx}`);
+      console.error(`❌ BG failed for clip ${idx} — minimal fallback`);
       spawnSync(
         "ffmpeg",
         [
           "-y", "-stream_loop", "-1", "-i", videoPath,
           "-t", duration.toFixed(3),
           "-vf",
-          `scale=${WIDTH}:${HEIGHT}:` +
-          `force_original_aspect_ratio=increase,` +
+          `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
           `crop=${WIDTH}:${HEIGHT},setsar=1`,
           "-r", String(FPS),
-          "-c:v", "libx264", "-preset", "fast", "-crf", "25",
+          "-c:v", "libx264", "-preset", "fast", "-crf", "23",
           "-pix_fmt", "yuv420p", "-an",
           outPath,
         ],
@@ -857,7 +917,7 @@ function overlayOnBackground(bgMp4, captionMov, outPath) {
       "[0:v][cap]overlay=0:0:format=auto," +
       "format=yuv420p[out]",
       "-map", "[out]",
-      "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "19",
       "-pix_fmt", "yuv420p", "-an",
       outPath,
     ],
@@ -872,14 +932,26 @@ function overlayOnBackground(bgMp4, captionMov, outPath) {
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ✨ XFADE CONCAT — انتقالات سلسة وناعمة
+// ═══════════════════════════════════════════════════════════════════════════
+
 function xfadeConcat(clipPaths, clipDurations) {
   if (clipPaths.length === 0) return "";
   if (clipPaths.length === 1) return clipPaths[0];
 
+  // ✨ انتقالات ناعمة لا يحس بها المشاهد
   const TRANSITIONS = [
-    "fade", "fadeblack", "dissolve", "wiperight", "slideleft",
+    "fade",        // الأكثر سلاسة
+    "fadeblack",   // ناعم عبر الأسود
+    "fadegrays",   // ناعم عبر الرمادي
+    "smoothleft",  // انزلاق ناعم يسار
+    "smoothright", // انزلاق ناعم يمين
+    "circlecrop",  // دائري ناعم
   ];
-  const XFADE = 0.35;
+
+  // ✨ مدة الانتقال: قصيرة جداً لتكون غير محسوسة
+  const XFADE = 0.5;
 
   const filters = [];
   let offset = 0;
@@ -890,8 +962,10 @@ function xfadeConcat(clipPaths, clipDurations) {
     if (offset < 0) offset = 0;
     const out   =
       i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
-    const trans =
-      TRANSITIONS[(i - 1) % TRANSITIONS.length];
+
+    // تناوب الانتقالات بشكل دوري
+    const trans = TRANSITIONS[(i - 1) % TRANSITIONS.length];
+
     filters.push(
       `${last}[${i}:v]xfade=transition=${trans}:` +
       `duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
@@ -907,7 +981,7 @@ function xfadeConcat(clipPaths, clipDurations) {
       ...clipPaths.flatMap((p) => ["-i", p]),
       "-filter_complex", filters.join(";"),
       "-map", "[vout]",
-      "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "19",
       "-pix_fmt", "yuv420p", "-an",
       outPath,
     ],
@@ -915,22 +989,47 @@ function xfadeConcat(clipPaths, clipDurations) {
   );
 
   if (r.status !== 0) {
-    console.error("⚠️  xfade failed - using concat");
-    const lst = `${TMP}/list.txt`;
-    writeFileSync(
-      lst,
-      clipPaths.map((p) => `file '${p}'`).join("\n"),
-    );
-    const raw = `${TMP}/raw.mp4`;
-    spawnSync(
+    console.error("⚠️  xfade failed - using simple fade concat");
+
+    // Fallback: fade بسيط
+    const simpleFade = [];
+    let off2 = 0;
+    let last2 = "[0:v]";
+    for (let i = 1; i < clipPaths.length; i++) {
+      off2 += clipDurations[i - 1] - 0.3;
+      if (off2 < 0) off2 = 0;
+      const out2 = i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
+      simpleFade.push(
+        `${last2}[${i}:v]xfade=transition=fade:duration=0.3:offset=${off2.toFixed(3)}${out2}`
+      );
+      last2 = out2;
+    }
+
+    const r2 = spawnSync(
       "ffmpeg",
       [
-        "-y", "-f", "concat", "-safe", "0",
-        "-i", lst, "-c", "copy", raw,
+        "-y",
+        ...clipPaths.flatMap((p) => ["-i", p]),
+        "-filter_complex", simpleFade.join(";"),
+        "-map", "[vout]",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "21",
+        "-pix_fmt", "yuv420p", "-an",
+        outPath,
       ],
-      { stdio: "inherit" },
+      { stdio: ["ignore", "pipe", "pipe"] },
     );
-    return raw;
+
+    if (r2.status !== 0) {
+      const lst = `${TMP}/list.txt`;
+      writeFileSync(lst, clipPaths.map((p) => `file '${p}'`).join("\n"));
+      const raw = `${TMP}/raw.mp4`;
+      spawnSync(
+        "ffmpeg",
+        ["-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", raw],
+        { stdio: "inherit" },
+      );
+      return raw;
+    }
   }
   return outPath;
 }
@@ -954,7 +1053,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
       [
         "-y", "-stream_loop", "-1", "-i", videoPath,
         "-t", aDur.toFixed(3),
-        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "21",
         "-pix_fmt", "yuv420p", "-an",
         looped,
       ],
@@ -997,7 +1096,9 @@ function mergeAudio(videoPath, audioPath, outPath) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function main() {
-  console.log("\n🚀 Starting Renderer — Yellow BG + Red Karaoke\n");
+  console.log(
+    "\n🚀 Starting Renderer — Ken Burns + Cinematic Filters\n"
+  );
 
   const frameStateMap = buildFrameStateMap();
 
@@ -1035,7 +1136,6 @@ async function main() {
   );
   console.log(`🎥 Videos: ${videos.length}`);
 
-  // ✅ JavaScript خالص — بدون TypeScript syntax
   const finalClips    = [];
   const clipDurations = [];
 
