@@ -50,8 +50,9 @@ on:
         type: choice
         options: ["false", "true"]
 
+# ✅ concurrency موحد حسب اللغة — يتطابق مع schedule_*.yml
 concurrency:
-  group: manual-run-${{ github.event.inputs.lang }}-${{ github.ref }}
+  group: video-${{ github.event.inputs.lang }}
   cancel-in-progress: false
 
 jobs:
