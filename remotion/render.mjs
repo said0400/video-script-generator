@@ -1,10 +1,10 @@
 // remotion/render.mjs — Full Paragraph Display
-// ✨ خلفية صفراء واحدة تجمع كل النص
-// ✨ نص أسود + كلمة حالية حمراء مشعة
-// ✨ خطوط محلية (بدون Google Fonts)
-// ✨ مزامنة 100% من WhisperX
-// ✨ يدعم AR, FR, EN
-// ✨ تأثيرات Ken Burns + فلاتر سينمائية + انتقالات سلسة
+// ✨ ألوان ديناميكية حسب المشاعر
+// ✨ Pulse على الكلمة الحالية
+// ✨ Hook قوي في الثواني الأولى
+// ✨ خطوط محسّنة مع فرق في الحجم
+// ✨ Ken Burns + فلاتر سينمائية
+// ✨ انتقالات سلسة
 
 import {
   readFileSync,
@@ -47,6 +47,7 @@ const {
   clip_duration = 3.0,
   has_hook      = false,
   hook_keyword  = "",
+  analysis      = {},
 } = props;
 
 const FPS    = 30;
@@ -66,6 +67,94 @@ console.log(`📌 Title: ${emoji_left} ${display_title} ${emoji_right}`);
 console.log(`🎬 Clip: ${clip_duration}s | Hook: ${has_hook ? "YES" : "NO"}`);
 console.log(`🎯 Aligned: ${aligned.length} segments`);
 console.log(`🌐 Lang: ${lang.toUpperCase()}`);
+console.log(`💭 Emotion: ${analysis.primary_emotion || "unknown"}`);
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ✨ EMOTION COLOR SYSTEM — ألوان ديناميكية حسب المشاعر
+// ═══════════════════════════════════════════════════════════════════════════
+
+const EMOTION_COLORS = {
+  curiosity: {
+    bg:         "rgba(255, 215, 0, 0.95)",    // أصفر ذهبي
+    bgSolid:    "#FFD700",
+    current:    "#FF6B00",
+    glow:       "rgba(255, 107, 0, 0.8)",
+    label:      "Golden Curiosity",
+  },
+  fear: {
+    bg:         "rgba(180, 0, 0, 0.92)",      // أحمر داكن
+    bgSolid:    "#B40000",
+    current:    "#FF4444",
+    glow:       "rgba(255, 68, 68, 0.8)",
+    label:      "Deep Fear",
+  },
+  hope: {
+    bg:         "rgba(0, 180, 100, 0.92)",    // أخضر فاتح
+    bgSolid:    "#00B464",
+    current:    "#FFFFFF",
+    glow:       "rgba(255, 255, 255, 0.9)",
+    label:      "Fresh Hope",
+  },
+  joy: {
+    bg:         "rgba(255, 120, 0, 0.95)",    // برتقالي
+    bgSolid:    "#FF7800",
+    current:    "#FFFFFF",
+    glow:       "rgba(255, 255, 255, 0.9)",
+    label:      "Vibrant Joy",
+  },
+  awe: {
+    bg:         "rgba(80, 0, 180, 0.92)",     // بنفسجي
+    bgSolid:    "#5000B4",
+    current:    "#FFD700",
+    glow:       "rgba(255, 215, 0, 0.8)",
+    label:      "Deep Awe",
+  },
+  surprise: {
+    bg:         "rgba(0, 150, 220, 0.92)",    // أزرق
+    bgSolid:    "#0096DC",
+    current:    "#FFD700",
+    glow:       "rgba(255, 215, 0, 0.8)",
+    label:      "Blue Surprise",
+  },
+  desire: {
+    bg:         "rgba(220, 0, 100, 0.92)",    // وردي داكن
+    bgSolid:    "#DC0064",
+    current:    "#FFD700",
+    glow:       "rgba(255, 215, 0, 0.8)",
+    label:      "Deep Desire",
+  },
+  anger: {
+    bg:         "rgba(200, 20, 0, 0.95)",     // أحمر قوي
+    bgSolid:    "#C81400",
+    current:    "#FFD700",
+    glow:       "rgba(255, 215, 0, 0.9)",
+    label:      "Burning Anger",
+  },
+  sadness: {
+    bg:         "rgba(40, 60, 120, 0.92)",    // أزرق داكن
+    bgSolid:    "#283C78",
+    current:    "#A0C4FF",
+    glow:       "rgba(160, 196, 255, 0.8)",
+    label:      "Deep Sadness",
+  },
+  default: {
+    bg:         "rgba(255, 215, 0, 0.95)",    // افتراضي: ذهبي
+    bgSolid:    "#FFD700",
+    current:    "#FF1744",
+    glow:       "rgba(255, 23, 68, 0.8)",
+    label:      "Default Golden",
+  },
+};
+
+// احصل على ألوان المشاعر الحالية
+function getEmotionColors() {
+  const emotion = (analysis.primary_emotion || "").toLowerCase();
+  return EMOTION_COLORS[emotion] || EMOTION_COLORS.default;
+}
+
+const COLORS = getEmotionColors();
+console.log(`🎨 Color theme: ${COLORS.label}`);
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -344,12 +433,18 @@ function buildFrameStateMap() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HTML BUILDER
+// ✨ HTML BUILDER — مع كل الميزات الجديدة
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTML(opts) {
-  const { segment, currentWordIdx, fadeProgress } = opts;
+  const {
+    segment,
+    currentWordIdx,
+    fadeProgress,
+    isHookFrame = false,
+  } = opts;
 
+  // صمت
   if (!segment || !segment.words || segment.words.length === 0) {
     return (
       `<!DOCTYPE html><html>` +
@@ -373,50 +468,82 @@ function buildHTML(opts) {
   const titleFont = getFontFamily(display_title);
   const titleDir  = getDir(display_title);
 
+  // ✨ حجم خط النص — أكبر من السابق لوضوح أكثر
   const wc = allWordsText.length;
-  let fontSize;
-  if      (wc <= 5)  fontSize = ar ? 85 : 80;
-  else if (wc <= 10) fontSize = ar ? 72 : 68;
-  else if (wc <= 15) fontSize = ar ? 60 : 56;
-  else if (wc <= 20) fontSize = ar ? 52 : 48;
-  else               fontSize = ar ? 44 : 40;
+  let textFontSize;
+  if      (wc <= 5)  textFontSize = ar ? 90 : 86;
+  else if (wc <= 10) textFontSize = ar ? 76 : 72;
+  else if (wc <= 15) textFontSize = ar ? 64 : 60;
+  else if (wc <= 20) textFontSize = ar ? 56 : 52;
+  else               textFontSize = ar ? 48 : 44;
+
+  // ✨ حجم خط العنوان — أصغر من النص الرئيسي بوضوح
+  const titleFontSize = titleAr ? 40 : 36;
+
+  // ✨ لون الخلفية الديناميكية حسب المشاعر
+  const bgColor      = COLORS.bg;
+  const currentColor = COLORS.current;
+  const glowColor    = COLORS.glow;
+
+  // لون النص العادي حسب لون الخلفية
+  // خلفيات فاتحة → نص أسود | خلفيات داكنة → نص أبيض
+  const darkBgs = ["fear", "awe", "sadness", "desire", "anger"];
+  const emotion = (analysis.primary_emotion || "").toLowerCase();
+  const isDarkBg      = darkBgs.includes(emotion);
+  const normalColor   = isDarkBg ? "#FFFFFF" : "#000000";
+  const upcomingColor = isDarkBg ? "rgba(255,255,255,0.6)" : "#555555";
 
   const showPowerSolo =
     allWordsText.length === 1 && isPowerWord(allWordsText[0]);
 
+  // ✨ بناء الكلمات مع Pulse على الكلمة الحالية
   let wordIdx = 0;
   const wordsHTML = allWordsText
     .map((word) => {
       const isCurrent = wordIdx === currentWordIdx;
       const isPast    = wordIdx < currentWordIdx;
 
-      let color, textShadow, opacity;
+      let style = "";
 
       if (isCurrent) {
-        color      = "#FF1744";
-        textShadow =
-          "0 0 20px rgba(255,23,68,0.9)," +
-          "0 0 40px rgba(255,23,68,0.6)," +
-          "0 0 60px rgba(255,23,68,0.3)";
-        opacity = 1.0;
+        // ✨ Pulse animation على الكلمة الحالية
+        style =
+          `color:${currentColor};` +
+          `opacity:1.0;` +
+          `text-shadow:` +
+          `0 0 20px ${glowColor},` +
+          `0 0 40px ${glowColor},` +
+          `0 0 60px ${glowColor};` +
+          `display:inline-block;` +
+          `animation:pulse 0.15s ease-out;`;
       } else if (isPast) {
-        color      = "#000000";
-        textShadow = "none";
-        opacity    = 1.0;
+        style =
+          `color:${normalColor};` +
+          `opacity:1.0;` +
+          `text-shadow:none;` +
+          `display:inline;`;
       } else {
-        color      = "#555555";
-        textShadow = "none";
-        opacity    = 0.75;
+        style =
+          `color:${upcomingColor};` +
+          `opacity:0.75;` +
+          `text-shadow:none;` +
+          `display:inline;`;
       }
 
       wordIdx++;
       return (
-        `<span class="word" style="color:${color};` +
-        `opacity:${opacity};text-shadow:${textShadow};">` +
-        `${esc(word)}</span>`
+        `<span class="word" style="${style}">${esc(word)}</span>`
       );
     })
     .join(" ");
+
+  // ✨ Hook text حسب اللغة
+  const hookTexts = {
+    ar: "🔴 لا تتجاوز هذا",
+    fr: "🔴 Ne ratez pas ça",
+    en: "🔴 Don't skip this",
+  };
+  const hookText = hookTexts[lang] || hookTexts.en;
 
   let mainContent;
   if (showPowerSolo) {
@@ -441,11 +568,19 @@ function buildHTML(opts) {
       width:${WIDTH}px; height:${HEIGHT}px;
       overflow:hidden; background:transparent;
     }
+
+    /* ✨ Pulse animation للكلمة الحالية */
+    @keyframes pulse {
+      0%   { transform: scale(1.0); }
+      50%  { transform: scale(1.06); }
+      100% { transform: scale(1.0); }
+    }
+
     .overlay-top {
       position:absolute; top:0; left:0; right:0; height:35%;
       background:linear-gradient(
         to bottom,
-        rgba(0,0,0,0.7) 0%,
+        rgba(0,0,0,0.72) 0%,
         rgba(0,0,0,0.3) 60%,
         transparent 100%
       );
@@ -455,92 +590,149 @@ function buildHTML(opts) {
       position:absolute; bottom:0; left:0; right:0; height:45%;
       background:linear-gradient(
         to top,
-        rgba(0,0,0,0.7) 0%,
+        rgba(0,0,0,0.72) 0%,
         rgba(0,0,0,0.3) 60%,
         transparent 100%
       );
       pointer-events:none; z-index:1;
     }
-    .title-container {
-      position:absolute; top:400px; left:50%;
+
+    /* ✨ Hook Banner — الثواني الأولى */
+    .hook-banner {
+      position:absolute;
+      top:180px;
+      left:50%;
       transform:translateX(-50%);
-      width:90%; max-width:980px;
-      direction:${titleDir}; text-align:center; z-index:20;
+      background:rgba(255,0,0,0.9);
+      color:#FFFFFF;
+      font-family:${titleFont};
+      font-size:${ar ? "38px" : "34px"};
+      font-weight:900;
+      padding:14px 40px;
+      border-radius:9999px;
+      z-index:25;
+      white-space:nowrap;
+      box-shadow:
+        0 0 30px rgba(255,0,0,0.8),
+        0 6px 20px rgba(0,0,0,0.5);
+      animation:hookPulse 1s ease-in-out infinite;
+    }
+
+    @keyframes hookPulse {
+      0%,100% { transform:translateX(-50%) scale(1.0); }
+      50%      { transform:translateX(-50%) scale(1.04); }
+    }
+
+    /* ✨ العنوان — حجم أصغر وأنيق */
+    .title-container {
+      position:absolute;
+      top:${isHookFrame ? "300px" : "380px"};
+      left:50%;
+      transform:translateX(-50%);
+      width:88%;
+      max-width:960px;
+      direction:${titleDir};
+      text-align:center;
+      z-index:20;
+      transition:top 0.3s ease;
     }
     .title-box {
       display:inline-block;
       background:#FF0000;
-      padding:20px 45px;
+      padding:16px 36px;
       border-radius:9999px;
       box-shadow:
-        0 0 50px rgba(255,0,0,0.7),
-        0 10px 30px rgba(0,0,0,0.5);
+        0 0 40px rgba(255,0,0,0.6),
+        0 8px 25px rgba(0,0,0,0.5);
     }
     .title-text {
       font-family:${titleFont};
-      font-size:${titleAr ? "48px" : "44px"};
-      font-weight:900;
+      font-size:${titleFontSize}px;
+      font-weight:800;
       color:#FFFFFF;
-      display:inline-flex; align-items:center; gap:16px;
+      display:inline-flex;
+      align-items:center;
+      gap:12px;
       white-space:nowrap;
       text-shadow:0 2px 6px rgba(0,0,0,0.4);
     }
-    .title-emoji { font-size:${titleAr ? "54px" : "50px"}; }
+    .title-emoji {
+      font-size:${titleAr ? "44px" : "40px"};
+    }
+
+    /* ✨ النص الرئيسي — مع لون ديناميكي */
     .text-container {
       position:absolute;
-      left:50%; top:62%;
+      left:50%;
+      top:62%;
       transform:translate(-50%, -50%);
-      width:85%; max-width:920px;
-      direction:${dir}; text-align:center;
+      width:85%;
+      max-width:920px;
+      direction:${dir};
+      text-align:center;
       z-index:10;
       opacity:${fadeProgress};
     }
+
+    /* ✨ خلفية ديناميكية حسب المشاعر */
     .text-bg {
       display:inline-block;
-      background:rgba(255, 215, 0, 0.95);
+      background:${bgColor};
       font-family:${font};
-      font-size:${fontSize}px;
+      font-size:${textFontSize}px;
       font-weight:900;
-      line-height:1.6;
-      padding:25px 35px;
-      border-radius:24px;
-      box-shadow:0 8px 30px rgba(0,0,0,0.3);
+      line-height:1.65;
+      padding:28px 38px;
+      border-radius:28px;
+      box-shadow:
+        0 8px 32px rgba(0,0,0,0.35),
+        0 0 0 3px rgba(255,255,255,0.1);
       max-width:100%;
       word-wrap:break-word;
       overflow-wrap:break-word;
     }
+
     .word {
-      display:inline;
       transition:
-        color       0.1s  ease-out,
-        opacity     0.1s  ease-out,
-        text-shadow 0.15s ease-out;
+        color       0.08s ease-out,
+        opacity     0.08s ease-out,
+        text-shadow 0.12s ease-out;
     }
+
+    /* ✨ Power Word */
     .power-word-container {
-      position:absolute; left:50%; top:62%;
+      position:absolute;
+      left:50%; top:62%;
       transform:translate(-50%, -50%);
-      direction:${dir}; text-align:center;
-      z-index:10; opacity:${fadeProgress};
+      direction:${dir};
+      text-align:center;
+      z-index:10;
+      opacity:${fadeProgress};
     }
     .power-word-text {
       display:inline-block;
       background:#FF0000;
       color:#FFD700;
       font-family:${font};
-      font-size:${ar ? "150px" : "140px"};
+      font-size:${ar ? "155px" : "145px"};
       font-weight:900;
       line-height:1.5;
-      padding:15px 40px;
+      padding:18px 44px;
       border-radius:9999px;
       box-shadow:
-        0 0 80px rgba(255,0,0,0.8),
-        0 15px 40px rgba(0,0,0,0.6);
+        0 0 90px rgba(255,0,0,0.85),
+        0 18px 45px rgba(0,0,0,0.65);
+      animation:pulse 0.3s ease-out;
     }
   </style>
 </head>
 <body>
   <div class="overlay-top"></div>
   <div class="overlay-bottom"></div>
+
+  <!-- ✨ Hook Banner — يظهر فقط في الثواني الأولى -->
+  ${isHookFrame ? `<div class="hook-banner">${esc(hookText)}</div>` : ""}
+
   <div class="title-container">
     <div class="title-box">
       <div class="title-text">
@@ -550,6 +742,7 @@ function buildHTML(opts) {
       </div>
     </div>
   </div>
+
   ${mainContent}
 </body>
 </html>`;
@@ -563,12 +756,19 @@ function buildHTML(opts) {
 async function renderAllPNGs(page, frameStateMap) {
   const uniqueStates = new Map();
 
-  for (const state of frameStateMap) {
+  // ✨ Hook frames — الـ 3 ثواني الأولى
+  const HOOK_DURATION_FRAMES = Math.floor(3.0 * FPS);
+
+  for (let f = 0; f < frameStateMap.length; f++) {
+    const state = frameStateMap[f];
     if (!state) continue;
 
+    const isHookFrame = f < HOOK_DURATION_FRAMES;
+
     if (!state.segment) {
-      if (!uniqueStates.has("silence"))
-        uniqueStates.set("silence", state);
+      const key = isHookFrame ? "silence_hook" : "silence";
+      if (!uniqueStates.has(key))
+        uniqueStates.set(key, { ...state, isHookFrame });
       continue;
     }
 
@@ -578,8 +778,10 @@ async function renderAllPNGs(page, frameStateMap) {
         : Math.floor(state.fade_progress * 3);
     const key =
       `s${state.segment_idx}_w${state.current_word_idx}` +
-      `_f${fadeStage}`;
-    if (!uniqueStates.has(key)) uniqueStates.set(key, state);
+      `_f${fadeStage}` +
+      (isHookFrame ? "_hook" : "");
+    if (!uniqueStates.has(key))
+      uniqueStates.set(key, { ...state, isHookFrame });
   }
 
   console.log(`\n  📸 ${uniqueStates.size} unique states`);
@@ -592,6 +794,7 @@ async function renderAllPNGs(page, frameStateMap) {
     },
     currentWordIdx: 0,
     fadeProgress:   1.0,
+    isHookFrame:    false,
   });
   writeFileSync(`${TMP}/init_ar.html`, initHtmlAr, "utf-8");
   await page.goto(`file://${TMP}/init_ar.html`, {
@@ -607,6 +810,7 @@ async function renderAllPNGs(page, frameStateMap) {
     },
     currentWordIdx: 0,
     fadeProgress:   1.0,
+    isHookFrame:    false,
   });
   writeFileSync(`${TMP}/init_en.html`, initHtmlEn, "utf-8");
   await page.goto(`file://${TMP}/init_en.html`, {
@@ -624,6 +828,7 @@ async function renderAllPNGs(page, frameStateMap) {
       segment:        state.segment,
       currentWordIdx: state.current_word_idx,
       fadeProgress:   state.fade_progress,
+      isHookFrame:    state.isHookFrame || false,
     });
 
     const htmlPath = `${TMP}/${key}.html`;
@@ -655,17 +860,22 @@ async function renderAllPNGs(page, frameStateMap) {
 // BUILD FRAME DIR
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildFrameDir(clipFrameMap, pngCache, idx) {
+function buildFrameDir(clipFrameMap, pngCache, idx, clipStartFrame) {
   const dir = `${TMP}/frames_${idx}`;
   mkdirSync(dir, { recursive: true });
+
+  const HOOK_DURATION_FRAMES = Math.floor(3.0 * FPS);
 
   for (let f = 0; f < clipFrameMap.length; f++) {
     const state = clipFrameMap[f];
     if (!state) continue;
 
+    const globalFrame = clipStartFrame + f;
+    const isHookFrame = globalFrame < HOOK_DURATION_FRAMES;
+
     let key;
     if (!state.segment) {
-      key = "silence";
+      key = isHookFrame ? "silence_hook" : "silence";
     } else {
       const fadeStage =
         state.fade_progress >= 1.0
@@ -673,7 +883,8 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
           : Math.floor(state.fade_progress * 3);
       key =
         `s${state.segment_idx}_w${state.current_word_idx}` +
-        `_f${fadeStage}`;
+        `_f${fadeStage}` +
+        (isHookFrame ? "_hook" : "");
     }
 
     const src  = pngCache.get(key);
@@ -693,7 +904,7 @@ function buildFrameDir(clipFrameMap, pngCache, idx) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✨ PROCESS BACKGROUND — Ken Burns + فلاتر سينمائية محسّنة
+// PROCESS BACKGROUND — Ken Burns + فلاتر سينمائية
 // ═══════════════════════════════════════════════════════════════════════════
 
 function processBackground(
@@ -722,12 +933,11 @@ function processBackground(
       ? ["-i", videoPath]
       : ["-stream_loop", "-1", "-i", videoPath];
 
-  // ✨ Ken Burns: اختر نوع الحركة بناءً على index الكليب
+  // ✨ Ken Burns Effect
   const motionType = idx % 4;
   let zoomFilter;
 
   if (isHook) {
-    // Hook: zoom in قوي ومسرع للاهتمام الفوري
     zoomFilter =
       `scale=w='trunc((iw*1.5)/2)*2':h='trunc((ih*1.5)/2)*2',` +
       `zoompan=` +
@@ -738,72 +948,45 @@ function processBackground(
       `s=${WIDTH}x${HEIGHT}:` +
       `fps=${FPS}`;
   } else if (motionType === 0) {
-    // Slow Zoom In — ناعم جداً
     zoomFilter =
       `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
-      `zoompan=` +
-      `z='min(zoom+0.0008,1.3)':` +
-      `x='iw/2-(iw/zoom/2)':` +
-      `y='ih/2-(ih/zoom/2)':` +
-      `d=${Math.ceil(duration * FPS)}:` +
-      `s=${WIDTH}x${HEIGHT}:` +
-      `fps=${FPS}`;
+      `zoompan=z='min(zoom+0.0008,1.3)':` +
+      `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   } else if (motionType === 1) {
-    // Slow Zoom Out — يبدأ مكبّراً ثم يبتعد
     zoomFilter =
       `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
-      `zoompan=` +
-      `z='max(zoom-0.0008,1.0)':` +
-      `x='iw/2-(iw/zoom/2)':` +
-      `y='ih/2-(ih/zoom/2)':` +
-      `d=${Math.ceil(duration * FPS)}:` +
-      `s=${WIDTH}x${HEIGHT}:` +
-      `fps=${FPS}`;
+      `zoompan=z='max(zoom-0.0008,1.0)':` +
+      `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   } else if (motionType === 2) {
-    // Pan Right + slight zoom — تحريك يميناً ببطء
     zoomFilter =
       `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
-      `zoompan=` +
-      `z='1.1':` +
-      `x='if(gte(x,iw/10),x-0.5,iw/10)':` +
-      `y='ih/2-(ih/zoom/2)':` +
-      `d=${Math.ceil(duration * FPS)}:` +
-      `s=${WIDTH}x${HEIGHT}:` +
-      `fps=${FPS}`;
+      `zoompan=z='1.1':` +
+      `x='if(gte(x,iw/10),x-0.5,iw/10)':y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   } else {
-    // Pan Left + slight zoom — تحريك يساراً ببطء
     zoomFilter =
       `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
-      `zoompan=` +
-      `z='1.1':` +
-      `x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':` +
-      `y='ih/2-(ih/zoom/2)':` +
-      `d=${Math.ceil(duration * FPS)}:` +
-      `s=${WIDTH}x${HEIGHT}:` +
-      `fps=${FPS}`;
+      `zoompan=z='1.1':` +
+      `x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   }
 
-  // ✨ فلاتر سينمائية محسّنة — ناعمة ومريحة للعين
+  // ✨ فلاتر سينمائية
   const cinematicFilters = [
-    // تصحيح الألوان — دفء خفيف
     "curves=r='0/0 0.3/0.28 0.7/0.76 1/0.92':" +
       "g='0/0 0.3/0.28 0.7/0.78 1/0.94':" +
       "b='0/0.02 0.3/0.30 0.7/0.82 1/0.98'",
-    // تشبّع خفيف
     "hue=s=0.9",
-    // تباين ناعم
     isHook
-      ? "eq=contrast=1.15:brightness=0.02:saturation=1.1:gamma=1.0"
-      : "eq=contrast=1.08:brightness=-0.01:saturation=0.95:gamma=0.98",
-    // Vignette خفيف جداً
+      ? "eq=contrast=1.15:brightness=0.02:saturation=1.1"
+      : "eq=contrast=1.08:brightness=-0.01:saturation=0.95",
     "vignette=PI/5:eval=frame",
-    // Unsharp mask خفيف للوضوح
     "unsharp=3:3:0.4:3:3:0.0",
-    // Film grain خفيف جداً
     isHook ? "" : "noise=alls=2:allf=t+u",
   ].filter(Boolean).join(",");
 
-  // ✨ Fade ناعم جداً
   const safeDur    = Math.max(duration, 0.5);
   const fadeInDur  = Math.min(0.4, safeDur * 0.1);
   const fadeOutDur = Math.min(0.4, safeDur * 0.1);
@@ -812,9 +995,7 @@ function processBackground(
     `fade=t=out:st=${(safeDur - fadeOutDur).toFixed(3)}:d=${fadeOutDur.toFixed(3)}`;
 
   const videoFilter =
-    `${zoomFilter},` +
-    `${cinematicFilters},` +
-    `${fadeFilter}`;
+    `${zoomFilter},${cinematicFilters},${fadeFilter}`;
 
   let r = spawnSync(
     "ffmpeg",
@@ -832,14 +1013,10 @@ function processBackground(
   );
 
   if (r.status !== 0) {
-    console.error(`⚠️  Ken Burns failed for clip ${idx} — using simple scale`);
-
-    // Fallback: simple cinematic بدون zoompan
     const simpleFilter =
       `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1,` +
-      `${cinematicFilters},` +
-      `${fadeFilter}`;
+      `${cinematicFilters},${fadeFilter}`;
 
     r = spawnSync(
       "ffmpeg",
@@ -856,7 +1033,6 @@ function processBackground(
     );
 
     if (r.status !== 0) {
-      console.error(`❌ BG failed for clip ${idx} — minimal fallback`);
       spawnSync(
         "ffmpeg",
         [
@@ -933,24 +1109,22 @@ function overlayOnBackground(bgMp4, captionMov, outPath) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✨ XFADE CONCAT — انتقالات سلسة وناعمة
+// XFADE CONCAT — انتقالات ناعمة
 // ═══════════════════════════════════════════════════════════════════════════
 
 function xfadeConcat(clipPaths, clipDurations) {
   if (clipPaths.length === 0) return "";
   if (clipPaths.length === 1) return clipPaths[0];
 
-  // ✨ انتقالات ناعمة لا يحس بها المشاهد
   const TRANSITIONS = [
-    "fade",        // الأكثر سلاسة
-    "fadeblack",   // ناعم عبر الأسود
-    "fadegrays",   // ناعم عبر الرمادي
-    "smoothleft",  // انزلاق ناعم يسار
-    "smoothright", // انزلاق ناعم يمين
-    "circlecrop",  // دائري ناعم
+    "fade",
+    "fadeblack",
+    "fadegrays",
+    "smoothleft",
+    "smoothright",
+    "circlecrop",
   ];
 
-  // ✨ مدة الانتقال: قصيرة جداً لتكون غير محسوسة
   const XFADE = 0.5;
 
   const filters = [];
@@ -962,10 +1136,7 @@ function xfadeConcat(clipPaths, clipDurations) {
     if (offset < 0) offset = 0;
     const out   =
       i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
-
-    // تناوب الانتقالات بشكل دوري
     const trans = TRANSITIONS[(i - 1) % TRANSITIONS.length];
-
     filters.push(
       `${last}[${i}:v]xfade=transition=${trans}:` +
       `duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
@@ -989,18 +1160,19 @@ function xfadeConcat(clipPaths, clipDurations) {
   );
 
   if (r.status !== 0) {
-    console.error("⚠️  xfade failed - using simple fade concat");
+    console.error("⚠️  xfade failed - simple fade fallback");
 
-    // Fallback: fade بسيط
     const simpleFade = [];
     let off2 = 0;
     let last2 = "[0:v]";
     for (let i = 1; i < clipPaths.length; i++) {
       off2 += clipDurations[i - 1] - 0.3;
       if (off2 < 0) off2 = 0;
-      const out2 = i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
+      const out2 =
+        i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
       simpleFade.push(
-        `${last2}[${i}:v]xfade=transition=fade:duration=0.3:offset=${off2.toFixed(3)}${out2}`
+        `${last2}[${i}:v]xfade=transition=fade:` +
+        `duration=0.3:offset=${off2.toFixed(3)}${out2}`
       );
       last2 = out2;
     }
@@ -1021,7 +1193,10 @@ function xfadeConcat(clipPaths, clipDurations) {
 
     if (r2.status !== 0) {
       const lst = `${TMP}/list.txt`;
-      writeFileSync(lst, clipPaths.map((p) => `file '${p}'`).join("\n"));
+      writeFileSync(
+        lst,
+        clipPaths.map((p) => `file '${p}'`).join("\n"),
+      );
       const raw = `${TMP}/raw.mp4`;
       spawnSync(
         "ffmpeg",
@@ -1083,7 +1258,6 @@ function mergeAudio(videoPath, audioPath, outPath) {
 
   if (r.status !== 0) {
     console.error("❌ Merge failed");
-    console.error(r.stderr?.toString().slice(-200) ?? "");
     process.exit(1);
   }
 
@@ -1097,7 +1271,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 
 async function main() {
   console.log(
-    "\n🚀 Starting Renderer — Ken Burns + Cinematic Filters\n"
+    "\n🚀 Starting Renderer — Emotion Colors + Pulse + Hook\n"
   );
 
   const frameStateMap = buildFrameStateMap();
@@ -1142,15 +1316,15 @@ async function main() {
   console.log("\n🎬 Processing clips...");
 
   for (let i = 0; i < totalClips; i++) {
-    const clipStart = i * actualClipDuration;
-    const clipEnd   = Math.min(
+    const clipStart      = i * actualClipDuration;
+    const clipEnd        = Math.min(
       (i + 1) * actualClipDuration,
       effectiveDuration,
     );
-    const clipDur = Math.max(clipEnd - clipStart, 0.5);
-    const nFrames = Math.ceil(clipDur * FPS);
-    const startF  = Math.floor(clipStart * FPS);
-    const clipMap = frameStateMap.slice(startF, startF + nFrames);
+    const clipDur        = Math.max(clipEnd - clipStart, 0.5);
+    const nFrames        = Math.ceil(clipDur * FPS);
+    const startF         = Math.floor(clipStart * FPS);
+    const clipMap        = frameStateMap.slice(startF, startF + nFrames);
 
     const isHook   = i === 0 && has_hook;
     const videoIdx = i % videos.length;
@@ -1161,7 +1335,8 @@ async function main() {
       `${clipDur.toFixed(2)}s${isHook ? " 🔥HOOK" : ""}... `
     );
 
-    const frameDir   = buildFrameDir(clipMap, pngCache, i);
+    // ✨ تمرير clipStartFrame لتحديد هل هذا الكليب في الـ Hook zone
+    const frameDir   = buildFrameDir(clipMap, pngCache, i, startF);
     const captionMov = `${TMP}/caption_${i}.mov`;
     framesToMov(frameDir, captionMov);
 
