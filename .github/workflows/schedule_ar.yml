@@ -1,15 +1,13 @@
 name: 🇸🇦 Arabic Videos (Auto + Manual)
 
 on:
-  # ── تلقائي ──────────────────────────────────────────────────
   # schedule:
-  #   - cron: "0 9 * * *"     # فيديو 1 - 09:00 UTC
-  #   - cron: "0 11 * * *"    # فيديو 2 - 11:00 UTC
-  #   - cron: "0 14 * * *"    # فيديو 3 - 14:00 UTC
-  #   - cron: "0 17 * * *"    # فيديو 4 - 17:00 UTC
-  #   - cron: "0 20 * * *"    # فيديو 5 - 20:00 UTC
+  #   - cron: "0 9 * * *"
+  #   - cron: "0 11 * * *"
+  #   - cron: "0 14 * * *"
+  #   - cron: "0 17 * * *"
+  #   - cron: "0 20 * * *"
 
-  # ── يدوي ────────────────────────────────────────────────────
   workflow_dispatch:
     inputs:
       video_number:
@@ -17,28 +15,24 @@ on:
         required: false
         default: ""
         type: string
-
       force:
         description: "⚡ Force re-render?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
-
       force_ai:
         description: "🤖 Force re-generate AI?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
-
       publish:
         description: "📘 Publish to Facebook?"
         required: true
         default: "true"
         type: choice
         options: ["true", "false"]
-
       formats:
         description: "📐 Export formats"
         required: true
@@ -126,15 +120,11 @@ jobs:
           fi
 
       - name: 🌐 Install Playwright Chromium (Python)
-        run: |
-          python -m playwright install chromium
-          python -m playwright install-deps chromium
+        run: python -m playwright install chromium
 
       - name: 🌐 Install Playwright Chromium (Node)
         working-directory: remotion
-        run: |
-          npx playwright install chromium
-          npx playwright install-deps chromium
+        run: npx playwright install chromium
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
