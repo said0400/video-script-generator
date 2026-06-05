@@ -37,6 +37,11 @@ VOICES: dict[str, str] = {
 TTS_MODEL      = "gemini-2.5-flash-preview-tts"
 MIN_DURATION_S = 2.0
 
+# ✅ امتدادات صوتية آمنة فقط
+SAFE_AUDIO_EXTENSIONS: set[str] = {
+    ".wav", ".mp3", ".ogg", ".aac", ".m4a", ".flac",
+}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # VOICE CONFIGURATIONS PER LANGUAGE
@@ -240,19 +245,19 @@ def _get_client() -> genai.Client:
 
 
 def _rotate_key() -> None:
-    """تدوير مفتاح Gemini عند الفشل."""
+    """تدوير مفتاح Gemini عند الفشل (thread-safe)."""
     global _key_index
+    # ✅ حساب n خارج الـ lock
+    n = len(_API_KEYS)
+    if n <= 1:
+        print("  ⚠️  No additional Gemini keys to rotate")
+        return
     with _key_lock:
-        if len(_API_KEYS) <= 1:
-            print(
-                "  ⚠️  No additional Gemini keys to rotate"
-            )
-            return
-        _key_index = (_key_index + 1) % len(_API_KEYS)
-        print(
-            f"  🔄 Gemini key rotated → "
-            f"#{_key_index} (of {len(_API_KEYS)})"
-        )
+        _key_index = (_key_index + 1) % n
+    print(
+        f"  🔄 Gemini key rotated → "
+        f"#{_key_index} (of {n})"
+    )
 
 
 def _is_rate_limit(e: Exception) -> bool:
@@ -282,7 +287,6 @@ def _build_tagged_prompt(
     config        = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
     director_note = config["director_note"]
 
-    # Tags المستخدمة
     used_tags: dict[str, int] = {}
     for sent in tagged_sentences:
         tag = sent.get("final_tag", DEFAULT_TAG)
@@ -297,7 +301,6 @@ def _build_tagged_prompt(
 
     legend_text = "\n\n".join(tags_legend)
 
-    # النص
     script_lines: list[str] = []
     for sent in tagged_sentences:
         tag  = sent.get("final_tag", DEFAULT_TAG)
@@ -306,7 +309,6 @@ def _build_tagged_prompt(
 
     script_text = "\n\n".join(script_lines)
 
-    # Language note
     lang_notes: dict[str, str] = {
         "ar": (
             "Text is in ARABIC. "
@@ -451,10 +453,6 @@ def synthesize_speech(
 
     Returns:
         Path لملف الصوت الناتج
-
-    Raises:
-        ValueError: إذا كانت القائمة فارغة
-        RuntimeError: إذا فشلت كل المحاولات
     """
     if not tagged_sentences:
         raise ValueError("No tagged sentences to synthesize")
@@ -544,9 +542,10 @@ def synthesize_speech(
                 raise RuntimeError("No audio data returned")
 
             data, mime = audio_chunks[0]
-            ext        = mimetypes.guess_extension(mime)
 
-            if not ext:
+            # ✅ إصلاح: التحقق من امتداد آمن
+            ext = mimetypes.guess_extension(mime)
+            if not ext or ext not in SAFE_AUDIO_EXTENSIONS:
                 ext  = ".wav"
                 data = _to_wav(data, mime)
 
