@@ -144,7 +144,6 @@ def _load_whisperx_model() -> object | None:
     try:
         import whisperx
 
-        # إصلاح مشكلة PyTorch 2.6+ قبل تحميل النموذج
         _patch_torch_serialization()
 
         print(
@@ -158,6 +157,7 @@ def _load_whisperx_model() -> object | None:
             device        = WHISPERX_DEVICE,
             compute_type  = COMPUTE_TYPE,
             download_root = str(MODEL_CACHE_DIR),
+            language      = None,  # نمرر اللغة عند transcribe
         )
 
         load_time = time.time() - start_time
@@ -185,7 +185,6 @@ def _load_align_model(
     try:
         import whisperx
 
-        # إصلاح مشكلة PyTorch 2.6+ قبل تحميل النموذج
         _patch_torch_serialization()
 
         print(
@@ -309,24 +308,33 @@ def _extract_whisperx_full(
         print(f"  ⏩ Speech offset:  {speech_start_offset:.3f}s")
 
         # ── Transcribe ────────────────────────────────────────────────────────
-        print("  📝 Transcribing...")
+        print(f"  📝 Transcribing (lang={lang})...")
         start_time = time.time()
 
+        # ✅ تمرير اللغة صراحةً وتحديد task=transcribe
         transcribe_result = model.transcribe(
             audio,
             batch_size = BATCH_SIZE,
             language   = lang,
+            task       = "transcribe",
         )
 
         transcribe_time = time.time() - start_time
         segments_raw    = transcribe_result.get("segments", [])
 
+        # ✅ طباعة اللغة المكتشفة للتحقق
+        detected_lang = transcribe_result.get("language", "unknown")
+        print(
+            f"  🌐 Detected language: {detected_lang} "
+            f"(expected: {lang})"
+        )
         print(
             f"  ⏱️  Transcribed in {transcribe_time:.1f}s "
             f"({len(segments_raw)} segments)"
         )
 
         if not segments_raw:
+            print("  ⚠️  No segments found")
             return result
 
         # ── Align ─────────────────────────────────────────────────────────────
@@ -443,6 +451,23 @@ def _extract_whisperx_full(
         if not sentences:
             print("  ⚠️  No sentences extracted")
             return result
+
+        # ── تحقق من جودة الـ transcription ───────────────────────────────────
+        # إذا اللغة المكتشفة مختلفة عن المطلوبة → تحذير
+        if (
+            detected_lang != "unknown" and
+            detected_lang != lang and
+            len(sentences) > 0
+        ):
+            print(
+                f"  ⚠️  Language mismatch: "
+                f"detected={detected_lang}, expected={lang}"
+            )
+            print(
+                f"  ⚠️  Transcription may be incorrect. "
+                f"Using fallback equal split."
+            )
+            # نستمر لكن نطبع تحذيراً
 
         # ── Apply offset ──────────────────────────────────────────────────────
         if speech_start_offset > 0.05:
