@@ -49,8 +49,13 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      reset_videos:
+        description: "🗑️ Reset used videos DB?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
-# ✅ concurrency موحد حسب اللغة — يتطابق مع schedule_*.yml
 concurrency:
   group: video-${{ github.event.inputs.lang }}
   cancel-in-progress: false
@@ -208,12 +213,13 @@ jobs:
             FLAGS="$FLAGS --auto-next"
           fi
 
-          [ "${{ github.event.inputs.force }}"       = "true"  ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}"    = "true"  ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish }}"     = "true"  ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish }}"     = "false" ] && FLAGS="$FLAGS --no-publish"
-          [ "${{ github.event.inputs.script_only }}" = "true"  ] && FLAGS="$FLAGS --script-only"
-          [ "${{ github.event.inputs.no_video }}"    = "true"  ] && FLAGS="$FLAGS --no-video"
+          [ "${{ github.event.inputs.force }}"        = "true"  ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"     = "true"  ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish }}"      = "true"  ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.publish }}"      = "false" ] && FLAGS="$FLAGS --no-publish"
+          [ "${{ github.event.inputs.script_only }}"  = "true"  ] && FLAGS="$FLAGS --script-only"
+          [ "${{ github.event.inputs.no_video }}"     = "true"  ] && FLAGS="$FLAGS --no-video"
+          [ "${{ github.event.inputs.reset_videos }}" = "true"  ] && FLAGS="$FLAGS --reset-videos"
 
           python main.py "scripts/videos_ar.xlsx" \
             --output-dir output \
@@ -417,12 +423,13 @@ jobs:
             FLAGS="$FLAGS --auto-next"
           fi
 
-          [ "${{ github.event.inputs.force }}"       = "true"  ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}"    = "true"  ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish }}"     = "true"  ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish }}"     = "false" ] && FLAGS="$FLAGS --no-publish"
-          [ "${{ github.event.inputs.script_only }}" = "true"  ] && FLAGS="$FLAGS --script-only"
-          [ "${{ github.event.inputs.no_video }}"    = "true"  ] && FLAGS="$FLAGS --no-video"
+          [ "${{ github.event.inputs.force }}"        = "true"  ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"     = "true"  ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish }}"      = "true"  ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.publish }}"      = "false" ] && FLAGS="$FLAGS --no-publish"
+          [ "${{ github.event.inputs.script_only }}"  = "true"  ] && FLAGS="$FLAGS --script-only"
+          [ "${{ github.event.inputs.no_video }}"     = "true"  ] && FLAGS="$FLAGS --no-video"
+          [ "${{ github.event.inputs.reset_videos }}" = "true"  ] && FLAGS="$FLAGS --reset-videos"
 
           python main.py "scripts/videos_fr.xlsx" \
             --output-dir output \
@@ -626,12 +633,13 @@ jobs:
             FLAGS="$FLAGS --auto-next"
           fi
 
-          [ "${{ github.event.inputs.force }}"       = "true"  ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}"    = "true"  ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish }}"     = "true"  ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish }}"     = "false" ] && FLAGS="$FLAGS --no-publish"
-          [ "${{ github.event.inputs.script_only }}" = "true"  ] && FLAGS="$FLAGS --script-only"
-          [ "${{ github.event.inputs.no_video }}"    = "true"  ] && FLAGS="$FLAGS --no-video"
+          [ "${{ github.event.inputs.force }}"        = "true"  ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"     = "true"  ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish }}"      = "true"  ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.publish }}"      = "false" ] && FLAGS="$FLAGS --no-publish"
+          [ "${{ github.event.inputs.script_only }}"  = "true"  ] && FLAGS="$FLAGS --script-only"
+          [ "${{ github.event.inputs.no_video }}"     = "true"  ] && FLAGS="$FLAGS --no-video"
+          [ "${{ github.event.inputs.reset_videos }}" = "true"  ] && FLAGS="$FLAGS --reset-videos"
 
           python main.py "scripts/videos_en.xlsx" \
             --output-dir output \
