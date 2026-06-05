@@ -3,19 +3,6 @@ ai_enricher.py — Smart AI Assistant powered by Groq
 ✨ يولّد كل شيء عدا النصوص الرئيسية (التي تأتي من Excel)
 ✨ يدعم عدة مفاتيح Groq مع تدوير فوري عند rate limit
 ✨ يدعم 3 لغات (AR, FR, EN) بشكل صحيح
-
-الوظائف:
-  1.  تحليل المحتوى (نوع/مشاعر/شدة)
-  2.  اقتراح Tags للجمل بدون tags
-  3.  توليد Power Words
-  4.  توليد Visual Keywords
-  5.  توليد Pattern Interrupts
-  6.  توليد Engagement Questions
-  7.  توليد Hashtags
-  8.  توليد Caption للنشر
-  9.  اقتراح Accent Colors
-  10. توليد Hook Keyword
-  11. العنوان + إيموجي (من Excel مباشرة)
 """
 
 from __future__ import annotations
@@ -53,7 +40,7 @@ LANG_NAMES: dict[str, str] = {
 # ═════════════════════════════════════════════════════════════════════════════
 
 class AIEnrichmentError(Exception):
-    """خطأ في توليد المحتوى بـ Groq — يجب أن يوقف الفيديو."""
+    """خطأ في توليد المحتوى بـ Groq — يوقف الفيديو."""
     pass
 
 
@@ -100,11 +87,12 @@ def _get_client() -> Groq:
 def _rotate_groq_key() -> None:
     """تدوير مفتاح Groq عند الفشل."""
     global _groq_key_idx
-    if len(_GROQ_KEYS) > 1:
-        _groq_key_idx = (_groq_key_idx + 1) % len(_GROQ_KEYS)
+    n = len(_GROQ_KEYS)
+    if n > 1:
+        _groq_key_idx = (_groq_key_idx + 1) % n
         print(
             f"  🔄 Groq key rotated → "
-            f"#{_groq_key_idx} (of {len(_GROQ_KEYS)})"
+            f"#{_groq_key_idx} (of {n})"
         )
     else:
         print("  ⚠️  No additional Groq keys to rotate")
@@ -473,10 +461,11 @@ Format: [["kw1","kw2","kw3"],...]"""
     )
     keywords = _parse_json_response(raw, list, "Visual Keywords")
 
-    if len(keywords) < n // 2:
+    # ✅ إصلاح: max(1, n // 2) لمنع الشرط الخاطئ عند n=1
+    if len(keywords) < max(1, n // 2):
         raise AIEnrichmentError(
             f"❌ Visual Keywords: got {len(keywords)} rows, "
-            f"need at least {n // 2}"
+            f"need at least {max(1, n // 2)}"
         )
 
     defaults = [
@@ -915,7 +904,7 @@ def enrich_record(
     if tagged:
         tags_needed = [
             s for s in tagged
-            if s["final_tag"] is None
+            if s.get("final_tag") is None
         ]
         if tags_needed:
             suggested = suggest_tags_for_sentences(
