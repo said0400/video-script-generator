@@ -93,28 +93,22 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pytorch-cpu-${{ runner.os }}-py3.11-v24
+          key: pytorch-cpu-${{ runner.os }}-py3.11
           restore-keys: pytorch-cpu-
 
-      - name: 🔥 Install PyTorch 2.4 (CPU)
+      - name: 🔥 Install PyTorch (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install torch==2.4.0 torchaudio==2.4.0 \
+          pip install torch torchaudio \
             --index-url https://download.pytorch.org/whl/cpu
 
-      - name: 📦 Install WhisperX 3.3.1
+      - name: 📦 Install WhisperX
         run: |
-          pip install whisperx==3.3.1
+          pip install git+https://github.com/m-bain/whisperX.git
 
       - name: 📦 Install Python deps
         run: |
           pip install -r requirements.txt
-
-      - name: 🔧 Force PyTorch 2.4 (بعد requirements)
-        run: |
-          pip install torch==2.4.0 torchaudio==2.4.0 \
-            --index-url https://download.pytorch.org/whl/cpu \
-            --force-reinstall
 
       - name: 🟢 Setup Node.js 20
         uses: actions/setup-node@v4
