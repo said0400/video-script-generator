@@ -102,13 +102,19 @@ jobs:
           pip install torch==2.4.0 torchaudio==2.4.0 \
             --index-url https://download.pytorch.org/whl/cpu
 
-      - name: 📦 Install WhisperX
+      - name: 📦 Install WhisperX 3.3.1
         run: |
-          pip install git+https://github.com/m-bain/whisperX.git
+          pip install whisperx==3.3.1
 
       - name: 📦 Install Python deps
         run: |
           pip install -r requirements.txt
+
+      - name: 🔧 Force PyTorch 2.4 (بعد requirements)
+        run: |
+          pip install torch==2.4.0 torchaudio==2.4.0 \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --force-reinstall
 
       - name: 🟢 Setup Node.js 20
         uses: actions/setup-node@v4
