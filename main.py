@@ -110,6 +110,12 @@ def parse_args() -> argparse.Namespace:
         const="all", default=None,
     )
     p.add_argument("--clear-ai-cache", type=str, default=None)
+    # ✅ إضافة: تصفير used_videos
+    p.add_argument(
+        "--reset-videos",
+        action="store_true",
+        help="Reset used videos DB to allow reuse",
+    )
     return p.parse_args()
 
 
@@ -118,7 +124,6 @@ def parse_args() -> argparse.Namespace:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _estimate_duration(text: str) -> int:
-    """تقدير مدة الفيديو بالثواني."""
     return max(MIN_S, min(MAX_S, int(len(text.split()) / (WPM / 60))))
 
 
@@ -127,7 +132,6 @@ def _clip_durations_from_aligned(
     real_dur:    float,
     n_sentences: int,
 ) -> list[float]:
-    """حساب مدة كل مقطع من بيانات WhisperX."""
     if aligned and len(aligned) >= n_sentences:
         durations = [
             max(
@@ -144,7 +148,6 @@ def _clip_durations_from_aligned(
 
 
 def _should_publish(args: argparse.Namespace) -> bool:
-    """هل يجب النشر على Facebook؟"""
     if args.no_publish:
         return False
     if args.script_only or args.no_video:
@@ -153,7 +156,6 @@ def _should_publish(args: argparse.Namespace) -> bool:
 
 
 def _get_content_for_lang(record: dict, lang: str) -> str:
-    """احصل على المحتوى حسب اللغة."""
     if lang == "ar":
         content = record.get("ar_content", "").strip()
     elif lang == "fr":
@@ -166,25 +168,44 @@ def _get_content_for_lang(record: dict, lang: str) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TRIM SILENCE
+# ✅ RESET USED VIDEOS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _reset_used_videos() -> int:
+    """
+    تصفير قائمة الفيديوهات المستخدمة.
+    يسمح بإعادة استخدام الفيديوهات القديمة.
+    """
+    from db import _conn, _write_lock
+    with _write_lock:
+        with _conn() as c:
+            cursor = c.execute("DELETE FROM used_videos")
+            count  = cursor.rowcount
+    print(f"  🗑️  Reset {count} used videos — ready to reuse!")
+    return count
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✅ TRIM SILENCE (من البداية فقط)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _trim_silence(
     audio_path:  str,
     output_path: str,
-    threshold:   str   = "-35dB",
-    duration:    float = 0.1,
+    threshold:   str   = "-40dB",
+    duration:    float = 0.3,
 ) -> str:
     """
-    قطع الصمت من بداية ونهاية الصوت.
-    يحل مشكلة speech_start_offset الكبيرة من Gemini TTS.
+    قطع الصمت من بداية الصوت فقط.
+    لا نقطع من النهاية أو المنتصف لأن WhisperX يحتاج البنية الكاملة.
+
+    ✅ إصلاح: حذف stop_periods لمنع قطع الصمت بين الجمل.
     """
-    # ✅ التحقق من وجود الملف أولاً
     if not Path(audio_path).exists():
-        print(f"  ⚠️  Trim skipped: file not found: {audio_path}")
+        print(f"  ⚠️  Trim skipped: file not found")
         return audio_path
 
-    print("  ✂️  Trimming silence from audio...")
+    print("  ✂️  Trimming leading silence from audio...")
 
     r = subprocess.run(
         [
@@ -195,10 +216,7 @@ def _trim_silence(
                 f"silenceremove="
                 f"start_periods=1:"
                 f"start_duration={duration}:"
-                f"start_threshold={threshold}:"
-                f"stop_periods=-1:"
-                f"stop_duration={duration}:"
-                f"stop_threshold={threshold}"
+                f"start_threshold={threshold}"
             ),
             "-c:a", "pcm_s16le",
             output_path,
@@ -219,13 +237,13 @@ def _trim_silence(
             f"  ⚠️  Trim result too short ({trimmed_dur:.1f}s) "
             f"— using original"
         )
-        # ✅ حذف الملف الناتج الفارغ
         Path(output_path).unlink(missing_ok=True)
         return audio_path
 
+    removed = original_dur - trimmed_dur
     print(
         f"  ✅ Trimmed: {original_dur:.1f}s → {trimmed_dur:.1f}s "
-        f"(removed {original_dur - trimmed_dur:.1f}s silence)"
+        f"(removed {removed:.1f}s leading silence)"
     )
     return output_path
 
@@ -240,7 +258,6 @@ def get_or_create_ai_data(
     tagged:   list[dict],
     force_ai: bool = False,
 ) -> dict:
-    """احصل على AI data من الـ cache أو أنشئها."""
     video_number = str(record["number"])
     title        = record.get("title", "")
     cache_key    = f"{video_number}_{lang}"
@@ -293,12 +310,11 @@ def _speed_up_audio(
     speed:       float,
     output_path: str,
 ) -> str:
-    """تسريع الصوت باستخدام ffmpeg atempo."""
     if abs(speed - 1.0) < 0.01:
         return audio_path
 
     if not Path(audio_path).exists():
-        print(f"  ⚠️  Speed up skipped: file not found")
+        print("  ⚠️  Speed up skipped: file not found")
         return audio_path
 
     print(f"  ⏩ Speeding up audio: {speed}x")
@@ -341,7 +357,6 @@ def save_manifest(
     real_duration:     float = None,
     whisper_sentences: list = None,
 ) -> Path:
-    """حفظ manifest.json لـ render.mjs."""
     sentences_for_display = (
         whisper_sentences
         if whisper_sentences
@@ -392,7 +407,6 @@ def _render_node(
     manifest_path: Path,
     output_base:   str,
 ) -> Path:
-    """تشغيل render.mjs لإنتاج الفيديو النهائي."""
     out    = Path(output_base + "_final.mp4").resolve()
     script = RENDER_SCRIPT.resolve()
 
@@ -429,7 +443,6 @@ def produce_audio(
     music_volume: float = 0.12,
     sfx_type:     str   = "swoosh",
 ) -> tuple[Path, float, list, list, list]:
-    """إنتاج الصوت الكامل."""
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
     voice_config     = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
@@ -445,7 +458,7 @@ def produce_audio(
         lang             = lang,
     )
 
-    # ✅ إصلاح: استخدام set لإزالة التكرار
+    # ✅ إزالة التكرار باستخدام set
     out_dir        = Path(output_base).parent
     prefix         = Path(output_base).name
     wav_candidates = sorted(set(
@@ -464,10 +477,10 @@ def produce_audio(
     else:
         wav_path = None
 
-    # ── 2. قطع الصمت قبل أي معالجة ───────────────────────────────────────────
+    # ── 2. ✅ قطع الصمت من البداية فقط ──────────────────────────────────────
     if wav_path:
-        trimmed_path        = f"{output_base}_voice_trimmed.wav"
-        wav_path_trimmed    = _trim_silence(wav_path, trimmed_path)
+        trimmed_path     = f"{output_base}_voice_trimmed.wav"
+        wav_path_trimmed = _trim_silence(wav_path, trimmed_path)
         if wav_path_trimmed != wav_path:
             wav_path = wav_path_trimmed
             measured_trimmed = get_audio_duration(wav_path)
@@ -475,7 +488,7 @@ def produce_audio(
                 real_dur = measured_trimmed
                 print(f"  📏 Trimmed duration: {real_dur:.3f}s")
 
-    # ── 3. تسريع الصوت قبل WhisperX ─────────────────────────────────────────
+    # ── 3. تسريع الصوت ───────────────────────────────────────────────────────
     speed = SPEED_MULTIPLIER.get(lang, 1.0)
     if wav_path and speed != 1.0:
         sped_path   = f"{output_base}_voice_fast.wav"
@@ -521,11 +534,10 @@ def produce_audio(
         ]
 
     # ── 5. خلط الموسيقى ──────────────────────────────────────────────────────
-    clip_dur  = _clip_durations_from_aligned(
+    clip_dur     = _clip_durations_from_aligned(
         aligned, real_dur, len(whisper_sentences)
     )
-    mixed_out = f"{output_base}_audio_mixed.aac"
-
+    mixed_out    = f"{output_base}_audio_mixed.aac"
     fallback_voice = wav_path or f"{output_base}_voice_0.wav"
 
     try:
@@ -560,7 +572,6 @@ def _build_script_data(
     ai_data: dict,
     tagged:  list[dict],
 ) -> dict | None:
-    """بناء script_data من tagged sentences."""
     if not tagged:
         return None
 
@@ -610,10 +621,6 @@ def _build_script_data(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _rebuild_text_with_tag(tagged: list[dict]) -> list[dict]:
-    """
-    إعادة بناء text_with_tag بعد AI enrichment.
-    يضمن أن كل جملة لديها text_with_tag محدَّث بعد تعيين final_tag.
-    """
     for sent in tagged:
         final_tag = sent.get("final_tag")
         text      = sent.get("text", "")
@@ -635,9 +642,8 @@ def _do_publish(
     lang:         str,
     video_number: str,
 ) -> None:
-    """نشر فيديو على Facebook."""
     if not Path(video_path).exists():
-        print(f"  ❌ Publish skipped: video not found")
+        print("  ❌ Publish skipped: video not found")
         return
 
     captions   = ai_data.get("captions", {})
@@ -674,7 +680,6 @@ def process_video(
     out_dir:        str,
     should_publish: bool,
 ) -> None:
-    """معالجة فيديو واحد من البداية للنهاية."""
     num   = str(record["number"])
     title = record["title"]
     lang  = args.lang
@@ -719,7 +724,6 @@ def process_video(
         print(f"     {e}")
         return
 
-    # ✅ استخدام tagged المُحدَّث + إعادة بناء text_with_tag
     tagged = ai_data.get("tagged") or tagged
     tagged = _rebuild_text_with_tag(tagged)
 
@@ -896,6 +900,12 @@ def main() -> None:
             count = clear_ai_cache(args.clear_ai_cache)
             print(f"  🗑️  Cleared {count} entry")
         return
+
+    # ✅ تصفير الفيديوهات المستخدمة
+    if args.reset_videos:
+        _reset_used_videos()
+        if not args.input_file:
+            return
 
     if not args.input_file:
         print("❌ Error: input_file is required")
