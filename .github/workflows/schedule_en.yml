@@ -1,15 +1,13 @@
 name: 🇺🇸 English Videos (Auto + Manual)
 
 on:
-  # ── تلقائي ──────────────────────────────────────────────────
   # schedule:
-  #   - cron: "0 13 * * *"    # فيديو 1 - 13:00 UTC
-  #   - cron: "0 15 * * *"    # فيديو 2 - 15:00 UTC
-  #   - cron: "0 17 * * *"    # فيديو 3 - 17:00 UTC
-  #   - cron: "30 19 * * *"   # فيديو 4 - 19:30 UTC
-  #   - cron: "0 22 * * *"    # فيديو 5 - 22:00 UTC
+  #   - cron: "0 13 * * *"
+  #   - cron: "0 15 * * *"
+  #   - cron: "0 17 * * *"
+  #   - cron: "30 19 * * *"
+  #   - cron: "0 22 * * *"
 
-  # ── يدوي ────────────────────────────────────────────────────
   workflow_dispatch:
     inputs:
       video_number:
@@ -17,28 +15,24 @@ on:
         required: false
         default: ""
         type: string
-
       force:
         description: "⚡ Force re-render?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
-
       force_ai:
         description: "🤖 Force re-generate AI?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
-
       publish:
         description: "📘 Publish to Facebook?"
         required: true
         default: "true"
         type: choice
         options: ["true", "false"]
-
       formats:
         description: "📐 Export formats"
         required: true
@@ -69,15 +63,20 @@ jobs:
       - name: 🔧 Install system deps
         run: |
           sudo apt-get update -q
+
           sudo apt-get install -y \
-            ffmpeg libsndfile1 libasound2-dev libasound2t64 \
+            ffmpeg libsndfile1 \
             libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
             libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
             libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
             libxcomposite1 libxdamage1 libxext6 libxfixes3 \
             libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
             fonts-noto fonts-noto-core fonts-hosny-amiri \
-            fonts-sil-scheherazade
+            fonts-sil-scheherazade || true
+
+          sudo apt-get install -y libasound2t64 libasound2-dev || \
+            sudo apt-get install -y libasound2 libasound2-dev || true
+
           sudo fc-cache -fv
 
       - name: 💾 Cache WhisperX models
@@ -94,10 +93,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pytorch-cpu-${{ runner.os }}-py3.11
+          key: pytorch-cpu-${{ runner.os }}-py3.11-v24
           restore-keys: pytorch-cpu-
 
-      - name: 🔥 Install PyTorch (CPU)
+      - name: 🔥 Install PyTorch 2.4 (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
           pip install torch==2.4.0 torchaudio==2.4.0 \
@@ -126,13 +125,11 @@ jobs:
           fi
 
       - name: 🌐 Install Playwright Chromium (Python)
-        run: |
-          pip install playwright
-          python -m playwright install chromium --with-deps
+        run: python -m playwright install chromium
 
       - name: 🌐 Install Playwright Chromium (Node)
         working-directory: remotion
-        run: npx playwright install chromium --with-deps
+        run: npx playwright install chromium
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
