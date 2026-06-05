@@ -43,17 +43,17 @@ from script_reader import (
     process_tagged_content,
     print_scripts_summary,
 )
-from tags_parser import print_tags_summary
-from ai_enricher  import enrich_record, AIEnrichmentError
-from tts          import synthesize_speech, VOICE_CONFIGS
-from video_sources import fetch_videos_for_script
-from srt          import generate_srt, generate_word_srt
-from export       import export_all
-from thumb_gen    import generate_thumbnail_html
-from thumbnail    import render_thumbnails_batch
-from sync         import get_audio_duration, extract_transcript_from_audio
-from audio_manager import mix_voice_music_sfx
-from facebook     import (
+from tags_parser    import print_tags_summary
+from ai_enricher    import enrich_record, AIEnrichmentError
+from tts            import synthesize_speech, VOICE_CONFIGS
+from video_sources  import fetch_videos_for_script
+from srt            import generate_srt, generate_word_srt
+from export         import export_all
+from thumb_gen      import generate_thumbnail_html
+from thumbnail      import render_thumbnails_batch
+from sync           import get_audio_duration, extract_transcript_from_audio
+from audio_manager  import mix_voice_music_sfx
+from facebook       import (
     publish_to_facebook,
     credentials_available,
     check_credentials,
@@ -166,7 +166,7 @@ def _get_content_for_lang(record: dict, lang: str) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ TRIM SILENCE
+# TRIM SILENCE
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _trim_silence(
@@ -179,6 +179,11 @@ def _trim_silence(
     قطع الصمت من بداية ونهاية الصوت.
     يحل مشكلة speech_start_offset الكبيرة من Gemini TTS.
     """
+    # ✅ التحقق من وجود الملف أولاً
+    if not Path(audio_path).exists():
+        print(f"  ⚠️  Trim skipped: file not found: {audio_path}")
+        return audio_path
+
     print("  ✂️  Trimming silence from audio...")
 
     r = subprocess.run(
@@ -214,6 +219,8 @@ def _trim_silence(
             f"  ⚠️  Trim result too short ({trimmed_dur:.1f}s) "
             f"— using original"
         )
+        # ✅ حذف الملف الناتج الفارغ
+        Path(output_path).unlink(missing_ok=True)
         return audio_path
 
     print(
@@ -290,6 +297,10 @@ def _speed_up_audio(
     if abs(speed - 1.0) < 0.01:
         return audio_path
 
+    if not Path(audio_path).exists():
+        print(f"  ⚠️  Speed up skipped: file not found")
+        return audio_path
+
     print(f"  ⏩ Speeding up audio: {speed}x")
 
     r = subprocess.run(
@@ -306,6 +317,10 @@ def _speed_up_audio(
 
     if r.returncode != 0:
         print(f"  ⚠️  Speed up failed: {r.stderr[-150:]}")
+        return audio_path
+
+    if not Path(output_path).exists():
+        print("  ⚠️  Speed up output missing")
         return audio_path
 
     print(f"  ✅ Audio sped up to {speed}x")
@@ -430,26 +445,29 @@ def produce_audio(
         lang             = lang,
     )
 
+    # ✅ إصلاح: استخدام set لإزالة التكرار
     out_dir        = Path(output_base).parent
     prefix         = Path(output_base).name
-    wav_candidates = sorted(
+    wav_candidates = sorted(set(
         list(out_dir.glob(f"{prefix}_voice_*.wav")) +
         list(out_dir.glob(f"{prefix}_voice*.wav"))
-    )
+    ))
 
     real_dur = float(script_data["estimated_seconds"])
     wav_path = str(wav_candidates[0]) if wav_candidates else None
 
-    if wav_path:
+    if wav_path and Path(wav_path).exists():
         measured = get_audio_duration(wav_path)
         if measured >= 5:
             real_dur = measured
             print(f"  📏 Raw voice duration: {real_dur:.3f}s")
+    else:
+        wav_path = None
 
-    # ── 2. ✅ قطع الصمت قبل أي معالجة ─────────────────────────────────────
+    # ── 2. قطع الصمت قبل أي معالجة ───────────────────────────────────────────
     if wav_path:
-        trimmed_path = f"{output_base}_voice_trimmed.wav"
-        wav_path_trimmed = _trim_silence(wav_path, trimmed_path)
+        trimmed_path        = f"{output_base}_voice_trimmed.wav"
+        wav_path_trimmed    = _trim_silence(wav_path, trimmed_path)
         if wav_path_trimmed != wav_path:
             wav_path = wav_path_trimmed
             measured_trimmed = get_audio_duration(wav_path)
@@ -474,7 +492,7 @@ def produce_audio(
     aligned:           list = []
     whisper_sentences: list = []
 
-    if wav_path:
+    if wav_path and Path(wav_path).exists():
         try:
             transcript = extract_transcript_from_audio(
                 wav_path, lang=lang
@@ -508,9 +526,11 @@ def produce_audio(
     )
     mixed_out = f"{output_base}_audio_mixed.aac"
 
+    fallback_voice = wav_path or f"{output_base}_voice_0.wav"
+
     try:
         final_audio = mix_voice_music_sfx(
-            voice_path     = wav_path or f"{output_base}_voice_0.wav",
+            voice_path     = fallback_voice,
             content_type   = CONTENT_TYPE,
             output_path    = mixed_out,
             clip_durations = clip_dur,
@@ -525,9 +545,7 @@ def produce_audio(
 
     except Exception as e:
         print(f"  ⚠️  Mix error: {e} — using raw voice")
-        audio_path = Path(
-            wav_path or f"{output_base}_voice_0.wav"
-        )
+        audio_path = Path(fallback_voice)
 
     return audio_path, real_dur, timeline, aligned, whisper_sentences
 
@@ -588,12 +606,12 @@ def _build_script_data(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ REBUILD TAGGED WITH TEXT_WITH_TAG
+# REBUILD TAGGED WITH TEXT_WITH_TAG
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _rebuild_text_with_tag(tagged: list[dict]) -> list[dict]:
     """
-    ✅ إصلاح: إعادة بناء text_with_tag بعد AI enrichment.
+    إعادة بناء text_with_tag بعد AI enrichment.
     يضمن أن كل جملة لديها text_with_tag محدَّث بعد تعيين final_tag.
     """
     for sent in tagged:
@@ -618,6 +636,10 @@ def _do_publish(
     video_number: str,
 ) -> None:
     """نشر فيديو على Facebook."""
+    if not Path(video_path).exists():
+        print(f"  ❌ Publish skipped: video not found")
+        return
+
     captions   = ai_data.get("captions", {})
     ai_caption = (
         captions.get(lang) or
@@ -697,7 +719,7 @@ def process_video(
         print(f"     {e}")
         return
 
-    # ✅ استخدام tagged المُحدَّث من AI + إعادة بناء text_with_tag
+    # ✅ استخدام tagged المُحدَّث + إعادة بناء text_with_tag
     tagged = ai_data.get("tagged") or tagged
     tagged = _rebuild_text_with_tag(tagged)
 
