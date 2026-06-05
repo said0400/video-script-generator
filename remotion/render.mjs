@@ -1,8 +1,9 @@
 // remotion/render.mjs — Full Paragraph Display
 // ✨ ألوان ديناميكية حسب المشاعر
 // ✨ Pulse على الكلمة الحالية
-// ✨ Custom Hook مخصص من AI في الثواني الأولى
-// ✨ خطوط محسّنة مع فرق في الحجم
+// ✨ Custom Hook مخصص من AI
+// ✨ Slide-in للعنوان عند البداية
+// ✨ خلفيات متعددة: فيديو / blur / gradient / cinematic
 // ✨ Ken Burns + فلاتر سينمائية
 // ✨ انتقالات سلسة
 
@@ -32,23 +33,24 @@ const props = JSON.parse(readFileSync(manifestPath, "utf-8"));
 
 const {
   title,
-  display_title = title,
-  emoji_left    = "🔥",
-  emoji_right   = "💥",
+  display_title  = title,
+  emoji_left     = "🔥",
+  emoji_right    = "💥",
   sentences,
   audio,
   videos,
   duration_s,
-  power_words   = [],
-  accent_colors = [],
-  word_timeline = [],
-  aligned       = [],
-  lang          = "ar",
-  clip_duration = 3.0,
-  has_hook      = false,
-  hook_keyword  = "",
-  custom_hook   = "",   // ✅ جديد: Hook مخصص من AI
-  analysis      = {},
+  power_words    = [],
+  accent_colors  = [],
+  word_timeline  = [],
+  aligned        = [],
+  lang           = "ar",
+  clip_duration  = 3.0,
+  has_hook       = false,
+  hook_keyword   = "",
+  custom_hook    = "",
+  analysis       = {},
+  bg_style       = "video",  // "video" | "blur" | "gradient" | "cinematic"
 } = props;
 
 const FPS    = 30;
@@ -56,6 +58,10 @@ const WIDTH  = 1080;
 const HEIGHT = 1920;
 
 const SILENCE_THRESHOLD = 0.15;
+
+// ✨ مدة Slide-in للعنوان بالثواني
+const TITLE_SLIDE_IN_DURATION = 0.6;
+const TITLE_SLIDE_IN_FRAMES   = Math.floor(TITLE_SLIDE_IN_DURATION * FPS);
 
 const safeOut = outputPath
   .replace(/[^a-zA-Z0-9]/g, "_")
@@ -70,6 +76,7 @@ console.log(`🎯 Aligned: ${aligned.length} segments`);
 console.log(`🌐 Lang: ${lang.toUpperCase()}`);
 console.log(`💭 Emotion: ${analysis.primary_emotion || "unknown"}`);
 console.log(`🪝 Custom Hook: "${custom_hook || "none"}"`);
+console.log(`🖼️  BG Style: ${bg_style}`);
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -78,74 +85,84 @@ console.log(`🪝 Custom Hook: "${custom_hook || "none"}"`);
 
 const EMOTION_COLORS = {
   curiosity: {
-    bg:      "rgba(255, 215, 0, 0.95)",
-    current: "#FF6B00",
-    glow:    "rgba(255, 107, 0, 0.8)",
-    dark:    false,
-    label:   "Golden Curiosity",
+    bg:        "rgba(255, 215, 0, 0.95)",
+    gradient:  "linear-gradient(135deg, #FFD700 0%, #FF8C00 100%)",
+    current:   "#FF6B00",
+    glow:      "rgba(255, 107, 0, 0.8)",
+    dark:      false,
+    label:     "Golden Curiosity",
   },
   fear: {
-    bg:      "rgba(180, 0, 0, 0.92)",
-    current: "#FF4444",
-    glow:    "rgba(255, 68, 68, 0.8)",
-    dark:    true,
-    label:   "Deep Fear",
+    bg:        "rgba(180, 0, 0, 0.92)",
+    gradient:  "linear-gradient(135deg, #8B0000 0%, #CC0000 100%)",
+    current:   "#FF4444",
+    glow:      "rgba(255, 68, 68, 0.8)",
+    dark:      true,
+    label:     "Deep Fear",
   },
   hope: {
-    bg:      "rgba(0, 180, 100, 0.92)",
-    current: "#FFFFFF",
-    glow:    "rgba(255, 255, 255, 0.9)",
-    dark:    true,
-    label:   "Fresh Hope",
+    bg:        "rgba(0, 180, 100, 0.92)",
+    gradient:  "linear-gradient(135deg, #006400 0%, #00B464 100%)",
+    current:   "#FFFFFF",
+    glow:      "rgba(255, 255, 255, 0.9)",
+    dark:      true,
+    label:     "Fresh Hope",
   },
   joy: {
-    bg:      "rgba(255, 120, 0, 0.95)",
-    current: "#FFFFFF",
-    glow:    "rgba(255, 255, 255, 0.9)",
-    dark:    true,
-    label:   "Vibrant Joy",
+    bg:        "rgba(255, 120, 0, 0.95)",
+    gradient:  "linear-gradient(135deg, #FF4500 0%, #FF8C00 100%)",
+    current:   "#FFFFFF",
+    glow:      "rgba(255, 255, 255, 0.9)",
+    dark:      true,
+    label:     "Vibrant Joy",
   },
   awe: {
-    bg:      "rgba(80, 0, 180, 0.92)",
-    current: "#FFD700",
-    glow:    "rgba(255, 215, 0, 0.8)",
-    dark:    true,
-    label:   "Deep Awe",
+    bg:        "rgba(80, 0, 180, 0.92)",
+    gradient:  "linear-gradient(135deg, #2D0080 0%, #6A0DAD 100%)",
+    current:   "#FFD700",
+    glow:      "rgba(255, 215, 0, 0.8)",
+    dark:      true,
+    label:     "Deep Awe",
   },
   surprise: {
-    bg:      "rgba(0, 150, 220, 0.92)",
-    current: "#FFD700",
-    glow:    "rgba(255, 215, 0, 0.8)",
-    dark:    true,
-    label:   "Blue Surprise",
+    bg:        "rgba(0, 150, 220, 0.92)",
+    gradient:  "linear-gradient(135deg, #006494 0%, #0096DC 100%)",
+    current:   "#FFD700",
+    glow:      "rgba(255, 215, 0, 0.8)",
+    dark:      true,
+    label:     "Blue Surprise",
   },
   desire: {
-    bg:      "rgba(220, 0, 100, 0.92)",
-    current: "#FFD700",
-    glow:    "rgba(255, 215, 0, 0.8)",
-    dark:    true,
-    label:   "Deep Desire",
+    bg:        "rgba(220, 0, 100, 0.92)",
+    gradient:  "linear-gradient(135deg, #8B0045 0%, #DC0064 100%)",
+    current:   "#FFD700",
+    glow:      "rgba(255, 215, 0, 0.8)",
+    dark:      true,
+    label:     "Deep Desire",
   },
   anger: {
-    bg:      "rgba(200, 20, 0, 0.95)",
-    current: "#FFD700",
-    glow:    "rgba(255, 215, 0, 0.9)",
-    dark:    true,
-    label:   "Burning Anger",
+    bg:        "rgba(200, 20, 0, 0.95)",
+    gradient:  "linear-gradient(135deg, #7B0000 0%, #C81400 100%)",
+    current:   "#FFD700",
+    glow:      "rgba(255, 215, 0, 0.9)",
+    dark:      true,
+    label:     "Burning Anger",
   },
   sadness: {
-    bg:      "rgba(40, 60, 120, 0.92)",
-    current: "#A0C4FF",
-    glow:    "rgba(160, 196, 255, 0.8)",
-    dark:    true,
-    label:   "Deep Sadness",
+    bg:        "rgba(40, 60, 120, 0.92)",
+    gradient:  "linear-gradient(135deg, #1a1a4e 0%, #283C78 100%)",
+    current:   "#A0C4FF",
+    glow:      "rgba(160, 196, 255, 0.8)",
+    dark:      true,
+    label:     "Deep Sadness",
   },
   default: {
-    bg:      "rgba(255, 215, 0, 0.95)",
-    current: "#FF1744",
-    glow:    "rgba(255, 23, 68, 0.8)",
-    dark:    false,
-    label:   "Default Golden",
+    bg:        "rgba(255, 215, 0, 0.95)",
+    gradient:  "linear-gradient(135deg, #FFD700 0%, #FFA500 100%)",
+    current:   "#FF1744",
+    glow:      "rgba(255, 23, 68, 0.8)",
+    dark:      false,
+    label:     "Default Golden",
   },
 };
 
@@ -195,9 +212,7 @@ const isArabicText = (t) => /[\u0600-\u06FF]/.test(t);
 const isFrenchText = (t) => /[àâçéèêëîïôùûüÿœæ]/i.test(t);
 
 function getFontFamily(text) {
-  if (isArabicText(text)) {
-    return `"Noto Naskh Arabic", "Amiri", serif`;
-  }
+  if (isArabicText(text)) return `"Noto Naskh Arabic", "Amiri", serif`;
   return `"Noto Sans", "DejaVu Sans", sans-serif`;
 }
 
@@ -214,11 +229,11 @@ function getDir(text) {
 const esc = (s) =>
   (s || "")
     .toString()
-    .replace(/&/g,  "&amp;")
-    .replace(/</g,  "&lt;")
-    .replace(/>/g,  "&gt;")
-    .replace(/"/g,  "&quot;")
-    .replace(/'/g,  "&#039;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -346,35 +361,23 @@ function buildFrameStateMap() {
       let nextSeg = null;
 
       for (let i = segments.length - 1; i >= 0; i--) {
-        if (t >= segments[i].end) {
-          prevSeg = segments[i];
-          break;
-        }
+        if (t >= segments[i].end) { prevSeg = segments[i]; break; }
       }
       for (let i = 0; i < segments.length; i++) {
-        if (t < segments[i].start) {
-          nextSeg = segments[i];
-          break;
-        }
+        if (t < segments[i].start) { nextSeg = segments[i]; break; }
       }
 
       const gapSize =
-        prevSeg && nextSeg
-          ? nextSeg.start - prevSeg.end
-          : 999;
+        prevSeg && nextSeg ? nextSeg.start - prevSeg.end : 999;
 
       if (gapSize > SILENCE_THRESHOLD) {
         map[f] = {
-          segment_idx:      -1,
-          segment:          null,
-          current_word_idx: -1,
-          fade_progress:    0,
+          segment_idx: -1, segment: null,
+          current_word_idx: -1, fade_progress: 0,
         };
       } else {
         const fallbackSeg = prevSeg || segments[0];
-        const fallbackIdx = prevSeg
-          ? segments.indexOf(prevSeg)
-          : 0;
+        const fallbackIdx = prevSeg ? segments.indexOf(prevSeg) : 0;
         map[f] = {
           segment_idx:      fallbackIdx,
           segment:          fallbackSeg,
@@ -393,9 +396,7 @@ function buildFrameStateMap() {
         currentWordIdx = i;
         break;
       }
-      if (t > segWords[i].end) {
-        currentWordIdx = i;
-      }
+      if (t > segWords[i].end) currentWordIdx = i;
     }
 
     const segStartFrame = Math.floor(currentSeg.start * FPS);
@@ -420,12 +421,8 @@ function buildFrameStateMap() {
       const word =
         seg && seg.words && wIdx >= 0 && seg.words[wIdx]
           ? seg.words[wIdx].word
-          : seg
-          ? "---"
-          : "SILENCE";
-      console.log(
-        `  ${t}s → seg ${map[f].segment_idx} | word "${word}"`
-      );
+          : seg ? "---" : "SILENCE";
+      console.log(`  ${t}s → seg ${map[f].segment_idx} | word "${word}"`);
     }
   });
 
@@ -434,7 +431,7 @@ function buildFrameStateMap() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✨ HTML BUILDER
+// ✨ HTML BUILDER — مع Slide-in للعنوان + ألوان ديناميكية
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTML(opts) {
@@ -442,7 +439,8 @@ function buildHTML(opts) {
     segment,
     currentWordIdx,
     fadeProgress,
-    isHookFrame = false,
+    isHookFrame    = false,
+    globalFrameIdx = 0,
   } = opts;
 
   // صمت
@@ -469,7 +467,7 @@ function buildHTML(opts) {
   const titleFont = getFontFamily(display_title);
   const titleDir  = getDir(display_title);
 
-  // ✨ حجم خط النص
+  // ✨ حجم الخطوط
   const wc = allWordsText.length;
   let textFontSize;
   if      (wc <= 5)  textFontSize = ar ? 90 : 86;
@@ -478,7 +476,6 @@ function buildHTML(opts) {
   else if (wc <= 20) textFontSize = ar ? 56 : 52;
   else               textFontSize = ar ? 48 : 44;
 
-  // ✨ حجم خط العنوان — أصغر من النص
   const titleFontSize = titleAr ? 40 : 36;
 
   // ✨ ألوان ديناميكية
@@ -491,6 +488,21 @@ function buildHTML(opts) {
   const upcomingColor = isDarkBg
     ? "rgba(255,255,255,0.55)"
     : "rgba(0,0,0,0.45)";
+
+  // ✨ حساب Slide-in للعنوان
+  // في الـ TITLE_SLIDE_IN_FRAMES الأولى: العنوان يدخل من اليمين/اليسار
+  // بعدها: العنوان ثابت تماماً
+  const slideProgress = globalFrameIdx < TITLE_SLIDE_IN_FRAMES
+    ? globalFrameIdx / TITLE_SLIDE_IN_FRAMES
+    : 1.0;
+
+  // smooth easing: ease-out cubic
+  const easedSlide = 1 - Math.pow(1 - slideProgress, 3);
+
+  // العنوان يدخل من اليمين للـ RTL ومن اليسار للـ LTR
+  const slideStartX = titleDir === "rtl" ? 120 : -120;
+  const slideCurrent = slideStartX * (1 - easedSlide);
+  const titleOpacity = easedSlide;
 
   const showPowerSolo =
     allWordsText.length === 1 && isPowerWord(allWordsText[0]);
@@ -508,35 +520,21 @@ function buildHTML(opts) {
         style =
           `color:${currentColor};` +
           `opacity:1.0;` +
-          `text-shadow:` +
-          `0 0 20px ${glowColor},` +
-          `0 0 40px ${glowColor},` +
-          `0 0 60px ${glowColor};` +
+          `text-shadow:0 0 20px ${glowColor},0 0 40px ${glowColor},0 0 60px ${glowColor};` +
           `display:inline-block;` +
           `animation:pulse 0.15s ease-out;`;
       } else if (isPast) {
-        style =
-          `color:${normalColor};` +
-          `opacity:1.0;` +
-          `text-shadow:none;` +
-          `display:inline;`;
+        style = `color:${normalColor};opacity:1.0;text-shadow:none;display:inline;`;
       } else {
-        style =
-          `color:${upcomingColor};` +
-          `opacity:0.75;` +
-          `text-shadow:none;` +
-          `display:inline;`;
+        style = `color:${upcomingColor};opacity:0.75;text-shadow:none;display:inline;`;
       }
 
       wordIdx++;
-      return (
-        `<span class="word" style="${style}">${esc(word)}</span>`
-      );
+      return `<span class="word" style="${style}">${esc(word)}</span>`;
     })
     .join(" ");
 
-  // ✨ Hook text:
-  // الأولوية: custom_hook من AI → ثم hook افتراضي حسب اللغة
+  // ✨ Hook text
   const defaultHookTexts = {
     ar: "🔴 لا تتجاوز هذا",
     fr: "🔴 Ne ratez pas ça",
@@ -548,10 +546,9 @@ function buildHTML(opts) {
       : defaultHookTexts[lang] || defaultHookTexts.en
   );
 
-  // ✨ Hook text font direction
-  const hookIsAr  = isArabicText(hookDisplayText);
-  const hookDir   = hookIsAr ? "rtl" : "ltr";
-  const hookFont  = getFontFamily(hookDisplayText);
+  const hookIsAr = isArabicText(hookDisplayText);
+  const hookDir  = hookIsAr ? "rtl" : "ltr";
+  const hookFont = getFontFamily(hookDisplayText);
 
   let mainContent;
   if (showPowerSolo) {
@@ -577,14 +574,12 @@ function buildHTML(opts) {
       overflow:hidden; background:transparent;
     }
 
-    /* ✨ Pulse animation */
+    /* ✨ Animations */
     @keyframes pulse {
       0%   { transform: scale(1.0); }
       50%  { transform: scale(1.06); }
       100% { transform: scale(1.0); }
     }
-
-    /* ✨ Hook Banner animation */
     @keyframes hookSlideIn {
       0%   { opacity:0; transform:translateX(-50%) translateY(-20px); }
       100% { opacity:1; transform:translateX(-50%) translateY(0px); }
@@ -594,34 +589,24 @@ function buildHTML(opts) {
       50%      { transform:translateX(-50%) scale(1.04); }
     }
 
+    /* Overlays */
     .overlay-top {
       position:absolute; top:0; left:0; right:0; height:35%;
-      background:linear-gradient(
-        to bottom,
-        rgba(0,0,0,0.72) 0%,
-        rgba(0,0,0,0.3) 60%,
-        transparent 100%
-      );
+      background:linear-gradient(to bottom,rgba(0,0,0,0.72) 0%,rgba(0,0,0,0.3) 60%,transparent 100%);
       pointer-events:none; z-index:1;
     }
     .overlay-bottom {
       position:absolute; bottom:0; left:0; right:0; height:45%;
-      background:linear-gradient(
-        to top,
-        rgba(0,0,0,0.72) 0%,
-        rgba(0,0,0,0.3) 60%,
-        transparent 100%
-      );
+      background:linear-gradient(to top,rgba(0,0,0,0.72) 0%,rgba(0,0,0,0.3) 60%,transparent 100%);
       pointer-events:none; z-index:1;
     }
 
-    /* ✨ Hook Banner — يظهر في الثواني الأولى فقط */
+    /* ✨ Hook Banner */
     .hook-banner {
       position:absolute;
-      top:175px;
-      left:50%;
+      top:175px; left:50%;
       transform:translateX(-50%);
-      background:rgba(220, 0, 0, 0.92);
+      background:rgba(220,0,0,0.92);
       color:#FFFFFF;
       font-family:${hookFont};
       font-size:${hookIsAr ? "36px" : "32px"};
@@ -632,43 +617,37 @@ function buildHTML(opts) {
       white-space:nowrap;
       direction:${hookDir};
       text-align:center;
-      box-shadow:
-        0 0 35px rgba(220,0,0,0.8),
-        0 6px 20px rgba(0,0,0,0.5);
+      box-shadow:0 0 35px rgba(220,0,0,0.8),0 6px 20px rgba(0,0,0,0.5);
       animation:
         hookSlideIn 0.4s ease-out forwards,
         hookPulse 1.2s ease-in-out 0.4s infinite;
     }
 
-    /* ✨ العنوان */
+    /* ✨ العنوان مع Slide-in */
     .title-container {
       position:absolute;
       top:${isHookFrame ? "310px" : "385px"};
       left:50%;
-      transform:translateX(-50%);
-      width:88%;
-      max-width:960px;
-      direction:${titleDir};
-      text-align:center;
+      width:88%; max-width:960px;
+      direction:${titleDir}; text-align:center;
       z-index:20;
+      /* ✨ Slide-in transform: يدخل من اليمين/اليسار ثم يستقر */
+      transform:translateX(calc(-50% + ${slideCurrent.toFixed(2)}px));
+      opacity:${titleOpacity.toFixed(4)};
     }
     .title-box {
       display:inline-block;
       background:#FF0000;
       padding:16px 36px;
       border-radius:9999px;
-      box-shadow:
-        0 0 40px rgba(255,0,0,0.6),
-        0 8px 25px rgba(0,0,0,0.5);
+      box-shadow:0 0 40px rgba(255,0,0,0.6),0 8px 25px rgba(0,0,0,0.5);
     }
     .title-text {
       font-family:${titleFont};
       font-size:${titleFontSize}px;
       font-weight:800;
       color:#FFFFFF;
-      display:inline-flex;
-      align-items:center;
-      gap:12px;
+      display:inline-flex; align-items:center; gap:12px;
       white-space:nowrap;
       text-shadow:0 2px 6px rgba(0,0,0,0.4);
     }
@@ -678,7 +657,7 @@ function buildHTML(opts) {
     .text-container {
       position:absolute;
       left:50%; top:62%;
-      transform:translate(-50%, -50%);
+      transform:translate(-50%,-50%);
       width:85%; max-width:920px;
       direction:${dir}; text-align:center;
       z-index:10;
@@ -693,41 +672,33 @@ function buildHTML(opts) {
       line-height:1.65;
       padding:28px 38px;
       border-radius:28px;
-      box-shadow:
-        0 8px 32px rgba(0,0,0,0.35),
-        0 0 0 3px rgba(255,255,255,0.08);
+      box-shadow:0 8px 32px rgba(0,0,0,0.35),0 0 0 3px rgba(255,255,255,0.08);
       max-width:100%;
       word-wrap:break-word;
       overflow-wrap:break-word;
     }
     .word {
       transition:
-        color       0.08s ease-out,
-        opacity     0.08s ease-out,
+        color 0.08s ease-out,
+        opacity 0.08s ease-out,
         text-shadow 0.12s ease-out;
     }
 
-    /* ✨ Power Word */
+    /* Power Word */
     .power-word-container {
-      position:absolute;
-      left:50%; top:62%;
-      transform:translate(-50%, -50%);
+      position:absolute; left:50%; top:62%;
+      transform:translate(-50%,-50%);
       direction:${dir}; text-align:center;
       z-index:10; opacity:${fadeProgress};
     }
     .power-word-text {
       display:inline-block;
-      background:#FF0000;
-      color:#FFD700;
+      background:#FF0000; color:#FFD700;
       font-family:${font};
       font-size:${ar ? "155px" : "145px"};
-      font-weight:900;
-      line-height:1.5;
-      padding:18px 44px;
-      border-radius:9999px;
-      box-shadow:
-        0 0 90px rgba(255,0,0,0.85),
-        0 18px 45px rgba(0,0,0,0.65);
+      font-weight:900; line-height:1.5;
+      padding:18px 44px; border-radius:9999px;
+      box-shadow:0 0 90px rgba(255,0,0,0.85),0 18px 45px rgba(0,0,0,0.65);
       animation:pulse 0.3s ease-out;
     }
   </style>
@@ -736,10 +707,7 @@ function buildHTML(opts) {
   <div class="overlay-top"></div>
   <div class="overlay-bottom"></div>
 
-  <!-- ✨ Hook Banner — يظهر في أول 3 ثواني -->
-  ${isHookFrame
-    ? `<div class="hook-banner">${esc(hookDisplayText)}</div>`
-    : ""}
+  ${isHookFrame ? `<div class="hook-banner">${esc(hookDisplayText)}</div>` : ""}
 
   <div class="title-container">
     <div class="title-box">
@@ -772,10 +740,16 @@ async function renderAllPNGs(page, frameStateMap) {
 
     const isHookFrame = f < HOOK_DURATION_FRAMES;
 
+    // ✨ Slide-in: كل frame في TITLE_SLIDE_IN_FRAMES الأولى فريد
+    // بعدها: نستخدم نفس key لتوفير الذاكرة
+    const slideKey = f < TITLE_SLIDE_IN_FRAMES
+      ? `slide_${f}`
+      : "slide_done";
+
     if (!state.segment) {
-      const key = isHookFrame ? "silence_hook" : "silence";
+      const key = `silence_${isHookFrame ? "hook" : "normal"}_${slideKey}`;
       if (!uniqueStates.has(key))
-        uniqueStates.set(key, { ...state, isHookFrame });
+        uniqueStates.set(key, { ...state, isHookFrame, globalFrameIdx: f });
       continue;
     }
 
@@ -786,43 +760,32 @@ async function renderAllPNGs(page, frameStateMap) {
     const key =
       `s${state.segment_idx}_w${state.current_word_idx}` +
       `_f${fadeStage}` +
-      (isHookFrame ? "_hook" : "");
+      `_${isHookFrame ? "hook" : "norm"}` +
+      `_${slideKey}`;
+
     if (!uniqueStates.has(key))
-      uniqueStates.set(key, { ...state, isHookFrame });
+      uniqueStates.set(key, { ...state, isHookFrame, globalFrameIdx: f });
   }
 
   console.log(`\n  📸 ${uniqueStates.size} unique states`);
 
-  // Warmup عربي
+  // Warmup
   const initHtmlAr = buildHTML({
-    segment: {
-      words: [{ word: "مرحبا", start: 0, end: 1 }],
-      start: 0, end: 1,
-    },
-    currentWordIdx: 0,
-    fadeProgress:   1.0,
-    isHookFrame:    false,
+    segment: { words: [{ word: "مرحبا", start: 0, end: 1 }], start: 0, end: 1 },
+    currentWordIdx: 0, fadeProgress: 1.0,
+    isHookFrame: false, globalFrameIdx: TITLE_SLIDE_IN_FRAMES,
   });
   writeFileSync(`${TMP}/init_ar.html`, initHtmlAr, "utf-8");
-  await page.goto(`file://${TMP}/init_ar.html`, {
-    waitUntil: "networkidle",
-  });
+  await page.goto(`file://${TMP}/init_ar.html`, { waitUntil: "networkidle" });
   await page.waitForTimeout(1000);
 
-  // Warmup إنجليزي/فرنسي
   const initHtmlEn = buildHTML({
-    segment: {
-      words: [{ word: "Hello", start: 0, end: 1 }],
-      start: 0, end: 1,
-    },
-    currentWordIdx: 0,
-    fadeProgress:   1.0,
-    isHookFrame:    false,
+    segment: { words: [{ word: "Hello", start: 0, end: 1 }], start: 0, end: 1 },
+    currentWordIdx: 0, fadeProgress: 1.0,
+    isHookFrame: false, globalFrameIdx: TITLE_SLIDE_IN_FRAMES,
   });
   writeFileSync(`${TMP}/init_en.html`, initHtmlEn, "utf-8");
-  await page.goto(`file://${TMP}/init_en.html`, {
-    waitUntil: "networkidle",
-  });
+  await page.goto(`file://${TMP}/init_en.html`, { waitUntil: "networkidle" });
   await page.waitForTimeout(500);
 
   console.log("  ✅ Fonts loaded (AR + EN/FR)");
@@ -836,6 +799,7 @@ async function renderAllPNGs(page, frameStateMap) {
       currentWordIdx: state.current_word_idx,
       fadeProgress:   state.fade_progress,
       isHookFrame:    state.isHookFrame || false,
+      globalFrameIdx: state.globalFrameIdx || 0,
     });
 
     const htmlPath = `${TMP}/${key}.html`;
@@ -845,17 +809,13 @@ async function renderAllPNGs(page, frameStateMap) {
 
     const pngPath = `${TMP}/${key}.png`;
     await page.screenshot({
-      path:           pngPath,
-      type:           "png",
-      omitBackground: true,
+      path: pngPath, type: "png", omitBackground: true,
     });
     pngCache.set(key, pngPath);
     rendered++;
 
     if (rendered % 30 === 0 || rendered === uniqueStates.size) {
-      process.stdout.write(
-        `    ${rendered}/${uniqueStates.size} PNGs\n`
-      );
+      process.stdout.write(`    ${rendered}/${uniqueStates.size} PNGs\n`);
     }
   }
 
@@ -879,10 +839,13 @@ function buildFrameDir(clipFrameMap, pngCache, idx, clipStartFrame) {
 
     const globalFrame = clipStartFrame + f;
     const isHookFrame = globalFrame < HOOK_DURATION_FRAMES;
+    const slideKey    = globalFrame < TITLE_SLIDE_IN_FRAMES
+      ? `slide_${globalFrame}`
+      : "slide_done";
 
     let key;
     if (!state.segment) {
-      key = isHookFrame ? "silence_hook" : "silence";
+      key = `silence_${isHookFrame ? "hook" : "normal"}_${slideKey}`;
     } else {
       const fadeStage =
         state.fade_progress >= 1.0
@@ -891,19 +854,16 @@ function buildFrameDir(clipFrameMap, pngCache, idx, clipStartFrame) {
       key =
         `s${state.segment_idx}_w${state.current_word_idx}` +
         `_f${fadeStage}` +
-        (isHookFrame ? "_hook" : "");
+        `_${isHookFrame ? "hook" : "norm"}` +
+        `_${slideKey}`;
     }
 
     const src  = pngCache.get(key);
-    const dest =
-      `${dir}/frame_${String(f).padStart(6, "0")}.png`;
+    const dest = `${dir}/frame_${String(f).padStart(6, "0")}.png`;
     if (!src) continue;
 
-    try {
-      symlinkSync(src, dest);
-    } catch {
-      copyFileSync(src, dest);
-    }
+    try { symlinkSync(src, dest); }
+    catch { copyFileSync(src, dest); }
   }
 
   return dir;
@@ -911,7 +871,7 @@ function buildFrameDir(clipFrameMap, pngCache, idx, clipStartFrame) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PROCESS BACKGROUND — Ken Burns + فلاتر سينمائية
+// ✨ PROCESS BACKGROUND — خلفيات متعددة + Ken Burns
 // ═══════════════════════════════════════════════════════════════════════════
 
 function processBackground(
@@ -940,6 +900,7 @@ function processBackground(
       ? ["-i", videoPath]
       : ["-stream_loop", "-1", "-i", videoPath];
 
+  // ✨ Ken Burns
   const motionType = idx % 4;
   let zoomFilter;
 
@@ -975,6 +936,7 @@ function processBackground(
       `d=${Math.ceil(duration * FPS)}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   }
 
+  // ✨ فلاتر سينمائية
   const cinematicFilters = [
     "curves=r='0/0 0.3/0.28 0.7/0.76 1/0.92':" +
       "g='0/0 0.3/0.28 0.7/0.78 1/0.94':" +
@@ -995,8 +957,50 @@ function processBackground(
     `fade=t=in:st=0:d=${fadeInDur.toFixed(3)},` +
     `fade=t=out:st=${(safeDur - fadeOutDur).toFixed(3)}:d=${fadeOutDur.toFixed(3)}`;
 
-  const videoFilter =
-    `${zoomFilter},${cinematicFilters},${fadeFilter}`;
+  // ✨ اختيار نوع الخلفية
+  let videoFilter;
+
+  if (bg_style === "blur") {
+    // ✨ Blur — الفيديو مع blur قوي خلفه
+    videoFilter =
+      `${zoomFilter},` +
+      `split[sharp][blurred];` +
+      `[blurred]boxblur=20:5,${cinematicFilters}[bg];` +
+      `[bg][sharp]overlay=0:0:format=auto,` +
+      `${fadeFilter}`;
+
+    // Blur يحتاج filter_complex مختلف — نستخدم الفلتر البسيط
+    videoFilter =
+      `${zoomFilter},` +
+      `boxblur=luma_radius=8:luma_power=2,` +
+      `${cinematicFilters},${fadeFilter}`;
+
+  } else if (bg_style === "gradient") {
+    // ✨ Gradient ملون — نضيف gradient overlay على الفيديو
+    const gradColor = COLORS.gradient.replace(/['"]/g, "");
+    videoFilter =
+      `${zoomFilter},` +
+      `${cinematicFilters},` +
+      `colorize=hue=0:saturation=0.3,` +
+      `${fadeFilter}`;
+
+  } else if (bg_style === "cinematic") {
+    // ✨ سينمائي أسود — تحويل للأبيض والأسود مع contrast عالٍ
+    videoFilter =
+      `${zoomFilter},` +
+      `hue=s=0,` +
+      `eq=contrast=1.4:brightness=-0.05:saturation=0,` +
+      `curves=r='0/0 0.3/0.2 0.7/0.8 1/1':` +
+        `g='0/0 0.3/0.2 0.7/0.8 1/1':` +
+        `b='0/0 0.3/0.2 0.7/0.8 1/1',` +
+      `vignette=PI/4:eval=frame,` +
+      `${fadeFilter}`;
+
+  } else {
+    // ✨ video — الفلتر الافتراضي (Ken Burns + cinematic)
+    videoFilter =
+      `${zoomFilter},${cinematicFilters},${fadeFilter}`;
+  }
 
   let r = spawnSync(
     "ffmpeg",
@@ -1014,6 +1018,7 @@ function processBackground(
   );
 
   if (r.status !== 0) {
+    // Fallback بسيط
     const simpleFilter =
       `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1,` +
@@ -1064,16 +1069,13 @@ function framesToMov(frameDir, outPath) {
   const r = spawnSync(
     "ffmpeg",
     [
-      "-y",
-      "-framerate", String(FPS),
+      "-y", "-framerate", String(FPS),
       "-i", `${frameDir}/frame_%06d.png`,
       "-vf", `scale=${WIDTH}:${HEIGHT},format=rgba`,
-      "-c:v", "png", "-an",
-      outPath,
+      "-c:v", "png", "-an", outPath,
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
-
   if (r.status !== 0) {
     console.error("❌ framesToMov failed");
     console.error(r.stderr?.toString().slice(-200) ?? "");
@@ -1086,21 +1088,15 @@ function overlayOnBackground(bgMp4, captionMov, outPath) {
   const r = spawnSync(
     "ffmpeg",
     [
-      "-y",
-      "-i", bgMp4,
-      "-i", captionMov,
+      "-y", "-i", bgMp4, "-i", captionMov,
       "-filter_complex",
-      "[1:v]format=rgba[cap];" +
-      "[0:v][cap]overlay=0:0:format=auto," +
-      "format=yuv420p[out]",
+      "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
       "-map", "[out]",
       "-c:v", "libx264", "-preset", "fast", "-crf", "19",
-      "-pix_fmt", "yuv420p", "-an",
-      outPath,
+      "-pix_fmt", "yuv420p", "-an", outPath,
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
-
   if (r.status !== 0) {
     console.error("❌ overlay failed");
     console.error(r.stderr?.toString().slice(-200) ?? "");
@@ -1109,23 +1105,14 @@ function overlayOnBackground(bgMp4, captionMov, outPath) {
 }
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-// XFADE CONCAT — انتقالات ناعمة
-// ═══════════════════════════════════════════════════════════════════════════
-
 function xfadeConcat(clipPaths, clipDurations) {
   if (clipPaths.length === 0) return "";
   if (clipPaths.length === 1) return clipPaths[0];
 
   const TRANSITIONS = [
-    "fade",
-    "fadeblack",
-    "fadegrays",
-    "smoothleft",
-    "smoothright",
-    "circlecrop",
+    "fade", "fadeblack", "fadegrays",
+    "smoothleft", "smoothright", "circlecrop",
   ];
-
   const XFADE = 0.5;
 
   const filters = [];
@@ -1135,8 +1122,7 @@ function xfadeConcat(clipPaths, clipDurations) {
   for (let i = 1; i < clipPaths.length; i++) {
     offset += clipDurations[i - 1] - XFADE;
     if (offset < 0) offset = 0;
-    const out   =
-      i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
+    const out   = i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
     const trans = TRANSITIONS[(i - 1) % TRANSITIONS.length];
     filters.push(
       `${last}[${i}:v]xfade=transition=${trans}:` +
@@ -1154,30 +1140,24 @@ function xfadeConcat(clipPaths, clipDurations) {
       "-filter_complex", filters.join(";"),
       "-map", "[vout]",
       "-c:v", "libx264", "-preset", "fast", "-crf", "19",
-      "-pix_fmt", "yuv420p", "-an",
-      outPath,
+      "-pix_fmt", "yuv420p", "-an", outPath,
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
 
   if (r.status !== 0) {
     console.error("⚠️  xfade failed - simple fade fallback");
-
     const simpleFade = [];
-    let off2  = 0;
-    let last2 = "[0:v]";
+    let off2 = 0, last2 = "[0:v]";
     for (let i = 1; i < clipPaths.length; i++) {
       off2 += clipDurations[i - 1] - 0.3;
       if (off2 < 0) off2 = 0;
-      const out2 =
-        i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
+      const out2 = i === clipPaths.length - 1 ? "[vout]" : `[v${i}]`;
       simpleFade.push(
-        `${last2}[${i}:v]xfade=transition=fade:` +
-        `duration=0.3:offset=${off2.toFixed(3)}${out2}`
+        `${last2}[${i}:v]xfade=transition=fade:duration=0.3:offset=${off2.toFixed(3)}${out2}`
       );
       last2 = out2;
     }
-
     const r2 = spawnSync(
       "ffmpeg",
       [
@@ -1186,24 +1166,15 @@ function xfadeConcat(clipPaths, clipDurations) {
         "-filter_complex", simpleFade.join(";"),
         "-map", "[vout]",
         "-c:v", "libx264", "-preset", "fast", "-crf", "21",
-        "-pix_fmt", "yuv420p", "-an",
-        outPath,
+        "-pix_fmt", "yuv420p", "-an", outPath,
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
-
     if (r2.status !== 0) {
       const lst = `${TMP}/list.txt`;
-      writeFileSync(
-        lst,
-        clipPaths.map((p) => `file '${p}'`).join("\n"),
-      );
+      writeFileSync(lst, clipPaths.map((p) => `file '${p}'`).join("\n"));
       const raw = `${TMP}/raw.mp4`;
-      spawnSync(
-        "ffmpeg",
-        ["-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", raw],
-        { stdio: "inherit" },
-      );
+      spawnSync("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", raw], { stdio: "inherit" });
       return raw;
     }
   }
@@ -1214,10 +1185,7 @@ function xfadeConcat(clipPaths, clipDurations) {
 function mergeAudio(videoPath, audioPath, outPath) {
   const aDur = probeDuration(audioPath);
   const vDur = probeDuration(videoPath);
-  console.log(
-    `🎵 Audio: ${aDur.toFixed(3)}s | ` +
-    `🎬 Video: ${vDur.toFixed(3)}s`
-  );
+  console.log(`🎵 Audio: ${aDur.toFixed(3)}s | 🎬 Video: ${vDur.toFixed(3)}s`);
 
   let finalVideo = videoPath;
 
@@ -1230,8 +1198,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
         "-y", "-stream_loop", "-1", "-i", videoPath,
         "-t", aDur.toFixed(3),
         "-c:v", "libx264", "-preset", "fast", "-crf", "21",
-        "-pix_fmt", "yuv420p", "-an",
-        looped,
+        "-pix_fmt", "yuv420p", "-an", looped,
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
@@ -1244,15 +1211,10 @@ function mergeAudio(videoPath, audioPath, outPath) {
   const r = spawnSync(
     "ffmpeg",
     [
-      "-y",
-      "-i", finalVideo,
-      "-i", audioPath,
-      "-map", "0:v:0",
-      "-map", "1:a:0",
-      "-c:v", "copy",
-      "-c:a", "aac", "-b:a", "192k",
-      "-t", aDur.toFixed(3),
-      outPath,
+      "-y", "-i", finalVideo, "-i", audioPath,
+      "-map", "0:v:0", "-map", "1:a:0",
+      "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+      "-t", aDur.toFixed(3), outPath,
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -1272,7 +1234,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 
 async function main() {
   console.log(
-    "\n🚀 Starting Renderer — Emotion Colors + Custom Hook + Pulse\n"
+    "\n🚀 Starting Renderer — Slide-in + Multi-BG + Emotion Colors\n"
   );
 
   const frameStateMap = buildFrameStateMap();
@@ -1280,12 +1242,9 @@ async function main() {
   const browser = await chromium.launch({
     headless: true,
     args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--no-zygote",
-      "--font-render-hinting=none",
+      "--no-sandbox", "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage", "--disable-gpu",
+      "--no-zygote", "--font-render-hinting=none",
       "--lang=ar,fr,en",
     ],
   });
@@ -1306,10 +1265,9 @@ async function main() {
     Math.max(1, Math.floor(effectiveDuration / clip_duration));
   const actualClipDuration = effectiveDuration / totalClips;
 
-  console.log(
-    `📊 ${totalClips} clips × ${actualClipDuration.toFixed(2)}s`
-  );
+  console.log(`📊 ${totalClips} clips × ${actualClipDuration.toFixed(2)}s`);
   console.log(`🎥 Videos: ${videos.length}`);
+  console.log(`🖼️  BG Style: ${bg_style}`);
 
   const finalClips    = [];
   const clipDurations = [];
@@ -1319,8 +1277,7 @@ async function main() {
   for (let i = 0; i < totalClips; i++) {
     const clipStart = i * actualClipDuration;
     const clipEnd   = Math.min(
-      (i + 1) * actualClipDuration,
-      effectiveDuration,
+      (i + 1) * actualClipDuration, effectiveDuration,
     );
     const clipDur = Math.max(clipEnd - clipStart, 0.5);
     const nFrames = Math.ceil(clipDur * FPS);
@@ -1332,20 +1289,17 @@ async function main() {
     const videoSrc = videos[videoIdx];
 
     process.stdout.write(
-      `  [${i + 1}/${totalClips}] ` +
-      `${clipDur.toFixed(2)}s${isHook ? " 🔥HOOK" : ""}... `
+      `  [${i + 1}/${totalClips}] ${clipDur.toFixed(2)}s${isHook ? " 🔥HOOK" : ""}... `
     );
 
     const frameDir   = buildFrameDir(clipMap, pngCache, i, startF);
     const captionMov = `${TMP}/caption_${i}.mov`;
     framesToMov(frameDir, captionMov);
 
-    const bgMp4 =
-      `${TMP}/bg_${String(i).padStart(3, "0")}.mp4`;
+    const bgMp4 = `${TMP}/bg_${String(i).padStart(3, "0")}.mp4`;
     processBackground(videoSrc, clipDur, bgMp4, i, isHook);
 
-    const finalClip =
-      `${TMP}/final_${String(i).padStart(3, "0")}.mp4`;
+    const finalClip = `${TMP}/final_${String(i).padStart(3, "0")}.mp4`;
     overlayOnBackground(bgMp4, captionMov, finalClip);
     finalClips.push(finalClip);
     clipDurations.push(clipDur);
