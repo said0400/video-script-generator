@@ -19,7 +19,6 @@ from tags_parser import (
     split_into_tagged_sentences,
     strip_tags_from_text,
     auto_correct_tag,
-    DEFAULT_TAG,
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
