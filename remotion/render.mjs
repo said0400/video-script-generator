@@ -1,7 +1,7 @@
 // remotion/render.mjs — Full Paragraph Display
 // ✨ ألوان ديناميكية حسب المشاعر
 // ✨ Pulse على الكلمة الحالية
-// ✨ Hook قوي في الثواني الأولى
+// ✨ Custom Hook مخصص من AI في الثواني الأولى
 // ✨ خطوط محسّنة مع فرق في الحجم
 // ✨ Ken Burns + فلاتر سينمائية
 // ✨ انتقالات سلسة
@@ -47,6 +47,7 @@ const {
   clip_duration = 3.0,
   has_hook      = false,
   hook_keyword  = "",
+  custom_hook   = "",   // ✅ جديد: Hook مخصص من AI
   analysis      = {},
 } = props;
 
@@ -68,86 +69,86 @@ console.log(`🎬 Clip: ${clip_duration}s | Hook: ${has_hook ? "YES" : "NO"}`);
 console.log(`🎯 Aligned: ${aligned.length} segments`);
 console.log(`🌐 Lang: ${lang.toUpperCase()}`);
 console.log(`💭 Emotion: ${analysis.primary_emotion || "unknown"}`);
+console.log(`🪝 Custom Hook: "${custom_hook || "none"}"`);
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✨ EMOTION COLOR SYSTEM — ألوان ديناميكية حسب المشاعر
+// ✨ EMOTION COLOR SYSTEM
 // ═══════════════════════════════════════════════════════════════════════════
 
 const EMOTION_COLORS = {
   curiosity: {
-    bg:         "rgba(255, 215, 0, 0.95)",    // أصفر ذهبي
-    bgSolid:    "#FFD700",
-    current:    "#FF6B00",
-    glow:       "rgba(255, 107, 0, 0.8)",
-    label:      "Golden Curiosity",
+    bg:      "rgba(255, 215, 0, 0.95)",
+    current: "#FF6B00",
+    glow:    "rgba(255, 107, 0, 0.8)",
+    dark:    false,
+    label:   "Golden Curiosity",
   },
   fear: {
-    bg:         "rgba(180, 0, 0, 0.92)",      // أحمر داكن
-    bgSolid:    "#B40000",
-    current:    "#FF4444",
-    glow:       "rgba(255, 68, 68, 0.8)",
-    label:      "Deep Fear",
+    bg:      "rgba(180, 0, 0, 0.92)",
+    current: "#FF4444",
+    glow:    "rgba(255, 68, 68, 0.8)",
+    dark:    true,
+    label:   "Deep Fear",
   },
   hope: {
-    bg:         "rgba(0, 180, 100, 0.92)",    // أخضر فاتح
-    bgSolid:    "#00B464",
-    current:    "#FFFFFF",
-    glow:       "rgba(255, 255, 255, 0.9)",
-    label:      "Fresh Hope",
+    bg:      "rgba(0, 180, 100, 0.92)",
+    current: "#FFFFFF",
+    glow:    "rgba(255, 255, 255, 0.9)",
+    dark:    true,
+    label:   "Fresh Hope",
   },
   joy: {
-    bg:         "rgba(255, 120, 0, 0.95)",    // برتقالي
-    bgSolid:    "#FF7800",
-    current:    "#FFFFFF",
-    glow:       "rgba(255, 255, 255, 0.9)",
-    label:      "Vibrant Joy",
+    bg:      "rgba(255, 120, 0, 0.95)",
+    current: "#FFFFFF",
+    glow:    "rgba(255, 255, 255, 0.9)",
+    dark:    true,
+    label:   "Vibrant Joy",
   },
   awe: {
-    bg:         "rgba(80, 0, 180, 0.92)",     // بنفسجي
-    bgSolid:    "#5000B4",
-    current:    "#FFD700",
-    glow:       "rgba(255, 215, 0, 0.8)",
-    label:      "Deep Awe",
+    bg:      "rgba(80, 0, 180, 0.92)",
+    current: "#FFD700",
+    glow:    "rgba(255, 215, 0, 0.8)",
+    dark:    true,
+    label:   "Deep Awe",
   },
   surprise: {
-    bg:         "rgba(0, 150, 220, 0.92)",    // أزرق
-    bgSolid:    "#0096DC",
-    current:    "#FFD700",
-    glow:       "rgba(255, 215, 0, 0.8)",
-    label:      "Blue Surprise",
+    bg:      "rgba(0, 150, 220, 0.92)",
+    current: "#FFD700",
+    glow:    "rgba(255, 215, 0, 0.8)",
+    dark:    true,
+    label:   "Blue Surprise",
   },
   desire: {
-    bg:         "rgba(220, 0, 100, 0.92)",    // وردي داكن
-    bgSolid:    "#DC0064",
-    current:    "#FFD700",
-    glow:       "rgba(255, 215, 0, 0.8)",
-    label:      "Deep Desire",
+    bg:      "rgba(220, 0, 100, 0.92)",
+    current: "#FFD700",
+    glow:    "rgba(255, 215, 0, 0.8)",
+    dark:    true,
+    label:   "Deep Desire",
   },
   anger: {
-    bg:         "rgba(200, 20, 0, 0.95)",     // أحمر قوي
-    bgSolid:    "#C81400",
-    current:    "#FFD700",
-    glow:       "rgba(255, 215, 0, 0.9)",
-    label:      "Burning Anger",
+    bg:      "rgba(200, 20, 0, 0.95)",
+    current: "#FFD700",
+    glow:    "rgba(255, 215, 0, 0.9)",
+    dark:    true,
+    label:   "Burning Anger",
   },
   sadness: {
-    bg:         "rgba(40, 60, 120, 0.92)",    // أزرق داكن
-    bgSolid:    "#283C78",
-    current:    "#A0C4FF",
-    glow:       "rgba(160, 196, 255, 0.8)",
-    label:      "Deep Sadness",
+    bg:      "rgba(40, 60, 120, 0.92)",
+    current: "#A0C4FF",
+    glow:    "rgba(160, 196, 255, 0.8)",
+    dark:    true,
+    label:   "Deep Sadness",
   },
   default: {
-    bg:         "rgba(255, 215, 0, 0.95)",    // افتراضي: ذهبي
-    bgSolid:    "#FFD700",
-    current:    "#FF1744",
-    glow:       "rgba(255, 23, 68, 0.8)",
-    label:      "Default Golden",
+    bg:      "rgba(255, 215, 0, 0.95)",
+    current: "#FF1744",
+    glow:    "rgba(255, 23, 68, 0.8)",
+    dark:    false,
+    label:   "Default Golden",
   },
 };
 
-// احصل على ألوان المشاعر الحالية
 function getEmotionColors() {
   const emotion = (analysis.primary_emotion || "").toLowerCase();
   return EMOTION_COLORS[emotion] || EMOTION_COLORS.default;
@@ -433,7 +434,7 @@ function buildFrameStateMap() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✨ HTML BUILDER — مع كل الميزات الجديدة
+// ✨ HTML BUILDER
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTML(opts) {
@@ -468,7 +469,7 @@ function buildHTML(opts) {
   const titleFont = getFontFamily(display_title);
   const titleDir  = getDir(display_title);
 
-  // ✨ حجم خط النص — أكبر من السابق لوضوح أكثر
+  // ✨ حجم خط النص
   const wc = allWordsText.length;
   let textFontSize;
   if      (wc <= 5)  textFontSize = ar ? 90 : 86;
@@ -477,26 +478,24 @@ function buildHTML(opts) {
   else if (wc <= 20) textFontSize = ar ? 56 : 52;
   else               textFontSize = ar ? 48 : 44;
 
-  // ✨ حجم خط العنوان — أصغر من النص الرئيسي بوضوح
+  // ✨ حجم خط العنوان — أصغر من النص
   const titleFontSize = titleAr ? 40 : 36;
 
-  // ✨ لون الخلفية الديناميكية حسب المشاعر
+  // ✨ ألوان ديناميكية
   const bgColor      = COLORS.bg;
   const currentColor = COLORS.current;
   const glowColor    = COLORS.glow;
+  const isDarkBg     = COLORS.dark;
 
-  // لون النص العادي حسب لون الخلفية
-  // خلفيات فاتحة → نص أسود | خلفيات داكنة → نص أبيض
-  const darkBgs = ["fear", "awe", "sadness", "desire", "anger"];
-  const emotion = (analysis.primary_emotion || "").toLowerCase();
-  const isDarkBg      = darkBgs.includes(emotion);
   const normalColor   = isDarkBg ? "#FFFFFF" : "#000000";
-  const upcomingColor = isDarkBg ? "rgba(255,255,255,0.6)" : "#555555";
+  const upcomingColor = isDarkBg
+    ? "rgba(255,255,255,0.55)"
+    : "rgba(0,0,0,0.45)";
 
   const showPowerSolo =
     allWordsText.length === 1 && isPowerWord(allWordsText[0]);
 
-  // ✨ بناء الكلمات مع Pulse على الكلمة الحالية
+  // ✨ بناء الكلمات مع Pulse
   let wordIdx = 0;
   const wordsHTML = allWordsText
     .map((word) => {
@@ -506,7 +505,6 @@ function buildHTML(opts) {
       let style = "";
 
       if (isCurrent) {
-        // ✨ Pulse animation على الكلمة الحالية
         style =
           `color:${currentColor};` +
           `opacity:1.0;` +
@@ -537,13 +535,23 @@ function buildHTML(opts) {
     })
     .join(" ");
 
-  // ✨ Hook text حسب اللغة
-  const hookTexts = {
+  // ✨ Hook text:
+  // الأولوية: custom_hook من AI → ثم hook افتراضي حسب اللغة
+  const defaultHookTexts = {
     ar: "🔴 لا تتجاوز هذا",
     fr: "🔴 Ne ratez pas ça",
     en: "🔴 Don't skip this",
   };
-  const hookText = hookTexts[lang] || hookTexts.en;
+  const hookDisplayText = (
+    custom_hook && custom_hook.trim().length > 0
+      ? custom_hook.trim()
+      : defaultHookTexts[lang] || defaultHookTexts.en
+  );
+
+  // ✨ Hook text font direction
+  const hookIsAr  = isArabicText(hookDisplayText);
+  const hookDir   = hookIsAr ? "rtl" : "ltr";
+  const hookFont  = getFontFamily(hookDisplayText);
 
   let mainContent;
   if (showPowerSolo) {
@@ -569,11 +577,21 @@ function buildHTML(opts) {
       overflow:hidden; background:transparent;
     }
 
-    /* ✨ Pulse animation للكلمة الحالية */
+    /* ✨ Pulse animation */
     @keyframes pulse {
       0%   { transform: scale(1.0); }
       50%  { transform: scale(1.06); }
       100% { transform: scale(1.0); }
+    }
+
+    /* ✨ Hook Banner animation */
+    @keyframes hookSlideIn {
+      0%   { opacity:0; transform:translateX(-50%) translateY(-20px); }
+      100% { opacity:1; transform:translateX(-50%) translateY(0px); }
+    }
+    @keyframes hookPulse {
+      0%,100% { transform:translateX(-50%) scale(1.0); }
+      50%      { transform:translateX(-50%) scale(1.04); }
     }
 
     .overlay-top {
@@ -597,36 +615,35 @@ function buildHTML(opts) {
       pointer-events:none; z-index:1;
     }
 
-    /* ✨ Hook Banner — الثواني الأولى */
+    /* ✨ Hook Banner — يظهر في الثواني الأولى فقط */
     .hook-banner {
       position:absolute;
-      top:180px;
+      top:175px;
       left:50%;
       transform:translateX(-50%);
-      background:rgba(255,0,0,0.9);
+      background:rgba(220, 0, 0, 0.92);
       color:#FFFFFF;
-      font-family:${titleFont};
-      font-size:${ar ? "38px" : "34px"};
+      font-family:${hookFont};
+      font-size:${hookIsAr ? "36px" : "32px"};
       font-weight:900;
       padding:14px 40px;
       border-radius:9999px;
       z-index:25;
       white-space:nowrap;
+      direction:${hookDir};
+      text-align:center;
       box-shadow:
-        0 0 30px rgba(255,0,0,0.8),
+        0 0 35px rgba(220,0,0,0.8),
         0 6px 20px rgba(0,0,0,0.5);
-      animation:hookPulse 1s ease-in-out infinite;
+      animation:
+        hookSlideIn 0.4s ease-out forwards,
+        hookPulse 1.2s ease-in-out 0.4s infinite;
     }
 
-    @keyframes hookPulse {
-      0%,100% { transform:translateX(-50%) scale(1.0); }
-      50%      { transform:translateX(-50%) scale(1.04); }
-    }
-
-    /* ✨ العنوان — حجم أصغر وأنيق */
+    /* ✨ العنوان */
     .title-container {
       position:absolute;
-      top:${isHookFrame ? "300px" : "380px"};
+      top:${isHookFrame ? "310px" : "385px"};
       left:50%;
       transform:translateX(-50%);
       width:88%;
@@ -634,7 +651,6 @@ function buildHTML(opts) {
       direction:${titleDir};
       text-align:center;
       z-index:20;
-      transition:top 0.3s ease;
     }
     .title-box {
       display:inline-block;
@@ -656,25 +672,18 @@ function buildHTML(opts) {
       white-space:nowrap;
       text-shadow:0 2px 6px rgba(0,0,0,0.4);
     }
-    .title-emoji {
-      font-size:${titleAr ? "44px" : "40px"};
-    }
+    .title-emoji { font-size:${titleAr ? "44px" : "40px"}; }
 
-    /* ✨ النص الرئيسي — مع لون ديناميكي */
+    /* ✨ النص مع لون ديناميكي */
     .text-container {
       position:absolute;
-      left:50%;
-      top:62%;
+      left:50%; top:62%;
       transform:translate(-50%, -50%);
-      width:85%;
-      max-width:920px;
-      direction:${dir};
-      text-align:center;
+      width:85%; max-width:920px;
+      direction:${dir}; text-align:center;
       z-index:10;
       opacity:${fadeProgress};
     }
-
-    /* ✨ خلفية ديناميكية حسب المشاعر */
     .text-bg {
       display:inline-block;
       background:${bgColor};
@@ -686,12 +695,11 @@ function buildHTML(opts) {
       border-radius:28px;
       box-shadow:
         0 8px 32px rgba(0,0,0,0.35),
-        0 0 0 3px rgba(255,255,255,0.1);
+        0 0 0 3px rgba(255,255,255,0.08);
       max-width:100%;
       word-wrap:break-word;
       overflow-wrap:break-word;
     }
-
     .word {
       transition:
         color       0.08s ease-out,
@@ -704,10 +712,8 @@ function buildHTML(opts) {
       position:absolute;
       left:50%; top:62%;
       transform:translate(-50%, -50%);
-      direction:${dir};
-      text-align:center;
-      z-index:10;
-      opacity:${fadeProgress};
+      direction:${dir}; text-align:center;
+      z-index:10; opacity:${fadeProgress};
     }
     .power-word-text {
       display:inline-block;
@@ -730,8 +736,10 @@ function buildHTML(opts) {
   <div class="overlay-top"></div>
   <div class="overlay-bottom"></div>
 
-  <!-- ✨ Hook Banner — يظهر فقط في الثواني الأولى -->
-  ${isHookFrame ? `<div class="hook-banner">${esc(hookText)}</div>` : ""}
+  <!-- ✨ Hook Banner — يظهر في أول 3 ثواني -->
+  ${isHookFrame
+    ? `<div class="hook-banner">${esc(hookDisplayText)}</div>`
+    : ""}
 
   <div class="title-container">
     <div class="title-box">
@@ -756,7 +764,6 @@ function buildHTML(opts) {
 async function renderAllPNGs(page, frameStateMap) {
   const uniqueStates = new Map();
 
-  // ✨ Hook frames — الـ 3 ثواني الأولى
   const HOOK_DURATION_FRAMES = Math.floor(3.0 * FPS);
 
   for (let f = 0; f < frameStateMap.length; f++) {
@@ -933,20 +940,15 @@ function processBackground(
       ? ["-i", videoPath]
       : ["-stream_loop", "-1", "-i", videoPath];
 
-  // ✨ Ken Burns Effect
   const motionType = idx % 4;
   let zoomFilter;
 
   if (isHook) {
     zoomFilter =
       `scale=w='trunc((iw*1.5)/2)*2':h='trunc((ih*1.5)/2)*2',` +
-      `zoompan=` +
-      `z='min(zoom+0.0015,1.5)':` +
-      `x='iw/2-(iw/zoom/2)':` +
-      `y='ih/2-(ih/zoom/2)':` +
-      `d=${Math.ceil(duration * FPS)}:` +
-      `s=${WIDTH}x${HEIGHT}:` +
-      `fps=${FPS}`;
+      `zoompan=z='min(zoom+0.0015,1.5)':` +
+      `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
+      `d=${Math.ceil(duration * FPS)}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   } else if (motionType === 0) {
     zoomFilter =
       `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
@@ -962,18 +964,17 @@ function processBackground(
   } else if (motionType === 2) {
     zoomFilter =
       `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
-      `zoompan=z='1.1':` +
-      `x='if(gte(x,iw/10),x-0.5,iw/10)':y='ih/2-(ih/zoom/2)':` +
+      `zoompan=z='1.1':x='if(gte(x,iw/10),x-0.5,iw/10)':` +
+      `y='ih/2-(ih/zoom/2)':` +
       `d=${Math.ceil(duration * FPS)}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   } else {
     zoomFilter =
       `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
-      `zoompan=z='1.1':` +
-      `x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':y='ih/2-(ih/zoom/2)':` +
+      `zoompan=z='1.1':x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':` +
+      `y='ih/2-(ih/zoom/2)':` +
       `d=${Math.ceil(duration * FPS)}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   }
 
-  // ✨ فلاتر سينمائية
   const cinematicFilters = [
     "curves=r='0/0 0.3/0.28 0.7/0.76 1/0.92':" +
       "g='0/0 0.3/0.28 0.7/0.78 1/0.94':" +
@@ -1163,7 +1164,7 @@ function xfadeConcat(clipPaths, clipDurations) {
     console.error("⚠️  xfade failed - simple fade fallback");
 
     const simpleFade = [];
-    let off2 = 0;
+    let off2  = 0;
     let last2 = "[0:v]";
     for (let i = 1; i < clipPaths.length; i++) {
       off2 += clipDurations[i - 1] - 0.3;
@@ -1271,7 +1272,7 @@ function mergeAudio(videoPath, audioPath, outPath) {
 
 async function main() {
   console.log(
-    "\n🚀 Starting Renderer — Emotion Colors + Pulse + Hook\n"
+    "\n🚀 Starting Renderer — Emotion Colors + Custom Hook + Pulse\n"
   );
 
   const frameStateMap = buildFrameStateMap();
@@ -1316,15 +1317,15 @@ async function main() {
   console.log("\n🎬 Processing clips...");
 
   for (let i = 0; i < totalClips; i++) {
-    const clipStart      = i * actualClipDuration;
-    const clipEnd        = Math.min(
+    const clipStart = i * actualClipDuration;
+    const clipEnd   = Math.min(
       (i + 1) * actualClipDuration,
       effectiveDuration,
     );
-    const clipDur        = Math.max(clipEnd - clipStart, 0.5);
-    const nFrames        = Math.ceil(clipDur * FPS);
-    const startF         = Math.floor(clipStart * FPS);
-    const clipMap        = frameStateMap.slice(startF, startF + nFrames);
+    const clipDur = Math.max(clipEnd - clipStart, 0.5);
+    const nFrames = Math.ceil(clipDur * FPS);
+    const startF  = Math.floor(clipStart * FPS);
+    const clipMap = frameStateMap.slice(startF, startF + nFrames);
 
     const isHook   = i === 0 && has_hook;
     const videoIdx = i % videos.length;
@@ -1335,7 +1336,6 @@ async function main() {
       `${clipDur.toFixed(2)}s${isHook ? " 🔥HOOK" : ""}... `
     );
 
-    // ✨ تمرير clipStartFrame لتحديد هل هذا الكليب في الـ Hook zone
     const frameDir   = buildFrameDir(clipMap, pngCache, i, startF);
     const captionMov = `${TMP}/caption_${i}.mov`;
     framesToMov(frameDir, captionMov);
