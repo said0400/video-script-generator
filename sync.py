@@ -127,7 +127,6 @@ def _patch_torch_serialization() -> None:
             ListConfig,
             DictConfig,
         ])
-        print("  ✅ torch serialization patched for WhisperX")
     except ImportError:
         pass
     except Exception as e:
@@ -157,7 +156,7 @@ def _load_whisperx_model() -> object | None:
             device        = WHISPERX_DEVICE,
             compute_type  = COMPUTE_TYPE,
             download_root = str(MODEL_CACHE_DIR),
-            language      = None,  # نمرر اللغة عند transcribe
+            language      = None,
         )
 
         load_time = time.time() - start_time
@@ -311,7 +310,6 @@ def _extract_whisperx_full(
         print(f"  📝 Transcribing (lang={lang})...")
         start_time = time.time()
 
-        # ✅ تمرير اللغة صراحةً وتحديد task=transcribe
         transcribe_result = model.transcribe(
             audio,
             batch_size = BATCH_SIZE,
@@ -322,7 +320,6 @@ def _extract_whisperx_full(
         transcribe_time = time.time() - start_time
         segments_raw    = transcribe_result.get("segments", [])
 
-        # ✅ طباعة اللغة المكتشفة للتحقق
         detected_lang = transcribe_result.get("language", "unknown")
         print(
             f"  🌐 Detected language: {detected_lang} "
@@ -421,7 +418,7 @@ def _extract_whisperx_full(
                         sentence_words.append(entry)
                         all_words_flat.append(entry)
 
-            # Fallback: توزيع متساوٍ إذا لم يوجد word alignment
+            # Fallback: توزيع متساوٍ
             if not sentence_words:
                 words_in_text = text.split()
                 if words_in_text:
@@ -452,22 +449,15 @@ def _extract_whisperx_full(
             print("  ⚠️  No sentences extracted")
             return result
 
-        # ── تحقق من جودة الـ transcription ───────────────────────────────────
-        # إذا اللغة المكتشفة مختلفة عن المطلوبة → تحذير
+        # ── تحقق من اللغة ─────────────────────────────────────────────────────
         if (
             detected_lang != "unknown" and
-            detected_lang != lang and
-            len(sentences) > 0
+            detected_lang != lang
         ):
             print(
                 f"  ⚠️  Language mismatch: "
                 f"detected={detected_lang}, expected={lang}"
             )
-            print(
-                f"  ⚠️  Transcription may be incorrect. "
-                f"Using fallback equal split."
-            )
-            # نستمر لكن نطبع تحذيراً
 
         # ── Apply offset ──────────────────────────────────────────────────────
         if speech_start_offset > 0.05:
@@ -727,7 +717,11 @@ def build_word_timeline(
     if word_timestamps and len(word_timestamps) >= 5:
         total_words = sum(len(s.split()) for s in sentences)
 
-        if abs(len(word_timestamps) - total_words) <= 5:
+        # ✅ إصلاح: استخدام نسبة مئوية بدلاً من عدد ثابت
+        if (
+            total_words > 0 and
+            abs(len(word_timestamps) - total_words) / total_words <= 0.05
+        ):
             word_times: list[dict] = []
             ts_idx = 0
 
