@@ -78,13 +78,14 @@ def _get_pexels_key() -> str:
 def _rotate_pexels_key() -> None:
     """تدوير مفتاح Pexels عند الفشل (thread-safe)."""
     global _pexels_key_idx
-    keys = _load_keys_for("PEXELS_API_KEY")  # خارج الـ lock
-    if len(keys) > 1:
+    keys = _load_keys_for("PEXELS_API_KEY")
+    n    = len(keys)
+    if n > 1:
         with _key_lock:
-            _pexels_key_idx = (_pexels_key_idx + 1) % len(keys)
+            _pexels_key_idx = (_pexels_key_idx + 1) % n
         print(
             f"  🔄 Pexels key rotated → "
-            f"#{_pexels_key_idx} (of {len(keys)})"
+            f"#{_pexels_key_idx} (of {n})"
         )
 
 
@@ -101,15 +102,14 @@ def _get_pixabay_key() -> str:
 def _rotate_pixabay_key() -> None:
     """تدوير مفتاح Pixabay عند الفشل (thread-safe)."""
     global _pixabay_key_idx
-    keys = _load_keys_for("PIXABAY_API_KEY")  # خارج الـ lock
-    if len(keys) > 1:
+    keys = _load_keys_for("PIXABAY_API_KEY")
+    n    = len(keys)
+    if n > 1:
         with _key_lock:
-            _pixabay_key_idx = (
-                _pixabay_key_idx + 1
-            ) % len(keys)
+            _pixabay_key_idx = (_pixabay_key_idx + 1) % n
         print(
             f"  🔄 Pixabay key rotated → "
-            f"#{_pixabay_key_idx} (of {len(keys)})"
+            f"#{_pixabay_key_idx} (of {n})"
         )
 
 
@@ -188,7 +188,6 @@ def _probe_video_info(path: Path) -> dict:
                 except (ValueError, ZeroDivisionError):
                     pass
 
-        # حساب frames من duration و fps إذا لم يُوجد
         if (
             info["frames"] == 0 and
             info["duration"] > 0 and
@@ -198,14 +197,11 @@ def _probe_video_info(path: Path) -> dict:
                 info["duration"] * info["fps"]
             )
 
-        # التحقق من الحد الأدنى
         if info["duration"] < MIN_DURATION:
             return {
                 **info,
                 "valid":  False,
-                "reason": (
-                    f"too short ({info['duration']:.1f}s)"
-                ),
+                "reason": f"too short ({info['duration']:.1f}s)",
             }
 
         if info["fps"] > 0 and info["fps"] < MIN_FPS:
@@ -219,9 +215,7 @@ def _probe_video_info(path: Path) -> dict:
             return {
                 **info,
                 "valid":  False,
-                "reason": (
-                    f"too few frames ({info['frames']})"
-                ),
+                "reason": f"too few frames ({info['frames']})",
             }
 
         return {**info, "valid": True, "reason": "ok"}
@@ -282,7 +276,6 @@ def _detect_motion_simple(path: Path) -> bool:
         if len(frame_sizes) < 2:
             return True
 
-        # إذا كل الـ frames بنفس الحجم → صورة ثابتة
         if len(set(frame_sizes)) == 1:
             return False
 
@@ -472,10 +465,7 @@ def _search_pexels(
                 else 0
             )
             if status == 429:
-                print(
-                    "    ⚠️  Pexels rate limit "
-                    "— rotating key"
-                )
+                print("    ⚠️  Pexels rate limit — rotating key")
                 _rotate_pexels_key()
                 api_key = _get_pexels_key()
                 time.sleep(2)
@@ -492,10 +482,7 @@ def _search_pexels(
                 if attempt < retries - 1:
                     time.sleep(
                         RETRY_DELAYS[
-                            min(
-                                attempt,
-                                len(RETRY_DELAYS) - 1,
-                            )
+                            min(attempt, len(RETRY_DELAYS) - 1)
                         ]
                     )
 
@@ -603,10 +590,7 @@ def _search_pixabay(
                 else 0
             )
             if status == 429:
-                print(
-                    "    ⚠️  Pixabay rate limit "
-                    "— rotating key"
-                )
+                print("    ⚠️  Pixabay rate limit — rotating key")
                 _rotate_pixabay_key()
                 api_key = _get_pixabay_key()
                 time.sleep(2)
@@ -623,10 +607,7 @@ def _search_pixabay(
                 if attempt < retries - 1:
                     time.sleep(
                         RETRY_DELAYS[
-                            min(
-                                attempt,
-                                len(RETRY_DELAYS) - 1,
-                            )
+                            min(attempt, len(RETRY_DELAYS) - 1)
                         ]
                     )
 
@@ -732,8 +713,8 @@ def _fill_gaps(
             "Check PEXELS_API_KEY and PIXABAY_API_KEY."
         )
 
-    rng       = random.Random()
-    last_used: Path | None = None
+    rng:       random.Random  = random.Random()
+    last_used: Path | None    = None
 
     for i in range(n):
         if results[i] is None:
@@ -773,7 +754,7 @@ def fetch_videos_for_script(
         aligned:               بيانات التزامن (اختياري)
 
     Returns:
-        list من مسارات الفيديوهات (بنفس طول keywords_per_sentence)
+        list من مسارات الفيديوهات
 
     Raises:
         RuntimeError: إذا لم يُوجد أي فيديو
