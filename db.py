@@ -2,11 +2,11 @@
 db.py — SQLite database for VSG
 ✨ يدعم:
   - تتبع الفيديوهات المستخدمة
-  - Resume system (استئناف من حيث توقف)
+  - Resume system
   - AI cache
   - تتبع النشر لكل لغة (AR, FR, EN)
-  - Auto-next (الفيديو التالي غير المنشور)
-  - Loop (إعادة من البداية عند انتهاء المحتوى)
+  - Auto-next
+  - Loop
 """
 
 from __future__ import annotations
@@ -44,7 +44,6 @@ def _conn() -> sqlite3.Connection:
 
 
 def close_thread_conn() -> None:
-    """إغلاق connection الـ thread الحالي."""
     if hasattr(_local, "conn") and _local.conn:
         try:
             _local.conn.close()
@@ -58,7 +57,6 @@ def close_thread_conn() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def init_db() -> None:
-    """إنشاء الجداول إذا لم تكن موجودة + تطبيق migrations."""
     with _write_lock:
         with _conn() as c:
             c.executescript("""
@@ -83,18 +81,6 @@ def init_db() -> None:
                     created_at   TEXT    DEFAULT CURRENT_TIMESTAMP,
                     updated_at   TEXT    DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(video_number, lang)
-                );
-
-                /* ✅ إصلاح: PRIMARY KEY مركّب (video_number, lang)
-                   لدعم نفس الفيديو بلغات مختلفة بدون تعارض */
-                CREATE TABLE IF NOT EXISTS scripts (
-                    video_number TEXT NOT NULL,
-                    lang         TEXT NOT NULL DEFAULT 'ar',
-                    title        TEXT,
-                    sentences    INTEGER DEFAULT 0,
-                    words        INTEGER DEFAULT 0,
-                    saved_at     TEXT DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (video_number, lang)
                 );
 
                 CREATE TABLE IF NOT EXISTS ai_cache (
@@ -138,30 +124,112 @@ def init_db() -> None:
                     ON publish_tracker(lang);
             """)
 
+            # ✅ migrations مع إعادة بناء جدول scripts
             _run_migrations(c)
 
 
 def _run_migrations(c: sqlite3.Connection) -> None:
-    """تطبيق migrations بأمان على قواعد البيانات القديمة."""
-    migrations = [
-        # renders
-        "ALTER TABLE renders ADD COLUMN published INTEGER DEFAULT 0",
+    """
+    تطبيق migrations بأمان.
+    ✅ يُعيد بناء جدول scripts إذا كان بـ PRIMARY KEY قديم.
+    """
 
-        # ai_cache
+    # ── migrations بسيطة ──────────────────────────────────────────────────────
+    simple_migrations = [
+        "ALTER TABLE renders ADD COLUMN published INTEGER DEFAULT 0",
         "ALTER TABLE ai_cache ADD COLUMN lang TEXT DEFAULT 'ar'",
         "ALTER TABLE ai_cache ADD COLUMN tagged TEXT",
-
-        # scripts — migration للجدول القديم الذي كان يستخدم
-        # PRIMARY KEY (video_number) فقط
-        "ALTER TABLE scripts ADD COLUMN lang TEXT DEFAULT 'ar'",
-        "ALTER TABLE scripts ADD COLUMN sentences INTEGER DEFAULT 0",
-        "ALTER TABLE scripts ADD COLUMN words INTEGER DEFAULT 0",
     ]
-    for sql in migrations:
+    for sql in simple_migrations:
         try:
             c.execute(sql)
         except sqlite3.OperationalError:
-            pass  # العمود موجود مسبقاً — تجاهل
+            pass
+
+    # ── ✅ إعادة بناء جدول scripts إذا كان بـ PRIMARY KEY قديم ───────────────
+    _migrate_scripts_table(c)
+
+
+def _migrate_scripts_table(c: sqlite3.Connection) -> None:
+    """
+    يتحقق من هيكل جدول scripts.
+    إذا كان PRIMARY KEY قديماً (video_number فقط) يُعيد بناءه.
+    """
+    # تحقق من وجود الجدول أولاً
+    table_exists = c.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name='scripts'"
+    ).fetchone()
+
+    if not table_exists:
+        # أنشئ الجدول الجديد مباشرة
+        c.execute("""
+            CREATE TABLE scripts (
+                video_number TEXT NOT NULL,
+                lang         TEXT NOT NULL DEFAULT 'ar',
+                title        TEXT,
+                sentences    INTEGER DEFAULT 0,
+                words        INTEGER DEFAULT 0,
+                saved_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (video_number, lang)
+            )
+        """)
+        return
+
+    # تحقق من الـ PRIMARY KEY الحالي
+    table_info = c.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='scripts'"
+    ).fetchone()
+
+    if table_info is None:
+        return
+
+    table_sql = table_info["sql"] or ""
+
+    # إذا كان الجدول يحتوي PRIMARY KEY مركّب بالفعل → لا حاجة لشيء
+    if "PRIMARY KEY (video_number, lang)" in table_sql:
+        return
+
+    # إذا كان الجدول قديماً → أعد بناءه
+    print("  🔄 Migrating scripts table to composite PRIMARY KEY...")
+
+    c.executescript("""
+        -- حفظ البيانات القديمة
+        CREATE TABLE IF NOT EXISTS scripts_backup AS
+            SELECT * FROM scripts;
+
+        -- حذف الجدول القديم
+        DROP TABLE scripts;
+
+        -- إنشاء الجدول الجديد
+        CREATE TABLE scripts (
+            video_number TEXT NOT NULL,
+            lang         TEXT NOT NULL DEFAULT 'ar',
+            title        TEXT,
+            sentences    INTEGER DEFAULT 0,
+            words        INTEGER DEFAULT 0,
+            saved_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (video_number, lang)
+        );
+
+        -- استرداد البيانات القديمة
+        INSERT OR IGNORE INTO scripts
+            (video_number, lang, title, sentences, words, saved_at)
+        SELECT
+            video_number,
+            COALESCE(lang, 'ar'),
+            title,
+            COALESCE(sentences, 0),
+            COALESCE(words, 0),
+            COALESCE(saved_at, CURRENT_TIMESTAMP)
+        FROM scripts_backup;
+
+        -- حذف النسخة الاحتياطية
+        DROP TABLE IF EXISTS scripts_backup;
+    """)
+
+    print("  ✅ scripts table migrated successfully")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -172,7 +240,6 @@ def is_video_used(
     source_id: str,
     source:    str = "pixabay",
 ) -> bool:
-    """هل تم استخدام هذا الفيديو مسبقاً؟"""
     return _conn().execute(
         "SELECT 1 FROM used_videos WHERE source_id=? AND source=?",
         (str(source_id), source),
@@ -184,7 +251,6 @@ def mark_video_used(
     keyword:   str,
     source:    str = "pixabay",
 ) -> None:
-    """سجّل استخدام فيديو."""
     with _write_lock:
         with _conn() as c:
             c.execute(
@@ -196,7 +262,6 @@ def mark_video_used(
 
 
 def get_used_count() -> int:
-    """عدد الفيديوهات المستخدمة."""
     return _conn().execute(
         "SELECT COUNT(*) FROM used_videos"
     ).fetchone()[0]
@@ -210,7 +275,6 @@ def is_render_done(
     video_number: str,
     lang:         str,
 ) -> bool:
-    """هل تم render هذا الفيديو بنجاح وملفه موجود؟"""
     row = _conn().execute(
         """SELECT status, output_path
            FROM renders
@@ -229,7 +293,6 @@ def get_render_output(
     video_number: str,
     lang:         str,
 ) -> str | None:
-    """احصل على مسار الفيديو المُنتَج."""
     row = _conn().execute(
         """SELECT output_path
            FROM renders
@@ -243,7 +306,6 @@ def mark_render_start(
     video_number: str,
     lang:         str,
 ) -> None:
-    """سجّل بداية الـ render."""
     with _write_lock:
         with _conn() as c:
             c.execute(
@@ -264,7 +326,6 @@ def mark_render_done(
     output_path:  str,
     duration:     float,
 ) -> None:
-    """سجّل نجاح الـ render."""
     with _write_lock:
         with _conn() as c:
             c.execute(
@@ -287,7 +348,6 @@ def mark_render_failed(
     lang:         str,
     error:        str,
 ) -> None:
-    """سجّل فشل الـ render."""
     with _write_lock:
         with _conn() as c:
             c.execute(
@@ -310,7 +370,6 @@ def is_published(
     video_number: str,
     lang:         str,
 ) -> bool:
-    """هل تم نشر هذا الفيديو لهذه اللغة؟"""
     row = _conn().execute(
         """SELECT 1 FROM publish_tracker
            WHERE video_number=? AND lang=?""",
@@ -323,7 +382,6 @@ def mark_published(
     video_number: str,
     lang:         str,
 ) -> None:
-    """سجّل أن هذا الفيديو نُشر لهذه اللغة."""
     with _write_lock:
         with _conn() as c:
             c.execute(
@@ -338,12 +396,10 @@ def mark_video_published_for_lang(
     video_number: str,
     lang:         str,
 ) -> None:
-    """Alias لـ mark_published."""
     mark_published(video_number, lang)
 
 
 def get_published_count(lang: str) -> int:
-    """عدد الفيديوهات المنشورة لهذه اللغة."""
     row = _conn().execute(
         "SELECT COUNT(*) FROM publish_tracker WHERE lang=?",
         (lang,),
@@ -359,12 +415,6 @@ def get_next_video_number(
     lang:              str,
     available_numbers: list[str],
 ) -> str | None:
-    """
-    احصل على رقم الفيديو التالي الذي لم يُنشر بعد.
-
-    Returns:
-        رقم الفيديو التالي، أو None إذا كلها مُنشرة (يحتاج loop)
-    """
     if not available_numbers:
         return None
 
@@ -387,12 +437,6 @@ def get_next_video_number(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def reset_published_for_lang(lang: str) -> int:
-    """
-    إعادة تعيين كل الفيديوهات المنشورة لهذه اللغة.
-    يُستخدم عند الـ loop (إعادة من البداية).
-
-    Returns: عدد السجلات المحذوفة
-    """
     with _write_lock:
         with _conn() as c:
             cursor = c.execute(
@@ -415,7 +459,6 @@ def reset_published_for_lang(lang: str) -> int:
 def get_pending_publish(
     lang: str | None = None,
 ) -> list[dict]:
-    """أرجع الفيديوهات المنتهية التي لم تُنشر بعد."""
     if lang:
         rows = _conn().execute(
             """SELECT r.video_number, r.lang, r.output_path
@@ -467,7 +510,7 @@ def save_script_meta(
 ) -> None:
     """
     حفظ metadata السكريبت.
-    ✅ PRIMARY KEY مركّب (video_number, lang) — لا تعارض بين اللغات
+    PRIMARY KEY مركّب (video_number, lang) — لا تعارض بين اللغات.
     """
     with _write_lock:
         with _conn() as c:
@@ -488,7 +531,6 @@ def save_script_meta(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def has_ai_cache(cache_key: str) -> bool:
-    """هل يوجد cache لهذا المفتاح؟"""
     row = _conn().execute(
         "SELECT 1 FROM ai_cache WHERE cache_key=?",
         (str(cache_key),),
@@ -497,7 +539,6 @@ def has_ai_cache(cache_key: str) -> bool:
 
 
 def get_ai_cache(cache_key: str) -> dict | None:
-    """احصل على AI cache لهذا المفتاح."""
     row = _conn().execute(
         "SELECT * FROM ai_cache WHERE cache_key=?",
         (str(cache_key),),
@@ -525,19 +566,13 @@ def get_ai_cache(cache_key: str) -> dict | None:
         "analysis":             safe_json(safe_col("analysis")),
         "power_words":          safe_json(safe_col("power_words")),
         "visual_keywords":      safe_json(safe_col("visual_keywords")),
-        "pattern_interrupts":   safe_json(
-            safe_col("pattern_interrupts")
-        ),
-        "engagement_questions": safe_json(
-            safe_col("engagement_questions")
-        ),
+        "pattern_interrupts":   safe_json(safe_col("pattern_interrupts")),
+        "engagement_questions": safe_json(safe_col("engagement_questions")),
         "hashtags":             safe_json(safe_col("hashtags")),
         "captions":             safe_json(safe_col("captions")),
         "accent_colors":        safe_json(safe_col("accent_colors")),
         "hook_keyword":         safe_col("hook_keyword", ""),
-        "attractive_title":     safe_json(
-            safe_col("attractive_title")
-        ),
+        "attractive_title":     safe_json(safe_col("attractive_title")),
         "tagged":               safe_json(safe_col("tagged")),
         "created_at":           safe_col("created_at"),
         "updated_at":           safe_col("updated_at"),
@@ -550,7 +585,6 @@ def save_ai_cache(
     lang:      str,
     enriched:  dict,
 ) -> None:
-    """حفظ AI data في الـ cache."""
     def to_json(obj) -> str | None:
         return (
             json.dumps(obj, ensure_ascii=False)
@@ -584,9 +618,7 @@ def save_ai_cache(
                        tagged               = excluded.tagged,
                        updated_at           = CURRENT_TIMESTAMP""",
                 (
-                    str(cache_key),
-                    lang,
-                    title,
+                    str(cache_key), lang, title,
                     to_json(enriched.get("analysis")),
                     to_json(enriched.get("power_words")),
                     to_json(enriched.get("visual_keywords")),
@@ -605,7 +637,6 @@ def save_ai_cache(
 def clear_ai_cache(
     cache_key: str | None = None,
 ) -> int:
-    """حذف AI cache (كل أو مفتاح محدد)."""
     with _write_lock:
         with _conn() as c:
             if cache_key:
@@ -621,7 +652,6 @@ def clear_ai_cache(
 def show_ai_cache(
     cache_key: str | None = None,
 ) -> None:
-    """عرض AI cache."""
     if cache_key:
         cache = get_ai_cache(cache_key)
         if not cache:
@@ -638,21 +668,15 @@ def show_ai_cache(
                 f"  📊 Type: {a.get('content_type')} | "
                 f"Emotion: {a.get('primary_emotion')}"
             )
-
         if cache.get("hook_keyword"):
             print(f"  🔥 Hook: '{cache['hook_keyword']}'")
-
-        print(
-            f"  🌐 Lang: "
-            f"{cache.get('lang', 'ar').upper()}"
-        )
+        print(f"  🌐 Lang: {cache.get('lang', 'ar').upper()}")
         print(f"  {'═' * 60}\n")
 
     else:
         rows = _conn().execute(
             """SELECT cache_key, lang, title, created_at
-               FROM ai_cache
-               ORDER BY cache_key"""
+               FROM ai_cache ORDER BY cache_key"""
         ).fetchall()
 
         if not rows:
@@ -668,10 +692,7 @@ def show_ai_cache(
             lang  = str(r["lang"] or "ar").upper()[:3]
             title = (r["title"] or "")[:32]
             date  = (r["created_at"] or "")[:19]
-            print(
-                f"  {key:<20} {lang:<4} "
-                f"{title:<32} {date}"
-            )
+            print(f"  {key:<20} {lang:<4} {title:<32} {date}")
 
         print(f"  {'═' * 75}\n")
 
@@ -681,7 +702,6 @@ def show_ai_cache(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def print_db_summary() -> None:
-    """طباعة ملخص قاعدة البيانات."""
     c      = _conn()
     used   = c.execute(
         "SELECT COUNT(*) FROM used_videos"
