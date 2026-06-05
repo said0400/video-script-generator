@@ -94,10 +94,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pytorch-cpu-${{ runner.os }}-py3.11
+          key: pytorch-cpu-${{ runner.os }}-py3.11-v24
           restore-keys: pytorch-cpu-
 
-      - name: 🔥 Install PyTorch (CPU)
+      - name: 🔥 Install PyTorch 2.4 (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
           pip install torch==2.4.0 torchaudio==2.4.0 \
@@ -127,12 +127,14 @@ jobs:
 
       - name: 🌐 Install Playwright Chromium (Python)
         run: |
-          pip install playwright
-          python -m playwright install chromium --with-deps
+          python -m playwright install chromium
+          python -m playwright install-deps chromium
 
       - name: 🌐 Install Playwright Chromium (Node)
         working-directory: remotion
-        run: npx playwright install chromium --with-deps
+        run: |
+          npx playwright install chromium
+          npx playwright install-deps chromium
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
