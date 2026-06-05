@@ -4,10 +4,15 @@
 #
 # ⚠️  ملاحظات مهمة:
 #
-#   1. torch + torchaudio يُثبَّتان في GitHub Actions بشكل منفصل
-#   2. whisperx يُثبَّت من GitHub في GitHub Actions
-#   3. ffmpeg يُثبَّت كـ system package
-#   4. لا تضع ffmpeg-python هنا
+#   1. torch + torchaudio يُثبَّتان في GitHub Actions بشكل منفصل:
+#      pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+#
+#   2. whisperx يُثبَّت من GitHub في GitHub Actions:
+#      pip install git+https://github.com/m-bain/whisperX.git
+#
+#   3. ffmpeg يُثبَّت كـ system package في GitHub Actions
+#
+#   4. لا تضع ffmpeg-python هنا — الكود يستخدم subprocess مباشرة
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -33,17 +38,25 @@ playwright>=1.44.0
 
 
 # ── WhisperX Core Dependencies ────────────────────────────────────────────────
-faster-whisper>=1.0.0
-ctranslate2>=4.4.0
-transformers>=4.36.0
+# whisperx نفسه يُثبَّت في GitHub Actions من GitHub مباشرة
+# لكن هذه المكتبات يجب أن تكون هنا:
+
+faster-whisper>=1.2.0
+ctranslate2>=4.5.0
+transformers>=4.48.0
 tokenizers>=0.15.0
 huggingface_hub>=0.20.0
 
 
 # ── PyAnnote (Word-level alignment) ───────────────────────────────────────────
-pyannote.audio>=3.1.0
+# ⚠️  يحتاج HF_TOKEN في البيئة لتحميل النماذج
+pyannote.audio>=4.0.0
 pyannote.core>=5.0.0
 pyannote.pipeline>=3.0.1
+
+
+# ── OmegaConf (مطلوب لإصلاح torch serialization مع pyannote) ─────────────────
+omegaconf>=2.3.0
 
 
 # ── Audio Processing ──────────────────────────────────────────────────────────
@@ -53,8 +66,8 @@ audioread>=3.0.0
 scipy>=1.11.0
 
 
-# ── Numpy (مقيّد لتوافق WhisperX) ────────────────────────────────────────────
-numpy>=1.24.0,<2.0.0
+# ── Numpy (متوافق مع WhisperX v3.8.x) ────────────────────────────────────────
+numpy>=2.1.0
 
 
 # ── NLP ───────────────────────────────────────────────────────────────────────
