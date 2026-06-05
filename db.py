@@ -85,13 +85,16 @@ def init_db() -> None:
                     UNIQUE(video_number, lang)
                 );
 
+                /* ✅ إصلاح: PRIMARY KEY مركّب (video_number, lang)
+                   لدعم نفس الفيديو بلغات مختلفة بدون تعارض */
                 CREATE TABLE IF NOT EXISTS scripts (
-                    video_number TEXT PRIMARY KEY,
+                    video_number TEXT NOT NULL,
+                    lang         TEXT NOT NULL DEFAULT 'ar',
                     title        TEXT,
                     sentences    INTEGER DEFAULT 0,
                     words        INTEGER DEFAULT 0,
-                    lang         TEXT    DEFAULT 'ar',
-                    saved_at     TEXT    DEFAULT CURRENT_TIMESTAMP
+                    saved_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (video_number, lang)
                 );
 
                 CREATE TABLE IF NOT EXISTS ai_cache (
@@ -144,11 +147,12 @@ def _run_migrations(c: sqlite3.Connection) -> None:
         # renders
         "ALTER TABLE renders ADD COLUMN published INTEGER DEFAULT 0",
 
-        # ai_cache — بدون NOT NULL لأن الجدول قد يحتوي بيانات
+        # ai_cache
         "ALTER TABLE ai_cache ADD COLUMN lang TEXT DEFAULT 'ar'",
         "ALTER TABLE ai_cache ADD COLUMN tagged TEXT",
 
-        # scripts
+        # scripts — migration للجدول القديم الذي كان يستخدم
+        # PRIMARY KEY (video_number) فقط
         "ALTER TABLE scripts ADD COLUMN lang TEXT DEFAULT 'ar'",
         "ALTER TABLE scripts ADD COLUMN sentences INTEGER DEFAULT 0",
         "ALTER TABLE scripts ADD COLUMN words INTEGER DEFAULT 0",
@@ -334,7 +338,7 @@ def mark_video_published_for_lang(
     video_number: str,
     lang:         str,
 ) -> None:
-    """Alias لـ mark_published — يُستخدم في main.py."""
+    """Alias لـ mark_published."""
     mark_published(video_number, lang)
 
 
@@ -391,11 +395,11 @@ def reset_published_for_lang(lang: str) -> int:
     """
     with _write_lock:
         with _conn() as c:
-            c.execute(
+            cursor = c.execute(
                 "DELETE FROM publish_tracker WHERE lang=?",
                 (lang,),
             )
-            count = c.total_changes
+            count = cursor.rowcount
 
     print(
         f"  🔄 Reset {lang.upper()} publish tracker "
@@ -461,19 +465,21 @@ def save_script_meta(
     sentences:    int,
     words:        int,
 ) -> None:
-    """حفظ metadata السكريبت."""
+    """
+    حفظ metadata السكريبت.
+    ✅ PRIMARY KEY مركّب (video_number, lang) — لا تعارض بين اللغات
+    """
     with _write_lock:
         with _conn() as c:
             c.execute(
                 """INSERT INTO scripts
-                       (video_number, title, lang, sentences, words)
+                       (video_number, lang, title, sentences, words)
                    VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(video_number) DO UPDATE SET
+                   ON CONFLICT(video_number, lang) DO UPDATE SET
                        title     = excluded.title,
-                       lang      = excluded.lang,
                        sentences = excluded.sentences,
                        words     = excluded.words""",
-                (str(video_number), title, lang, sentences, words),
+                (str(video_number), lang, title, sentences, words),
             )
 
 
@@ -603,13 +609,13 @@ def clear_ai_cache(
     with _write_lock:
         with _conn() as c:
             if cache_key:
-                c.execute(
+                cursor = c.execute(
                     "DELETE FROM ai_cache WHERE cache_key=?",
                     (str(cache_key),),
                 )
             else:
-                c.execute("DELETE FROM ai_cache")
-            return c.total_changes
+                cursor = c.execute("DELETE FROM ai_cache")
+            return cursor.rowcount
 
 
 def show_ai_cache(
