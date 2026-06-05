@@ -8,6 +8,7 @@
   - Per-language voice config
   - WhisperX transcript sync
   - Facebook multi-page publishing
+  - EQ + Ducking audio pipeline
 """
 
 from __future__ import annotations
@@ -110,7 +111,6 @@ def parse_args() -> argparse.Namespace:
         const="all", default=None,
     )
     p.add_argument("--clear-ai-cache", type=str, default=None)
-    # ✅ إضافة: تصفير used_videos
     p.add_argument(
         "--reset-videos",
         action="store_true",
@@ -168,14 +168,10 @@ def _get_content_for_lang(record: dict, lang: str) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ RESET USED VIDEOS
+# RESET USED VIDEOS
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _reset_used_videos() -> int:
-    """
-    تصفير قائمة الفيديوهات المستخدمة.
-    يسمح بإعادة استخدام الفيديوهات القديمة.
-    """
     from db import _conn, _write_lock
     with _write_lock:
         with _conn() as c:
@@ -186,7 +182,7 @@ def _reset_used_videos() -> int:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ TRIM SILENCE (من البداية فقط)
+# TRIM SILENCE
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _trim_silence(
@@ -195,14 +191,9 @@ def _trim_silence(
     threshold:   str   = "-40dB",
     duration:    float = 0.3,
 ) -> str:
-    """
-    قطع الصمت من بداية الصوت فقط.
-    لا نقطع من النهاية أو المنتصف لأن WhisperX يحتاج البنية الكاملة.
-
-    ✅ إصلاح: حذف stop_periods لمنع قطع الصمت بين الجمل.
-    """
+    """قطع الصمت من بداية الصوت فقط."""
     if not Path(audio_path).exists():
-        print(f"  ⚠️  Trim skipped: file not found")
+        print("  ⚠️  Trim skipped: file not found")
         return audio_path
 
     print("  ✂️  Trimming leading silence from audio...")
@@ -434,7 +425,7 @@ def _render_node(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AUDIO PIPELINE
+# AUDIO PIPELINE — مع EQ + Ducking
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_audio(
@@ -443,6 +434,7 @@ def produce_audio(
     music_volume: float = 0.12,
     sfx_type:     str   = "swoosh",
 ) -> tuple[Path, float, list, list, list]:
+    """إنتاج الصوت الكامل مع EQ + Ducking."""
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
     voice_config     = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
@@ -458,7 +450,6 @@ def produce_audio(
         lang             = lang,
     )
 
-    # ✅ إزالة التكرار باستخدام set
     out_dir        = Path(output_base).parent
     prefix         = Path(output_base).name
     wav_candidates = sorted(set(
@@ -477,7 +468,7 @@ def produce_audio(
     else:
         wav_path = None
 
-    # ── 2. ✅ قطع الصمت من البداية فقط ──────────────────────────────────────
+    # ── 2. قطع الصمت من البداية ──────────────────────────────────────────────
     if wav_path:
         trimmed_path     = f"{output_base}_voice_trimmed.wav"
         wav_path_trimmed = _trim_silence(wav_path, trimmed_path)
@@ -533,11 +524,11 @@ def produce_audio(
             s["text"] for s in tagged_sentences
         ]
 
-    # ── 5. خلط الموسيقى ──────────────────────────────────────────────────────
-    clip_dur     = _clip_durations_from_aligned(
+    # ── 5. ✨ خلط الموسيقى مع EQ + Ducking ───────────────────────────────────
+    clip_dur      = _clip_durations_from_aligned(
         aligned, real_dur, len(whisper_sentences)
     )
-    mixed_out    = f"{output_base}_audio_mixed.aac"
+    mixed_out     = f"{output_base}_audio_mixed.aac"
     fallback_voice = wav_path or f"{output_base}_voice_0.wav"
 
     try:
@@ -549,6 +540,8 @@ def produce_audio(
             sfx_type       = sfx_type,
             music_volume   = music_volume,
             seed           = hash(script_data["title"]) % 10000,
+            lang           = lang,     # ✅ EQ حسب اللغة
+            aligned        = aligned,  # ✅ Ducking حسب الجمل
         )
         dur = get_audio_duration(str(final_audio))
         if dur >= 5:
@@ -883,7 +876,6 @@ def main() -> None:
     args = parse_args()
     init_db()
 
-    # ── Cache management ──────────────────────────────────────────────────────
     if args.show_ai_cache is not None:
         show_ai_cache(
             args.show_ai_cache
@@ -901,7 +893,6 @@ def main() -> None:
             print(f"  🗑️  Cleared {count} entry")
         return
 
-    # ✅ تصفير الفيديوهات المستخدمة
     if args.reset_videos:
         _reset_used_videos()
         if not args.input_file:
@@ -955,7 +946,6 @@ def main() -> None:
 
     print_scripts_summary(valid)
 
-    # ── Auto-next ─────────────────────────────────────────────────────────────
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
         next_num  = get_next_video_number(lang, available)
