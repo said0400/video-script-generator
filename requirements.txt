@@ -4,16 +4,10 @@
 #
 # ⚠️  ملاحظات مهمة:
 #
-#   1. torch + torchaudio يُثبَّتان في GitHub Actions بشكل منفصل:
-#      pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-#
-#   2. whisperx يُثبَّت من GitHub في GitHub Actions:
-#      pip install git+https://github.com/m-bain/whisperX.git
-#
-#   3. ffmpeg يُثبَّت كـ system package في GitHub Actions:
-#      sudo apt-get install -y ffmpeg
-#
-#   4. لا تضع ffmpeg-python هنا — الكود يستخدم subprocess مباشرة
+#   1. torch + torchaudio يُثبَّتان في GitHub Actions بشكل منفصل
+#   2. whisperx يُثبَّت من GitHub في GitHub Actions
+#   3. ffmpeg يُثبَّت كـ system package
+#   4. لا تضع ffmpeg-python هنا
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -35,14 +29,10 @@ requests>=2.31.0
 
 
 # ── Playwright (Thumbnail + Render) ───────────────────────────────────────────
-# يُثبَّت هنا ثم يُشغَّل: python -m playwright install chromium --with-deps
 playwright>=1.44.0
 
 
 # ── WhisperX Core Dependencies ────────────────────────────────────────────────
-# whisperx نفسه يُثبَّت في GitHub Actions من GitHub مباشرة
-# لكن هذه المكتبات يجب أن تكون هنا لضمان التوافق:
-
 faster-whisper>=1.0.0
 ctranslate2>=4.4.0
 transformers>=4.36.0
@@ -51,9 +41,6 @@ huggingface_hub>=0.20.0
 
 
 # ── PyAnnote (Word-level alignment) ───────────────────────────────────────────
-# ⚠️  يحتاج HF_TOKEN في البيئة لتحميل النماذج من HuggingFace
-# أضف HF_TOKEN في GitHub Secrets
-
 pyannote.audio>=3.1.0
 pyannote.core>=5.0.0
 pyannote.pipeline>=3.0.1
@@ -67,7 +54,6 @@ scipy>=1.11.0
 
 
 # ── Numpy (مقيّد لتوافق WhisperX) ────────────────────────────────────────────
-# WhisperX لا يدعم numpy 2.x حتى الآن
 numpy>=1.24.0,<2.0.0
 
 
