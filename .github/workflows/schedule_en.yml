@@ -39,8 +39,9 @@ on:
         default: "9x16"
         type: string
 
+# ✅ concurrency موحد حسب اللغة فقط
 concurrency:
-  group: english-video-${{ github.ref }}
+  group: video-en
   cancel-in-progress: false
 
 jobs:
@@ -110,12 +111,23 @@ jobs:
         run: |
           pip install -r requirements.txt
 
+      # ✅ Node.js فقط إذا لم يكن script_only أو no_video
       - name: 🟢 Setup Node.js 20
+        if: >-
+          ${{
+            github.event.inputs.script_only != 'true' &&
+            github.event.inputs.no_video != 'true'
+          }}
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: 📦 Install Node deps
+        if: >-
+          ${{
+            github.event.inputs.script_only != 'true' &&
+            github.event.inputs.no_video != 'true'
+          }}
         working-directory: remotion
         run: |
           if [ -f "package-lock.json" ]; then
@@ -128,6 +140,11 @@ jobs:
         run: python -m playwright install chromium
 
       - name: 🌐 Install Playwright Chromium (Node)
+        if: >-
+          ${{
+            github.event.inputs.script_only != 'true' &&
+            github.event.inputs.no_video != 'true'
+          }}
         working-directory: remotion
         run: npx playwright install chromium
 
