@@ -3,6 +3,7 @@ sync.py — Word-level audio synchronization using WhisperX
 ✨ مزامنة 100% مع الصوت الفعلي
 ✨ يدعم AR, FR, EN
 ✨ تطبيق offset إجباري لضمان التزامن
+✨ متوافق مع WhisperX v3.8.x و PyTorch 2.8+
 """
 
 from __future__ import annotations
@@ -113,6 +114,26 @@ _WHISPERX_MODEL: object = None
 _ALIGN_MODELS:   dict   = {}
 
 
+def _patch_torch_serialization() -> None:
+    """
+    إصلاح مشكلة weights_only في PyTorch 2.6+
+    يسمح بتحميل نماذج WhisperX و pyannote بأمان.
+    """
+    try:
+        import torch
+        from omegaconf import ListConfig, DictConfig
+
+        torch.serialization.add_safe_globals([
+            ListConfig,
+            DictConfig,
+        ])
+        print("  ✅ torch serialization patched for WhisperX")
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"  ⚠️  torch serialization patch failed: {e}")
+
+
 def _load_whisperx_model() -> object | None:
     """تحميل WhisperX model (مرة واحدة فقط)."""
     global _WHISPERX_MODEL
@@ -122,6 +143,9 @@ def _load_whisperx_model() -> object | None:
 
     try:
         import whisperx
+
+        # إصلاح مشكلة PyTorch 2.6+ قبل تحميل النموذج
+        _patch_torch_serialization()
 
         print(
             f"  📥 Loading WhisperX model "
@@ -160,6 +184,9 @@ def _load_align_model(
 
     try:
         import whisperx
+
+        # إصلاح مشكلة PyTorch 2.6+ قبل تحميل النموذج
+        _patch_torch_serialization()
 
         print(
             f"  📥 Loading alignment model "
@@ -550,7 +577,7 @@ def _normalize_word_timestamps(
 ) -> list[dict]:
     """
     إصلاح كل مشاكل التوقيت:
-    1. تصحيح offset البداية (إذا لم يُطبَّق مسبقاً)
+    1. تصحيح offset البداية
     2. إصلاح التداخلات
     3. ضمان مدد منطقية
     4. عدم تجاوز مدة الصوت
