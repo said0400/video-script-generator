@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 🎬 Video Generator — Multi-Language + Auto Schedule
-Pipeline النهائي:
-  1. TTS → Trim → Speed Up → Mix Music + SFX
-  2. جلب الفيديوهات + Ken Burns + دمج كامل
-  3. ✅ WhisperX من الفيديو النهائي (لا من الصوت)
-  4. Render الكلمات فوق الفيديو
+Pipeline النهائي (تزامن 100%):
+  A. TTS → Trim → Speed Up → Mix Music + SFX
+  B. فيديوهات خلفية + Ken Burns → فيديو خلفية كامل
+  C. استخراج الصوت من الفيديو النهائي
+  D. WhisperX على الصوت المستخرج → timestamps دقيقة
+  E. Render الكلمات فوق الفيديو
 """
 
 from __future__ import annotations
@@ -67,13 +68,13 @@ SPEED_MULTIPLIER: dict[str, float] = {
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="🎬 Video Generator — Multi-Language",
+        description="🎬 Video Generator",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    p.add_argument("input_file", type=str, nargs="?", default=None)
+    p.add_argument("input_file",       type=str, nargs="?", default=None)
     p.add_argument("--output-dir",     type=str, default="output")
     p.add_argument("--video-number",   type=str, default=None)
-    p.add_argument("--lang", type=str, default="ar", choices=["ar","fr","en"])
+    p.add_argument("--lang",           type=str, default="ar", choices=["ar","fr","en"])
     p.add_argument("--auto-next",      action="store_true")
     p.add_argument("--formats",        type=str, default="9x16")
     p.add_argument("--no-export",      action="store_true")
@@ -98,9 +99,9 @@ def _estimate_duration(text: str) -> int:
 
 
 def _should_publish(args: argparse.Namespace) -> bool:
-    if args.no_publish:   return False
-    if args.script_only:  return False
-    if args.no_video:     return False
+    if args.no_publish:  return False
+    if args.script_only: return False
+    if args.no_video:    return False
     return credentials_available() or args.publish_fb
 
 
@@ -120,8 +121,7 @@ def _reset_used_videos() -> int:
     from db import _conn, _write_lock
     with _write_lock:
         with _conn() as c:
-            cursor = c.execute("DELETE FROM used_videos")
-            count  = cursor.rowcount
+            count = c.execute("DELETE FROM used_videos").rowcount
     print(f"  🗑️  Reset {count} used videos")
     return count
 
@@ -139,7 +139,8 @@ def _trim_silence(audio_path: str, output_path: str) -> str:
     r = subprocess.run(
         [
             "ffmpeg", "-y", "-i", audio_path,
-            "-af", "silenceremove=start_periods=1:start_duration=0.3:start_threshold=-40dB",
+            "-af",
+            "silenceremove=start_periods=1:start_duration=0.3:start_threshold=-40dB",
             "-c:a", "pcm_s16le", output_path,
         ],
         capture_output=True, text=True,
@@ -180,12 +181,13 @@ def _speed_up_audio(audio_path: str, speed: float, output_path: str) -> str:
     if r.returncode != 0 or not Path(output_path).exists():
         return audio_path
 
-    print(f"  ✅ Sped up to {speed}x")
+    dur = get_audio_duration(output_path)
+    print(f"  ✅ Sped up: {dur:.3f}s")
     return output_path
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ STEP A: PRODUCE FULL AUDIO (TTS + Music + SFX)
+# STEP A: PRODUCE FULL AUDIO
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_full_audio(
@@ -195,9 +197,8 @@ def produce_full_audio(
     sfx_type:     str   = "swoosh",
 ) -> tuple[Path, float]:
     """
-    إنتاج الصوت الكامل:
     TTS → Trim → Speed Up → Mix Music + SFX
-    يُرجع: (مسار الصوت, المدة)
+    Returns: (audio_path, duration)
     """
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
@@ -232,13 +233,14 @@ def produce_full_audio(
     else:
         wav_path = None
 
-    # 2. Trim Silence
+    # 2. Trim
     if wav_path:
         trimmed = _trim_silence(wav_path, f"{output_base}_voice_trimmed.wav")
         if trimmed != wav_path:
             wav_path = trimmed
             d = get_audio_duration(wav_path)
-            if d >= 5: real_dur = d
+            if d >= 5:
+                real_dur = d
 
     # 3. Speed Up
     speed = SPEED_MULTIPLIER.get(lang, 1.0)
@@ -247,50 +249,54 @@ def produce_full_audio(
         if sped != wav_path:
             wav_path = sped
             d = get_audio_duration(wav_path)
-            if d >= 5: real_dur = d
+            if d >= 5:
+                real_dur = d
             print(f"  📏 After speed: {real_dur:.3f}s")
 
     # 4. Mix Music + SFX
     mixed_out      = f"{output_base}_audio_mixed.aac"
     fallback_voice = wav_path or f"{output_base}_voice_0.wav"
     n_clips        = max(1, int(real_dur / CLIP_DURATION))
-    clip_dur       = [real_dur / n_clips] * n_clips
+    clip_dur_list  = [real_dur / n_clips] * n_clips
 
     try:
         final_audio = mix_voice_music_sfx(
             voice_path     = fallback_voice,
             content_type   = CONTENT_TYPE,
             output_path    = mixed_out,
-            clip_durations = clip_dur,
+            clip_durations = clip_dur_list,
             sfx_type       = sfx_type,
             music_volume   = music_volume,
             seed           = hash(script_data["title"]) % 10000,
             lang           = lang,
-            aligned        = [],  # لا aligned هنا — سيأتي لاحقاً
+            aligned        = [],
         )
         d = get_audio_duration(str(final_audio))
-        if d >= 5: real_dur = d
+        if d >= 5:
+            real_dur = d
+        print(f"  ✅ Audio ready: {real_dur:.3f}s")
         return Path(final_audio), real_dur
+
     except Exception as e:
-        print(f"  ⚠️  Mix error: {e}")
+        print(f"  ⚠️  Mix error: {e} — using raw voice")
         return Path(fallback_voice), real_dur
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ STEP B: PRODUCE BACKGROUND VIDEO (بدون نص)
+# STEP B: PRODUCE BACKGROUND VIDEO (بدون نص)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_bg_video(
-    video_paths:  list,
-    audio_path:   Path,
-    real_dur:     float,
-    out_base:     str,
-    script_data:  dict,
-    has_hook:     bool,
+    video_paths: list,
+    audio_path:  Path,
+    real_dur:    float,
+    out_base:    str,
+    script_data: dict,
+    has_hook:    bool,
 ) -> Path:
     """
-    إنتاج الفيديو الخلفي الكامل مع الصوت — بدون نص.
-    render.mjs يُشغَّل بوضع "bg_only" لإنتاج الخلفية فقط.
+    إنتاج فيديو خلفية كامل مع الصوت — بدون نص.
+    render.mjs وضع "bg_only"
     """
     manifest = {
         "title":         script_data["title"],
@@ -310,8 +316,7 @@ def produce_bg_video(
         "has_hook":      has_hook,
         "hook_keyword":  script_data.get("hook_keyword", ""),
         "custom_hook":   script_data.get("custom_hook", ""),
-        "aligned":       [],   # فارغ — سيُملأ بعد WhisperX
-        # ✅ وضع خاص: فيديو خلفية فقط بدون نص
+        "aligned":       [],
         "mode":          "bg_only",
     }
 
@@ -327,7 +332,7 @@ def produce_bg_video(
     if not script.exists():
         raise FileNotFoundError(f"render.mjs not found at {script}")
 
-    print(f"  🎬 Producing background video...")
+    print(f"\n  🎬 Producing background video (no text)...")
 
     r = subprocess.run(
         ["node", str(script), str(manifest_path), str(out)],
@@ -340,12 +345,12 @@ def produce_bg_video(
         raise RuntimeError(f"BG render failed:\n{r.stdout[-600:]}")
 
     mb = out.stat().st_size / 1_048_576 if out.exists() else 0
-    print(f"  ✅ BG video: {out.name} ({mb:.1f} MB)")
+    print(f"  ✅ BG video ready: {mb:.1f} MB")
     return out
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ STEP C: EXTRACT AUDIO FROM VIDEO
+# STEP C: EXTRACT AUDIO FROM VIDEO
 # ═════════════════════════════════════════════════════════════════════════════
 
 def extract_audio_from_video(
@@ -354,27 +359,25 @@ def extract_audio_from_video(
 ) -> str:
     """
     ✅ استخراج الصوت من الفيديو النهائي.
-    هذا هو الصوت الذي سيسمعه المشاهد بالضبط.
-    WhisperX سيحلل هذا الصوت → timestamps دقيقة 100%.
+    WhisperX يحلل هذا الصوت = نفس ما يسمعه المشاهد.
     """
-    print(f"  🔊 Extracting audio from final video...")
+    print(f"\n  🔊 Extracting audio from final video...")
 
     r = subprocess.run(
         [
             "ffmpeg", "-y",
             "-i", video_path,
-            "-vn",               # بدون فيديو
+            "-vn",
             "-acodec", "pcm_s16le",
-            "-ar", "16000",      # 16kHz لـ WhisperX
-            "-ac", "1",          # mono
+            "-ar", "16000",
+            "-ac", "1",
             output_path,
         ],
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
     )
 
     if r.returncode != 0:
-        print(f"  ⚠️  Audio extraction failed: {r.stderr[-150:]}")
+        print(f"  ⚠️  Extraction failed: {r.stderr[-150:]}")
         return video_path
 
     dur = get_audio_duration(output_path)
@@ -383,21 +386,23 @@ def extract_audio_from_video(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ STEP D: RENDER WORDS OVERLAY
+# STEP E: RENDER WORDS OVERLAY
 # ═════════════════════════════════════════════════════════════════════════════
 
 def render_words_overlay(
-    bg_video:     Path,
-    audio_path:   Path,
-    aligned:      list,
-    sentences:    list,
-    script_data:  dict,
-    out_base:     str,
+    bg_video:    Path,
+    audio_path:  Path,
+    aligned:     list,
+    sentences:   list,
+    script_data: dict,
+    out_base:    str,
 ) -> Path:
     """
-    ✅ Render الكلمات فوق الفيديو الخلفي.
-    aligned يأتي من WhisperX على الفيديو النهائي.
+    Render الكلمات فوق الفيديو الخلفي.
+    aligned من WhisperX على الفيديو النهائي → تزامن 100%.
     """
+    audio_dur = get_audio_duration(str(audio_path))
+
     manifest = {
         "title":         script_data["title"],
         "display_title": script_data.get("display_title", script_data["title"]),
@@ -405,21 +410,21 @@ def render_words_overlay(
         "emoji_right":   script_data.get("emoji_right", "💥"),
         "sentences":     sentences,
         "audio":         str(Path(str(audio_path)).resolve()),
-        # ✅ الفيديو الخلفي الكامل — ليس clips منفصلة
+        # ✅ الفيديو الخلفي الكامل كمصدر واحد
         "videos":        [str(bg_video.resolve())],
-        "duration_s":    get_audio_duration(str(audio_path)),
+        "duration_s":    audio_dur,
         "lang":          script_data.get("lang", "ar"),
         "content_type":  CONTENT_TYPE,
-        "power_words":   script_data.get("power_words", []),
+        "power_words":   script_data.get("power_words",   []),
         "accent_colors": script_data.get("accent_colors", []),
-        "analysis":      script_data.get("analysis", {}),
-        "clip_duration": get_audio_duration(str(audio_path)),  # كليب واحد = كل الفيديو
+        "analysis":      script_data.get("analysis",      {}),
+        # ✅ كليب واحد = مدة الفيديو كاملة
+        "clip_duration": audio_dur,
         "has_hook":      bool(script_data.get("hook_keyword", "")),
         "hook_keyword":  script_data.get("hook_keyword", ""),
-        "custom_hook":   script_data.get("custom_hook", ""),
+        "custom_hook":   script_data.get("custom_hook",  ""),
         # ✅ aligned من WhisperX على الفيديو النهائي
         "aligned":       aligned,
-        # ✅ وضع overlay فقط
         "mode":          "words_only",
     }
 
@@ -432,7 +437,10 @@ def render_words_overlay(
     out    = Path(f"{out_base}_final.mp4").resolve()
     script = RENDER_SCRIPT.resolve()
 
-    print(f"  🔧 Rendering words overlay...")
+    if not script.exists():
+        raise FileNotFoundError(f"render.mjs not found at {script}")
+
+    print(f"\n  🔧 Rendering words overlay...")
 
     r = subprocess.run(
         ["node", str(script), str(manifest_path), str(out)],
@@ -466,20 +474,25 @@ def get_or_create_ai_data(
     if not force_ai and has_ai_cache(cache_key):
         cached = get_ai_cache(cache_key)
         if cached and cached.get("hook_keyword"):
-            print(f"\n  ♻️  Using cached AI data for #{video_number}")
+            print(f"\n  ♻️  Using cached AI for #{video_number}")
             return cached
 
     content = _get_content_for_lang(record, lang)
     if not content:
         raise AIEnrichmentError(
-            f"No content found for #{video_number} ({lang.upper()})"
+            f"No content for #{video_number} ({lang.upper()})"
         )
 
-    enricher_record = {"number": video_number, "title": title, "content": content}
+    enricher_record = {
+        "number":  video_number,
+        "title":   title,
+        "content": content,
+    }
 
     try:
         enriched = enrich_record(
-            record=enricher_record, lang=lang, tagged=tagged, verbose=True,
+            record=enricher_record, lang=lang,
+            tagged=tagged, verbose=True,
         )
     except AIEnrichmentError:
         raise
@@ -518,7 +531,7 @@ def _build_script_data(
             power_words.get("en") or []
         )
 
-    emotion  = ai_data.get("analysis", {}).get("primary_emotion", "")
+    emotion   = ai_data.get("analysis", {}).get("primary_emotion", "")
     bg_styles = {"fear": "cinematic", "sadness": "cinematic", "awe": "blur"}
     bg_style  = bg_styles.get(emotion, "video")
 
@@ -550,7 +563,9 @@ def _rebuild_text_with_tag(tagged: list[dict]) -> list[dict]:
     for sent in tagged:
         final_tag = sent.get("final_tag")
         text      = sent.get("text", "")
-        sent["text_with_tag"] = f"[{final_tag}] {text}" if final_tag else text
+        sent["text_with_tag"] = (
+            f"[{final_tag}] {text}" if final_tag else text
+        )
     return tagged
 
 
@@ -566,7 +581,7 @@ def _do_publish(
     video_number: str,
 ) -> None:
     if not Path(video_path).exists():
-        print("  ❌ Publish skipped: video not found")
+        print("  ❌ Publish skipped: not found")
         return
 
     captions   = ai_data.get("captions", {})
@@ -587,7 +602,7 @@ def _do_publish(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ PROCESS ONE VIDEO — Pipeline الجديد الكامل
+# PROCESS ONE VIDEO
 # ═════════════════════════════════════════════════════════════════════════════
 
 def process_video(
@@ -610,7 +625,7 @@ def process_video(
         f.strip() for f in args.formats.split(",") if f.strip()
     ]
 
-    # ── 1. Parse tags ─────────────────────────────────────────────────────────
+    # ── 1. Parse tags ──────────────────────────────────────────────────────
     content = _get_content_for_lang(record, lang)
     if not content:
         print(f"  ❌ No content for #{num}")
@@ -622,10 +637,11 @@ def process_video(
         print(f"  ❌ No tagged content for #{num}")
         return
 
-    # ── 2. AI Enrichment ──────────────────────────────────────────────────────
+    # ── 2. AI Enrichment ───────────────────────────────────────────────────
     try:
         ai_data = get_or_create_ai_data(
-            record=record, lang=lang, tagged=tagged, force_ai=args.force_ai,
+            record=record, lang=lang,
+            tagged=tagged, force_ai=args.force_ai,
         )
     except AIEnrichmentError as e:
         print(f"\n  ⛔ AI enrichment failed: {e}")
@@ -633,7 +649,7 @@ def process_video(
 
     tagged = _rebuild_text_with_tag(ai_data.get("tagged") or tagged)
 
-    # ── 3. Build script data ──────────────────────────────────────────────────
+    # ── 3. Build script data ───────────────────────────────────────────────
     script_data = _build_script_data(record, lang, ai_data, tagged)
     if not script_data:
         print(f"  ❌ Cannot build script data")
@@ -648,29 +664,37 @@ def process_video(
         sentences=len(tagged), words=script_data["word_count"],
     )
 
-    # ── 4. Script-only mode ───────────────────────────────────────────────────
+    # ── 4. Script-only mode ────────────────────────────────────────────────
     if args.script_only:
         print_tags_summary(tagged, lang=lang)
+        analysis = ai_data.get("analysis", {})
+        if analysis:
+            print(f"  📊 {analysis.get('content_type')} | {analysis.get('primary_emotion')}")
         return
 
-    # ── 5. Fetch videos ───────────────────────────────────────────────────────
-    print(f"\n  📹 Fetching videos...")
+    # ── 5. Fetch videos ────────────────────────────────────────────────────
+    print(f"\n  📹 Fetching videos ({CLIP_DURATION}s per clip)...")
 
     visual_keywords = ai_data.get("visual_keywords", [])
     hook_keyword    = ai_data.get("hook_keyword", "")
     total_duration  = script_data["estimated_seconds"]
     n_clips         = max(1, int(total_duration / CLIP_DURATION))
 
+    print(f"  📊 Duration: {total_duration}s → {n_clips} clips")
+
     clip_keywords: list[list[str]] = []
     if hook_keyword:
-        clip_keywords.append([hook_keyword, "dramatic close-up", "intense moment"])
+        clip_keywords.append([
+            hook_keyword, "dramatic close-up", "intense moment",
+        ])
         remaining = n_clips - 1
     else:
         remaining = n_clips
 
     flat_kw: list[str] = []
     for kws in visual_keywords:
-        if isinstance(kws, list): flat_kw.extend(kws)
+        if isinstance(kws, list):
+            flat_kw.extend(kws)
     if not flat_kw:
         flat_kw = ["person thinking", "emotional moment", "deep thought"]
 
@@ -694,7 +718,7 @@ def process_video(
         print(f"  ❌ Video fetch failed: {e}")
         return
 
-    # ── 6. Audio-only mode ────────────────────────────────────────────────────
+    # ── 6. Audio-only mode ─────────────────────────────────────────────────
     if args.no_video:
         print(f"\n  🎵 Audio only...")
         try:
@@ -706,19 +730,21 @@ def process_video(
     mark_render_start(num, lang)
 
     try:
-        # ══════════════════════════════════════════════════════════════════════
-        # ✅ PIPELINE الجديد
-        # ══════════════════════════════════════════════════════════════════════
+        # ══════════════════════════════════════════════════════════════════
+        # ✅ PIPELINE الجديد — تزامن 100%
+        # ══════════════════════════════════════════════════════════════════
 
-        # A. إنتاج الصوت الكامل (TTS + Music + SFX)
-        print(f"\n  {'─'*50}")
-        print(f"  STEP A: Producing full audio...")
-        audio_path, real_dur = produce_full_audio(script_data, out_base)
-        print(f"  ✅ Audio ready: {real_dur:.3f}s")
+        # A. إنتاج الصوت الكامل
+        print(f"\n  {'─'*55}")
+        print(f"  ✅ STEP A: Full audio (TTS + Music + SFX)")
+        audio_path, real_dur = produce_full_audio(
+            script_data=script_data,
+            output_base=out_base,
+        )
 
-        # B. إنتاج الفيديو الخلفي بدون نص
-        print(f"\n  {'─'*50}")
-        print(f"  STEP B: Producing background video (no text)...")
+        # B. فيديو خلفية بدون نص
+        print(f"\n  {'─'*55}")
+        print(f"  ✅ STEP B: Background video (no text)")
         bg_video = produce_bg_video(
             video_paths = video_paths,
             audio_path  = audio_path,
@@ -728,36 +754,40 @@ def process_video(
             has_hook    = bool(hook_keyword),
         )
 
-        # C. ✅ استخراج الصوت من الفيديو النهائي
-        print(f"\n  {'─'*50}")
-        print(f"  STEP C: Extracting audio from final video...")
+        # C. استخراج الصوت من الفيديو النهائي
+        print(f"\n  {'─'*55}")
+        print(f"  ✅ STEP C: Extract audio from final video")
         extracted_audio = f"{out_base}_from_video.wav"
         extract_audio_from_video(str(bg_video), extracted_audio)
 
-        # D. ✅ WhisperX على الصوت المستخرج من الفيديو
-        print(f"\n  {'─'*50}")
-        print(f"  STEP D: WhisperX on final video audio...")
+        # D. WhisperX على الصوت المستخرج من الفيديو
+        print(f"\n  {'─'*55}")
+        print(f"  ✅ STEP D: WhisperX on final video audio")
         transcript = extract_transcript_from_audio(
-            extracted_audio, lang=lang
+            extracted_audio, lang=lang,
         )
 
-        aligned           = transcript["aligned"]   if transcript["success"] else []
-        whisper_sentences = transcript["sentences"] if transcript["success"] else script_data["sentences"]
-
         if transcript["success"]:
-            print(f"  ✅ WhisperX: {len(whisper_sentences)} sentences, "
-                  f"{sum(len(s.get('words',[])) for s in aligned)} words")
-        else:
-            print(f"  ⚠️  WhisperX failed — no text overlay")
-
-        # E. SRT subtitles
-        if aligned:
+            aligned           = transcript["aligned"]
+            whisper_sentences = transcript["sentences"]
+            total_words       = sum(
+                len(s.get("words", [])) for s in aligned
+            )
+            print(
+                f"  ✅ WhisperX: {len(whisper_sentences)} sentences, "
+                f"{total_words} words"
+            )
+            # SRT subtitles
             generate_srt(aligned, f"{out_base}.srt")
             generate_word_srt(aligned, f"{out_base}_words.srt")
+        else:
+            print(f"  ⚠️  WhisperX failed — no text overlay")
+            aligned           = []
+            whisper_sentences = script_data["sentences"]
 
-        # F. ✅ Render الكلمات فوق الفيديو
-        print(f"\n  {'─'*50}")
-        print(f"  STEP E: Rendering words overlay...")
+        # E. Render الكلمات فوق الفيديو
+        print(f"\n  {'─'*55}")
+        print(f"  ✅ STEP E: Render words overlay")
         final_video = render_words_overlay(
             bg_video    = bg_video,
             audio_path  = audio_path,
@@ -767,18 +797,26 @@ def process_video(
             out_base    = out_base,
         )
 
-        # G. Export additional formats
+        # Export additional formats
         if export_formats:
             export_all(str(final_video), out_base, export_formats)
 
         mark_render_done(num, lang, str(final_video), real_dur)
 
-        # H. Publish
+        # Publish
         if should_publish:
-            _do_publish(str(final_video), record, ai_data, lang, num)
+            _do_publish(
+                str(final_video), record, ai_data, lang, num,
+            )
 
-        mb = final_video.stat().st_size / 1_048_576 if final_video.exists() else 0
-        print(f"\n  ✅ Video #{num} ({lang.upper()}) → {final_video.name} ({mb:.1f} MB)")
+        mb = (
+            final_video.stat().st_size / 1_048_576
+            if final_video.exists() else 0
+        )
+        print(
+            f"\n  ✅ Video #{num} ({lang.upper()}) → "
+            f"{final_video.name} ({mb:.1f} MB)"
+        )
 
     except Exception as e:
         mark_render_failed(num, lang, str(e))
@@ -794,18 +832,26 @@ def main() -> None:
     args = parse_args()
     init_db()
 
+    # Cache management
     if args.show_ai_cache is not None:
-        show_ai_cache(args.show_ai_cache if args.show_ai_cache != "all" else None)
+        show_ai_cache(
+            args.show_ai_cache if args.show_ai_cache != "all" else None
+        )
         return
 
     if args.clear_ai_cache is not None:
-        count = clear_ai_cache() if args.clear_ai_cache == "all" else clear_ai_cache(args.clear_ai_cache)
+        count = (
+            clear_ai_cache()
+            if args.clear_ai_cache == "all"
+            else clear_ai_cache(args.clear_ai_cache)
+        )
         print(f"  🗑️  Cleared {count} entries")
         return
 
     if args.reset_videos:
         _reset_used_videos()
-        if not args.input_file: return
+        if not args.input_file:
+            return
 
     if not args.input_file:
         print("❌ Error: input_file is required")
@@ -820,6 +866,7 @@ def main() -> None:
     print(f"  Input    : {args.input_file}")
     print(f"  Language : {lang.upper()}")
     print(f"  Output   : {args.output_dir}")
+    print(f"  Pipeline : WhisperX from final video ✅")
     print()
     print_db_summary()
 
@@ -833,11 +880,12 @@ def main() -> None:
     try:
         all_scripts = read_scripts(args.input_file)
     except Exception as e:
-        print(f"❌  Cannot read file: {e}")
+        print(f"❌  Cannot read: {e}")
         sys.exit(1)
 
     valid, errors = validate_scripts(all_scripts)
-    for err in errors: print(err)
+    for err in errors:
+        print(err)
     if not valid:
         print("❌  No valid scripts")
         sys.exit(1)
@@ -848,14 +896,17 @@ def main() -> None:
         available = [str(s["number"]) for s in valid]
         next_num  = get_next_video_number(lang, available)
         if next_num is None:
-            print(f"\n  🔄 Looping from start!")
+            print(f"\n  🔄 Looping!")
             reset_published_for_lang(lang)
             next_num = str(valid[0]["number"])
         print(f"\n  🎯 Auto-next: #{next_num}")
         valid = [s for s in valid if str(s["number"]) == next_num]
 
     elif args.video_number:
-        valid = [s for s in valid if str(s["number"]) == str(args.video_number)]
+        valid = [
+            s for s in valid
+            if str(s["number"]) == str(args.video_number)
+        ]
         if not valid:
             print(f"❌  Video #{args.video_number} not found")
             sys.exit(1)
@@ -869,11 +920,19 @@ def main() -> None:
 
         if not args.force and is_render_done(record["number"], lang):
             if will_publish and not is_published(record["number"], lang):
-                out_base = str(Path(args.output_dir).resolve() / f"video_{record['number']}_{lang}")
+                out_base = str(
+                    Path(args.output_dir).resolve() /
+                    f"video_{record['number']}_{lang}"
+                )
                 path = f"{out_base}_final.mp4"
                 if Path(path).exists():
-                    ai_data = get_ai_cache(f"{record['number']}_{lang}") or {"captions": {}}
-                    _do_publish(path, record, ai_data, lang, record["number"])
+                    ai_data = (
+                        get_ai_cache(f"{record['number']}_{lang}")
+                        or {"captions": {}}
+                    )
+                    _do_publish(
+                        path, record, ai_data, lang, record["number"],
+                    )
             else:
                 print(f"  ⏭️  #{record['number']} already done")
             continue
@@ -881,7 +940,8 @@ def main() -> None:
         try:
             process_video(
                 record=record, args=args,
-                out_dir=args.output_dir, should_publish=will_publish,
+                out_dir=args.output_dir,
+                should_publish=will_publish,
             )
             success += 1
         except KeyboardInterrupt:
@@ -895,14 +955,20 @@ def main() -> None:
     # Thumbnails
     thumbnail_queue: list[tuple[str, str]] = []
     for record in valid:
-        out_base  = str(Path(args.output_dir).resolve() / f"video_{record['number']}_{lang}")
+        out_base  = str(
+            Path(args.output_dir).resolve() /
+            f"video_{record['number']}_{lang}"
+        )
         html_path = f"{out_base}_thumbnail.html"
         png_path  = f"{out_base}_thumbnail.png"
         if not Path(png_path).exists():
             try:
                 generate_thumbnail_html(
-                    title=record["title"], hook=record.get("title", ""),
-                    tone="energetic", lang=lang, output_path=html_path,
+                    title=record["title"],
+                    hook=record.get("title", ""),
+                    tone="energetic",
+                    lang=lang,
+                    output_path=html_path,
                 )
                 thumbnail_queue.append((html_path, png_path))
             except Exception:
@@ -916,7 +982,10 @@ def main() -> None:
             print(f"  ⚠️  Thumbnail error: {e}")
 
     print(f"\n{'═' * 62}")
-    print(f"  ✅  Done ({lang.upper()}) — {success} success | {failed} failed")
+    print(
+        f"  ✅  Done ({lang.upper()}) — "
+        f"{success} success | {failed} failed"
+    )
     print_db_summary()
     print(f"{'═' * 62}\n")
 
