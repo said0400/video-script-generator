@@ -8,8 +8,10 @@
   - Per-language voice config
   - WhisperX transcript sync
   - Facebook multi-page publishing
-  - EQ + Ducking audio pipeline
+  - EQ + Compressor + Ducking audio pipeline
+  - Smart SFX based on sentence content
   - Custom Hook from AI
+  - B-Roll smart keywords
 """
 
 from __future__ import annotations
@@ -336,7 +338,7 @@ def _speed_up_audio(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MANIFEST — مع custom_hook
+# MANIFEST — مع custom_hook و bg_style
 # ═════════════════════════════════════════════════════════════════════════════
 
 def save_manifest(
@@ -349,7 +351,6 @@ def save_manifest(
     real_duration:     float = None,
     whisper_sentences: list = None,
 ) -> Path:
-    """حفظ manifest.json لـ render.mjs."""
     sentences_for_display = (
         whisper_sentences
         if whisper_sentences
@@ -366,13 +367,12 @@ def save_manifest(
         "sentences":     sentences_for_display,
         "audio":         str(Path(str(audio_path)).resolve()),
         "videos":        [
-            str(Path(str(p)).resolve())
-            for p in video_paths
+            str(Path(str(p)).resolve()) for p in video_paths
         ],
         "duration_s":    real_duration or float(
             script_data["estimated_seconds"]
         ),
-        "lang":          script_data.get("lang",         "ar"),
+        "lang":          script_data.get("lang",          "ar"),
         "content_type":  CONTENT_TYPE,
         "power_words":   script_data.get("power_words",   []),
         "accent_colors": script_data.get("accent_colors", []),
@@ -380,8 +380,8 @@ def save_manifest(
         "clip_duration": CLIP_DURATION,
         "has_hook":      bool(script_data.get("has_hook", True)),
         "hook_keyword":  script_data.get("hook_keyword",  ""),
-        # ✅ custom_hook من AI
         "custom_hook":   script_data.get("custom_hook",   ""),
+        "bg_style":      script_data.get("bg_style",      "video"),
         "word_timeline": timeline or [],
         "aligned":       aligned  or [],
     }
@@ -420,16 +420,14 @@ def _render_node(
     )
 
     if r.returncode != 0:
-        raise RuntimeError(
-            f"Render failed:\n{r.stdout[-600:]}"
-        )
+        raise RuntimeError(f"Render failed:\n{r.stdout[-600:]}")
 
     print(f"  🎉 Done → {out.name}")
     return out
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AUDIO PIPELINE
+# AUDIO PIPELINE — مع Smart SFX
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_audio(
@@ -438,7 +436,7 @@ def produce_audio(
     music_volume: float = 0.12,
     sfx_type:     str   = "swoosh",
 ) -> tuple[Path, float, list, list, list]:
-    """إنتاج الصوت الكامل مع EQ + Ducking."""
+    """إنتاج الصوت الكامل مع EQ + Compressor + Ducking + Smart SFX."""
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
     voice_config     = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
@@ -524,11 +522,9 @@ def produce_audio(
                 s["text"] for s in tagged_sentences
             ]
     else:
-        whisper_sentences = [
-            s["text"] for s in tagged_sentences
-        ]
+        whisper_sentences = [s["text"] for s in tagged_sentences]
 
-    # ── 5. خلط الموسيقى مع EQ + Ducking ─────────────────────────────────────
+    # ── 5. ✨ خلط الموسيقى مع EQ + Compressor + Ducking + Smart SFX ──────────
     clip_dur       = _clip_durations_from_aligned(
         aligned, real_dur, len(whisper_sentences)
     )
@@ -546,6 +542,7 @@ def produce_audio(
             seed           = hash(script_data["title"]) % 10000,
             lang           = lang,
             aligned        = aligned,
+            sentences      = whisper_sentences,  # ✅ Smart SFX
         )
         dur = get_audio_duration(str(final_audio))
         if dur >= 5:
@@ -560,7 +557,7 @@ def produce_audio(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# BUILD SCRIPT DATA — مع custom_hook
+# BUILD SCRIPT DATA — مع custom_hook و bg_style
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _build_script_data(
@@ -591,6 +588,16 @@ def _build_script_data(
             []
         )
 
+    # ✨ اختيار نوع الخلفية بناءً على المشاعر
+    emotion   = ai_data.get("analysis", {}).get("primary_emotion", "")
+    bg_styles = {
+        "fear":    "cinematic",
+        "sadness": "cinematic",
+        "awe":     "blur",
+        "mystery": "blur",
+    }
+    bg_style = bg_styles.get(emotion, "video")
+
     return {
         "title":             record["title"],
         "display_title":     display_title,
@@ -609,8 +616,8 @@ def _build_script_data(
         "visual_keywords":   ai_data.get("visual_keywords", []),
         "analysis":          ai_data.get("analysis",        {}),
         "hook_keyword":      ai_data.get("hook_keyword",    ""),
-        # ✅ custom_hook من AI
         "custom_hook":       ai_data.get("custom_hook",     ""),
+        "bg_style":          bg_style,
         "has_hook":          bool(ai_data.get("hook_keyword", "")),
     }
 
@@ -692,9 +699,7 @@ def process_video(
     )
 
     export_formats = [] if args.no_export else [
-        f.strip()
-        for f in args.formats.split(",")
-        if f.strip()
+        f.strip() for f in args.formats.split(",") if f.strip()
     ]
 
     # ── 1. Parse tagged content ───────────────────────────────────────────────
@@ -732,10 +737,12 @@ def process_video(
         print(f"  ❌ Cannot build script data for #{num}")
         return
 
-    # ✅ طباعة custom_hook
+    # ✅ طباعة custom_hook و bg_style
     custom_hook = script_data.get("custom_hook", "")
+    bg_style    = script_data.get("bg_style", "video")
     if custom_hook:
         print(f"  🪝 Custom Hook: '{custom_hook}'")
+    print(f"  🖼️  BG Style: {bg_style}")
 
     save_script_meta(
         video_number = num,
@@ -757,10 +764,7 @@ def process_video(
         return
 
     # ── 5. Fetch stock videos ─────────────────────────────────────────────────
-    print(
-        f"\n  📹 Fetching stock videos "
-        f"({CLIP_DURATION}s per clip)..."
-    )
+    print(f"\n  📹 Fetching stock videos ({CLIP_DURATION}s per clip)...")
 
     visual_keywords = ai_data.get("visual_keywords", [])
     hook_keyword    = ai_data.get("hook_keyword", "")
@@ -889,9 +893,7 @@ def main() -> None:
 
     if args.show_ai_cache is not None:
         show_ai_cache(
-            args.show_ai_cache
-            if args.show_ai_cache != "all"
-            else None
+            args.show_ai_cache if args.show_ai_cache != "all" else None
         )
         return
 
@@ -932,10 +934,7 @@ def main() -> None:
     if will_publish:
         print(f"\n📘 Checking Facebook credentials...")
         if not check_credentials():
-            print(
-                "  ⚠️  FB credentials invalid "
-                "— auto-publish disabled"
-            )
+            print("  ⚠️  FB credentials invalid — auto-publish disabled")
             will_publish = False
 
     print(f"\n📖  Reading scripts...")
@@ -970,10 +969,7 @@ def main() -> None:
             next_num = str(valid[0]["number"])
 
         print(f"\n  🎯 Auto-next: Video #{next_num}")
-        valid = [
-            s for s in valid
-            if str(s["number"]) == next_num
-        ]
+        valid = [s for s in valid if str(s["number"]) == next_num]
 
     elif args.video_number:
         valid = [
@@ -992,13 +988,8 @@ def main() -> None:
     for i, record in enumerate(valid, 1):
         print(f"\n[{i}/{len(valid)}]")
 
-        if not args.force and is_render_done(
-            record["number"], lang
-        ):
-            if (
-                will_publish and
-                not is_published(record["number"], lang)
-            ):
+        if not args.force and is_render_done(record["number"], lang):
+            if will_publish and not is_published(record["number"], lang):
                 out_base = str(
                     Path(args.output_dir).resolve() /
                     f"video_{record['number']}_{lang}"
@@ -1006,14 +997,10 @@ def main() -> None:
                 path = f"{out_base}_final.mp4"
                 if Path(path).exists():
                     ai_data = (
-                        get_ai_cache(
-                            f"{record['number']}_{lang}"
-                        ) or {"captions": {}}
+                        get_ai_cache(f"{record['number']}_{lang}")
+                        or {"captions": {}}
                     )
-                    _do_publish(
-                        path, record, ai_data,
-                        lang, record["number"],
-                    )
+                    _do_publish(path, record, ai_data, lang, record["number"])
             else:
                 print(
                     f"  ⏭️  Video #{record['number']} "
@@ -1062,10 +1049,7 @@ def main() -> None:
                 pass
 
     if thumbnail_queue:
-        print(
-            f"\n🖼️  Rendering "
-            f"{len(thumbnail_queue)} thumbnail(s)..."
-        )
+        print(f"\n🖼️  Rendering {len(thumbnail_queue)} thumbnail(s)...")
         try:
             render_thumbnails_batch(thumbnail_queue)
         except Exception as e:
