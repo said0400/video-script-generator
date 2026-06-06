@@ -4,6 +4,7 @@ sync.py — Word-level audio synchronization using WhisperX
 ✅ لا offset — لا تعديل — WhisperX فقط
 ✅ يدعم AR, FR, EN
 ✅ متوافق مع WhisperX v3.8.x
+✅ FIX: يتحقق من speed_factor في الـ manifest ويعوض الـ timestamps
 """
 
 from __future__ import annotations
@@ -155,21 +156,26 @@ def _load_align_model(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def extract_transcript_from_audio(
-    audio_path: str,
-    lang:       str = "ar",
+    audio_path:   str,
+    lang:         str   = "ar",
+    speed_factor: float = 1.0,
 ) -> dict:
     """
     ✅ استخراج النص مع timestamps فعلية 100% دقيقة.
 
+    الـ speed_factor يُستخدم فقط لتحويل الـ timestamps إلى زمن الصوت الأصلي.
+    مثلاً: إذا كان الصوت مسرَّعاً x1.3، تصبح timestamps WhisperX في نطاق
+    [0, duration/1.3] — ونضربها في 1.3 لتتوافق مع الصوت الفعلي.
+
     المبدأ:
-    - WhisperX يحلل الصوت المُسرَّع مباشرة
-    - يُرجع timestamps للصوت الفعلي
-    - لا offset — لا تعديل — لا حسابات إضافية
-    - كل كلمة تظهر في وقتها بالضبط
+    - WhisperX يحلل الصوت المُمرَّر إليه مباشرة
+    - إذا كان الصوت مسرَّعاً، نُعوِّض الـ timestamps بضربها في speed_factor
+    - لا offset تعسفي — فقط تعويض رياضي دقيق
 
     Args:
-        audio_path: مسار ملف الصوت (بعد التسريع)
-        lang:       اللغة (ar, fr, en)
+        audio_path:   مسار ملف الصوت (بعد أي معالجة)
+        lang:         اللغة (ar, fr, en)
+        speed_factor: معامل التسريع (1.0 = لا تسريع، 1.3 = تسريع 30%)
 
     Returns:
         {
@@ -182,20 +188,30 @@ def extract_transcript_from_audio(
     """
     whisperx_lang = WHISPERX_LANG_MAP.get(lang, lang)
 
+    # ✅ تحقق من speed_factor
+    if speed_factor <= 0:
+        speed_factor = 1.0
+    speed_factor = float(speed_factor)
+
     print(
         f"\n  🎤 Extracting transcript from "
-        f"{Path(audio_path).name} (lang={lang})"
+        f"{Path(audio_path).name} (lang={lang}, speed={speed_factor:.3f}x)"
     )
 
     audio_duration = get_audio_duration(audio_path)
     print(f"  🎵 Audio duration: {audio_duration:.3f}s")
+    if speed_factor != 1.0:
+        original_duration = audio_duration * speed_factor
+        print(
+            f"  🔄 Speed factor: {speed_factor:.3f}x → "
+            f"original ~{original_duration:.3f}s"
+        )
 
-    # ✅ لا detect_speech_start — لا offset
-    # WhisperX يُرجع الوقت الفعلي مباشرة
     result = _extract_whisperx_direct(
         audio_path    = audio_path,
         lang          = whisperx_lang,
         audio_duration = audio_duration,
+        speed_factor  = speed_factor,
     )
 
     if result["success"]:
@@ -215,16 +231,21 @@ def _extract_whisperx_direct(
     audio_path:    str,
     lang:          str,
     audio_duration: float,
+    speed_factor:  float = 1.0,
 ) -> dict:
     """
-    ✅ استخراج مباشر من WhisperX بدون أي تعديل على الـ timestamps.
-    ما يُرجعه WhisperX هو بالضبط ما يُستخدم.
+    ✅ استخراج مباشر من WhisperX.
+
+    إذا كان speed_factor != 1.0، نضرب كل timestamp في speed_factor
+    لتحويلها من زمن الصوت المُعالَج إلى زمن الصوت الفعلي.
+
+    مثال: كلمة عند 1.0s في صوت مسرَّع x1.3 → تظهر عند 1.3s في الفيديو.
     """
     result = {
         "sentences":      [],
         "aligned":        [],
         "timeline":       [],
-        "total_duration": audio_duration,
+        "total_duration": audio_duration * speed_factor,
         "success":        False,
     }
 
@@ -290,7 +311,7 @@ def _extract_whisperx_direct(
                 print(f"  ⚠️  Alignment failed: {e}")
                 aligned_segments = None
 
-        # ── استخراج الكلمات مع timestamps فعلية ──────────────────────────────
+        # ── استخراج الكلمات مع timestamps ────────────────────────────────────
         sentences:      list[str]  = []
         all_words_flat: list[dict] = []
 
@@ -316,7 +337,7 @@ def _extract_whisperx_direct(
             sentences.append(text)
             sentence_words: list[dict] = []
 
-            # ✅ استخدام word-level timestamps مباشرة
+            # ✅ استخدام word-level timestamps
             if words_data:
                 for w_idx, w in enumerate(words_data):
                     if isinstance(w, dict):
@@ -333,11 +354,15 @@ def _extract_whisperx_direct(
                         w_start is not None and
                         w_end   is not None
                     ):
-                        # ✅ الوقت الفعلي مباشرة بدون تعديل
+                        # ✅ FIX: تطبيق speed_factor لتحويل timestamps
+                        # إلى زمن الصوت الفعلي (قبل التسريع)
+                        actual_start = float(w_start) * speed_factor
+                        actual_end   = float(w_end)   * speed_factor
+
                         entry = {
                             "word":  word_text,
-                            "start": round(float(w_start), 4),
-                            "end":   round(float(w_end),   4),
+                            "start": round(actual_start, 4),
+                            "end":   round(actual_end,   4),
                             "s_idx": s_idx,
                             "w_idx": w_idx,
                         }
@@ -348,12 +373,22 @@ def _extract_whisperx_direct(
             if not sentence_words:
                 words_in_text = text.split()
                 if words_in_text:
-                    word_dur = (seg_end - seg_start) / len(words_in_text)
+                    # ✅ FIX: تطبيق speed_factor على segment bounds أيضاً
+                    actual_seg_start = seg_start * speed_factor
+                    actual_seg_end   = seg_end   * speed_factor
+                    word_dur = (
+                        (actual_seg_end - actual_seg_start) /
+                        len(words_in_text)
+                    )
                     for w_idx, word_text in enumerate(words_in_text):
                         entry = {
                             "word":  word_text,
-                            "start": round(seg_start + w_idx * word_dur, 4),
-                            "end":   round(seg_start + (w_idx + 1) * word_dur, 4),
+                            "start": round(
+                                actual_seg_start + w_idx * word_dur, 4
+                            ),
+                            "end":   round(
+                                actual_seg_start + (w_idx + 1) * word_dur, 4
+                            ),
                             "s_idx": s_idx,
                             "w_idx": w_idx,
                         }
@@ -364,8 +399,14 @@ def _extract_whisperx_direct(
             print("  ⚠️  No sentences extracted")
             return result
 
-        # ✅ تصحيح بسيط: ضمان عدم التداخل وإزالة الكلمات بوقت سالب
-        all_words_flat = _fix_timestamps(all_words_flat, audio_duration)
+        # ✅ الـ audio_duration الفعلي هو مدة الصوت × speed_factor
+        effective_audio_duration = audio_duration * speed_factor
+
+        # تصحيح بسيط: ضمان عدم التداخل وإزالة الكلمات بوقت سالب
+        all_words_flat = _fix_timestamps(
+            all_words_flat,
+            effective_audio_duration,
+        )
 
         # ── بناء aligned ──────────────────────────────────────────────────────
         aligned_normalized: list[dict] = []
@@ -405,6 +446,11 @@ def _extract_whisperx_direct(
             f"  ✅ Extracted: {len(sentences)} sentences, "
             f"{len(all_words_flat)} words"
         )
+        if speed_factor != 1.0:
+            print(
+                f"  🔄 Timestamps scaled by {speed_factor:.3f}x "
+                f"(compensated for audio speed)"
+            )
         print("  🔍 Word timestamps (first 8):")
         for w in all_words_flat[:8]:
             print(
@@ -413,19 +459,22 @@ def _extract_whisperx_direct(
             )
 
         # حساب التغطية الفعلية
-        if all_words_flat and audio_duration > 0:
+        if all_words_flat and effective_audio_duration > 0:
             first_word = all_words_flat[0]["start"]
             last_word  = all_words_flat[-1]["end"]
-            coverage   = (last_word - first_word) / audio_duration * 100
+            coverage   = (
+                (last_word - first_word) / effective_audio_duration * 100
+            )
             print(
                 f"  📊 Coverage: {first_word:.3f}s → {last_word:.3f}s "
                 f"({coverage:.0f}% of audio)"
             )
 
-        result["sentences"] = sentences
-        result["aligned"]   = aligned_normalized
-        result["timeline"]  = timeline
-        result["success"]   = True
+        result["sentences"]      = sentences
+        result["aligned"]        = aligned_normalized
+        result["timeline"]       = timeline
+        result["total_duration"] = effective_audio_duration
+        result["success"]        = True
 
         return result
 
@@ -501,7 +550,6 @@ def _fix_timestamps(
         prev = fixed[i - 1]
         curr = fixed[i]
         if curr["start"] < prev["end"]:
-            # تداخل → اضبط بداية الكلمة الحالية
             curr["start"] = prev["end"] + MIN_GAP_BETWEEN_WORDS
             if curr["start"] >= curr["end"]:
                 curr["end"] = curr["start"] + MIN_WORD_DURATION
@@ -519,11 +567,14 @@ def _fix_timestamps(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_word_timestamps(
-    audio_path: str,
-    lang:       str = "ar",
+    audio_path:   str,
+    lang:         str   = "ar",
+    speed_factor: float = 1.0,
 ) -> list[dict]:
     """Backward compatibility wrapper."""
-    result = extract_transcript_from_audio(audio_path, lang)
+    result = extract_transcript_from_audio(
+        audio_path, lang, speed_factor
+    )
     if not result["success"]:
         return []
     words: list[dict] = []
