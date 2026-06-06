@@ -175,6 +175,49 @@ function isPowerWord(word) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ✅ FIX: STATE KEY BUILDER — مركزي لتوحيد مفاتيح الـ cache
+// هذه الدالة هي الحل الجذري لمشكلة عدم التطابق بين renderAllPNGs و buildFrameDir
+// ═══════════════════════════════════════════════════════════════════════════
+
+const HOOK_FRAMES = Math.floor(3.0 * FPS);
+
+/**
+ * يبني مفتاح الـ cache بشكل موحد ومركزي.
+ * كلا الدالتين renderAllPNGs و buildFrameDir تستخدمان هذه الدالة فقط.
+ * هذا يضمن 100% تطابق المفاتيح ولا يوجد frame بدون صورة.
+ */
+function buildStateKey(state, globalFrame) {
+  const isHookFrame = globalFrame < HOOK_FRAMES;
+  // title slide: كل frame مختلف حتى تكتمل الـ animation
+  const slideKey = globalFrame < TITLE_SLIDE_FRAMES
+    ? `sl${globalFrame}`
+    : "sld";
+
+  if (!state) {
+    return `empty_${isHookFrame ? "h" : "n"}_${slideKey}`;
+  }
+
+  // scale animation: 3 مراحل فقط (في بداية الكلمة، نهاية البداية، مكتمل)
+  // نستخدم مراحل أقل لتقليل عدد الصور المميزة مع الحفاظ على smooth animation
+  let scaleStage;
+  if (state.progress < 0.08) {
+    scaleStage = `a${Math.floor(state.progress * 200)}`;
+  } else if (state.progress < 0.15) {
+    scaleStage = "b";
+  } else {
+    scaleStage = "done";
+  }
+
+  return (
+    `w_${state.word}_p${state.isPower ? 1 : 0}` +
+    `_sc${scaleStage}` +
+    `_${isHookFrame ? "h" : "n"}` +
+    `_${slideKey}`
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
 // ✅ BUILD WORD-LEVEL FRAME MAP
 // كل كلمة تظهر في وقتها الفعلي من WhisperX
 // ═══════════════════════════════════════════════════════════════════════════
@@ -553,37 +596,22 @@ function buildHTML(opts) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function renderAllPNGs(page, frameStateMap) {
+  // ✅ FIX: نستخدم buildStateKey المركزية بدلاً من إعادة بناء المفاتيح يدوياً
   const uniqueStates = new Map();
-  const HOOK_FRAMES  = Math.floor(3.0 * FPS);
 
   for (let f = 0; f < frameStateMap.length; f++) {
-    const state       = frameStateMap[f];
-    const isHookFrame = f < HOOK_FRAMES;
-    const slideKey    = f < TITLE_SLIDE_FRAMES ? `sl${f}` : "sld";
+    const state = frameStateMap[f];
+    const key   = buildStateKey(state, f);
 
-    if (!state) {
-      const key = `empty_${isHookFrame ? "h" : "n"}_${slideKey}`;
-      if (!uniqueStates.has(key))
-        uniqueStates.set(key, {
-          word: null, isHookFrame, globalFrame: f,
-        });
-      continue;
-    }
-
-    const scaleStage = state.progress < 0.12
-      ? Math.floor(state.progress * 25)
-      : "done";
-
-    const key =
-      `w_${state.word}_p${state.isPower ? 1 : 0}` +
-      `_sc${scaleStage}` +
-      `_${isHookFrame ? "h" : "n"}` +
-      `_${slideKey}`;
-
-    if (!uniqueStates.has(key))
+    if (!uniqueStates.has(key)) {
       uniqueStates.set(key, {
-        ...state, isHookFrame, globalFrame: f,
+        word:        state?.word        ?? null,
+        progress:    state?.progress    ?? 0,
+        isPower:     state?.isPower     ?? false,
+        isHookFrame: f < HOOK_FRAMES,
+        globalFrame: f,
       });
+    }
   }
 
   console.log(`\n  📸 ${uniqueStates.size} unique states`);
@@ -610,10 +638,10 @@ async function renderAllPNGs(page, frameStateMap) {
   for (const [key, state] of uniqueStates) {
     const html = buildHTML({
       word:        state.word,
-      progress:    state.progress    || 0,
-      isPower:     state.isPower     || false,
-      isHookFrame: state.isHookFrame || false,
-      globalFrame: state.globalFrame || 0,
+      progress:    state.progress,
+      isPower:     state.isPower,
+      isHookFrame: state.isHookFrame,
+      globalFrame: state.globalFrame,
     });
 
     const htmlPath = `${TMP}/${key}.html`;
@@ -644,33 +672,26 @@ function buildFrameDir(clipFrameMap, pngCache, idx, clipStartFrame) {
   const dir = `${TMP}/frames_${idx}`;
   mkdirSync(dir, { recursive: true });
 
-  const HOOK_FRAMES = Math.floor(3.0 * FPS);
-
   for (let f = 0; f < clipFrameMap.length; f++) {
     const state       = clipFrameMap[f];
     const globalFrame = clipStartFrame + f;
-    const isHookFrame = globalFrame < HOOK_FRAMES;
-    const slideKey    = globalFrame < TITLE_SLIDE_FRAMES
-      ? `sl${globalFrame}`
-      : "sld";
 
-    let key;
-    if (!state) {
-      key = `empty_${isHookFrame ? "h" : "n"}_${slideKey}`;
-    } else {
-      const scaleStage = state.progress < 0.12
-        ? Math.floor(state.progress * 25)
-        : "done";
-      key =
-        `w_${state.word}_p${state.isPower ? 1 : 0}` +
-        `_sc${scaleStage}` +
-        `_${isHookFrame ? "h" : "n"}` +
-        `_${slideKey}`;
-    }
-
+    // ✅ FIX: نستخدم buildStateKey المركزية — نفس المفاتيح تماماً كـ renderAllPNGs
+    const key  = buildStateKey(state, globalFrame);
     const src  = pngCache.get(key);
     const dest = `${dir}/frame_${String(f).padStart(6, "0")}.png`;
-    if (!src) continue;
+
+    if (!src) {
+      // ✅ FIX: fallback ذكي — ابحث عن أقرب frame بدلاً من تخطيه
+      // هذا يمنع الـ black frames في الفيديو النهائي
+      const fallbackKey = buildStateKey(null, globalFrame);
+      const fallbackSrc = pngCache.get(fallbackKey);
+      if (fallbackSrc) {
+        try { symlinkSync(fallbackSrc, dest); }
+        catch { copyFileSync(fallbackSrc, dest); }
+      }
+      continue;
+    }
 
     try { symlinkSync(src, dest); }
     catch { copyFileSync(src, dest); }
