@@ -1,9 +1,9 @@
 """
 audio_manager.py — Background music and SFX mixing
 ✨ EQ تلقائي حسب اللغة
-✨ Ducking تلقائي للموسيقى عند بداية كل جملة
-✨ Compressor احترافي على الصوت
-✨ Smart SFX — مؤثرات صوتية ذكية حسب محتوى الجمل
+✨ Ducking تلقائي للموسيقى
+✨ Compressor احترافي
+✨ Smart SFX
 ✨ يدعم WAV و MP3
 """
 
@@ -19,7 +19,6 @@ from pathlib import Path
 
 from sync import get_audio_duration
 
-# ── Asset paths ───────────────────────────────────────────────────────────────
 BASE_DIR  = Path(__file__).parent.resolve()
 MUSIC_DIR = BASE_DIR / "assets" / "music"
 SFX_DIR   = BASE_DIR / "sfx"
@@ -34,162 +33,86 @@ SFX_POOLS: dict[str, Path] = {
     "whoosh": SFX_DIR / "whoosh",
 }
 
-# ✨ مجلد Smart SFX
 SMART_SFX_DIR = SFX_DIR / "smart"
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ✨ SMART SFX KEYWORDS — كلمات تُطلق مؤثر صوتي معين
-# ═════════════════════════════════════════════════════════════════════════════
-
 SFX_KEYWORDS: dict[str, list[str]] = {
-    # 💥 صدمة وانتباه
     "impact_heavy": [
         "صدمة", "مفاجأة", "انفجر", "ضرب", "سقط", "انهار",
         "shock", "explode", "crash", "hit", "boom", "collapse",
-        "choc", "explosion", "frappé", "s'effondre",
+        "choc", "explosion", "frappé",
     ],
     "impact_soft": [
-        "خفيف", "لمس", "هدوء", "سكينة",
-        "soft", "gentle", "touch", "calm",
-        "léger", "doux", "calme",
+        "خفيف", "لمس", "هدوء",
+        "soft", "gentle", "touch",
+        "léger", "doux",
     ],
-    "boom": [
-        "انفجار", "دمار", "هائل", "ضخم",
-        "explosion", "destroy", "massive", "huge",
-        "explosion", "destruction", "massif",
-    ],
-
-    # ❤️ مشاعر
     "heartbeat": [
-        "قلب", "حب", "عشق", "خفقان", "عاطفة", "شعور",
-        "heart", "love", "emotion", "feel", "romance",
-        "cœur", "amour", "émotion", "sentiment",
+        "قلب", "حب", "عشق", "خفقان", "عاطفة",
+        "heart", "love", "emotion", "feel",
+        "cœur", "amour", "émotion",
     ],
     "heartbeat_fast": [
-        "توتر", "قلق", "خوف", "رعب", "هلع", "رهبة",
-        "tension", "anxiety", "fear", "panic", "terror",
-        "stress", "anxiété", "peur", "terreur",
+        "توتر", "قلق", "خوف", "رعب", "هلع",
+        "tension", "anxiety", "fear", "panic",
+        "stress", "anxiété", "peur",
     ],
     "emotional_sting": [
-        "حزن", "ألم", "دموع", "فقد", "وداع",
-        "sad", "pain", "tears", "loss", "goodbye",
-        "triste", "douleur", "larmes", "perte",
+        "حزن", "ألم", "دموع", "فقد",
+        "sad", "pain", "tears", "loss",
+        "triste", "douleur", "larmes",
     ],
-
-    # 💰 مال ونجاح
     "coins": [
-        "مال", "فلوس", "ثروة", "ربح", "دخل", "غنى", "دولار", "ذهب",
-        "money", "cash", "wealth", "profit", "rich", "gold", "dollar",
-        "argent", "richesse", "profit", "or",
-    ],
-    "cash_register": [
-        "بيع", "شراء", "صفقة", "عقد", "تجارة",
-        "sell", "buy", "deal", "contract", "trade",
-        "vendre", "acheter", "affaire", "contrat",
+        "مال", "فلوس", "ثروة", "ربح", "غنى", "دولار", "ذهب",
+        "money", "cash", "wealth", "profit", "rich", "gold",
+        "argent", "richesse", "or",
     ],
     "success_bell": [
-        "نجاح", "فوز", "إنجاز", "حقق", "وصل", "تفوق",
-        "success", "win", "achieve", "accomplish", "excel",
-        "succès", "victoire", "réussite", "atteindre",
+        "نجاح", "فوز", "إنجاز", "حقق", "تفوق",
+        "success", "win", "achieve", "accomplish",
+        "succès", "victoire", "réussite",
     ],
     "celebration": [
-        "احتفال", "فرح", "بهجة", "عيد", "مبروك",
+        "احتفال", "فرح", "بهجة", "مبروك",
         "celebrate", "joy", "happy", "congratulations",
-        "célébration", "joie", "bonheur", "félicitations",
+        "célébration", "joie", "bonheur",
     ],
-    "level_up": [
-        "ترقية", "تطور", "تقدم", "نمو", "ارتقاء",
-        "upgrade", "evolve", "progress", "grow", "level up",
-        "amélioration", "évolution", "progrès", "grandir",
-    ],
-
-    # ⚠️ تحذير وخطر
     "warning_beep": [
-        "انتبه", "تحذير", "خطر", "احذر", "توقف",
-        "warning", "danger", "alert", "beware", "stop",
-        "attention", "danger", "alerte", "méfiance",
-    ],
-    "alarm": [
-        "إنذار", "طوارئ", "خطر شديد", "إطفاء",
-        "alarm", "emergency", "fire", "critical",
-        "alarme", "urgence", "incendie",
+        "انتبه", "تحذير", "خطر", "احذر",
+        "warning", "danger", "alert", "beware",
+        "attention", "danger", "alerte",
     ],
     "tick_tock": [
-        "وقت", "ساعة", "سرعة", "عاجل", "الآن", "موعد", "انتهى",
-        "time", "clock", "urgent", "now", "deadline", "over",
-        "temps", "horloge", "urgent", "maintenant", "délai",
+        "وقت", "ساعة", "عاجل", "الآن", "موعد",
+        "time", "clock", "urgent", "now", "deadline",
+        "temps", "horloge", "urgent",
     ],
-    "tension_rise": [
-        "توتر", "ضغط", "أزمة", "خطير",
-        "tension", "pressure", "crisis", "dangerous",
-        "tension", "pression", "crise", "dangereux",
-    ],
-
-    # 🔔 تنبيه
-    "notification": [
-        "إشعار", "رسالة", "خبر", "جديد",
-        "notification", "message", "news", "new",
-        "notification", "message", "nouvelles",
-    ],
-    "ding": [
-        "فكرة", "اكتشف", "علم", "تذكر",
-        "idea", "discover", "realize", "remember",
-        "idée", "découvrir", "réaliser", "rappeler",
-    ],
-
-    # 🤔 غموض وسر
     "suspense_sting": [
-        "سر", "غامض", "خفي", "مجهول", "لغز", "غموض",
-        "secret", "mystery", "hidden", "unknown", "puzzle",
-        "secret", "mystère", "caché", "inconnu", "énigme",
+        "سر", "غامض", "خفي", "مجهول", "لغز",
+        "secret", "mystery", "hidden", "unknown",
+        "secret", "mystère", "caché",
     ],
     "revelation": [
-        "كشف", "اعترف", "الحقيقة", "اكتشاف", "حقيقة",
-        "reveal", "confess", "truth", "discovery", "fact",
-        "révéler", "avouer", "vérité", "découverte",
+        "كشف", "اعترف", "الحقيقة", "اكتشاف",
+        "reveal", "confess", "truth", "discovery",
+        "révéler", "vérité", "découverte",
     ],
-    "deep_rumble": [
-        "خطير", "تحت السطح", "عميق", "مخفي",
-        "serious", "beneath", "deep", "underlying",
-        "sérieux", "profond", "caché",
-    ],
-
-    # 🌊 طبيعة
     "thunder": [
-        "رعد", "عاصفة", "قوة", "هائل", "جبار",
-        "thunder", "storm", "powerful", "massive", "mighty",
-        "tonnerre", "tempête", "puissant", "massif",
+        "رعد", "عاصفة", "قوة", "هائل",
+        "thunder", "storm", "powerful", "massive",
+        "tonnerre", "tempête", "puissant",
     ],
-    "water_drop": [
-        "قطرة", "ماء", "نقطة", "بداية صغيرة",
-        "drop", "water", "point", "small start",
-        "goutte", "eau", "point", "début",
-    ],
-    "fire_crackle": [
-        "نار", "اشتعل", "حرارة", "حماس",
-        "fire", "burn", "heat", "passion",
-        "feu", "brûler", "chaleur", "passion",
-    ],
-
-    # 👏 تفاعل جمهور
     "applause": [
-        "رائع", "ممتاز", "عظيم", "أحسنت", "بطل",
-        "amazing", "excellent", "great", "bravo", "hero",
-        "incroyable", "excellent", "formidable", "bravo",
+        "رائع", "ممتاز", "عظيم", "أحسنت",
+        "amazing", "excellent", "great", "bravo",
+        "incroyable", "excellent", "bravo",
     ],
     "crowd_gasp": [
-        "لا يصدق", "مستحيل", "غير معقول", "لا يُتخيّل",
-        "unbelievable", "impossible", "incredible", "unimaginable",
-        "incroyable", "impossible", "impensable",
-    ],
-    "crowd_wow": [
-        "مدهش", "رهيب", "استثنائي", "خارق",
-        "amazing", "awesome", "exceptional", "extraordinary",
-        "étonnant", "formidable", "exceptionnel",
+        "لا يصدق", "مستحيل", "غير معقول",
+        "unbelievable", "impossible", "incredible",
+        "incroyable", "impossible",
     ],
 }
 
-# ── EQ settings ───────────────────────────────────────────────────────────────
 LANG_EQ: dict[str, str] = {
     "ar": (
         "equalizer=f=80:width_type=o:width=2:g=3,"
@@ -240,25 +163,23 @@ def _safe_unlink(path: str | Path) -> None:
 
 
 def _get_audio_files(directory: Path) -> list[Path]:
-    """احصل على كل ملفات WAV و MP3 في مجلد."""
+    """يدعم WAV و MP3."""
     if not directory.exists():
         return []
-    files = (
+    return (
         list(directory.glob("*.wav")) +
         list(directory.glob("*.mp3")) +
         list(directory.glob("*.WAV")) +
         list(directory.glob("*.MP3"))
     )
-    return files
 
 
 def _normalize_text(text: str) -> str:
-    """تطبيع النص للمقارنة."""
     return re.sub(r"[^\w\s]", " ", text.lower()).strip()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MUSIC & SFX SELECTION
+# MUSIC & SFX
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_music_file(
@@ -291,70 +212,27 @@ def get_sfx_file(
     pool_dir = SFX_POOLS.get(sfx_type)
     if not pool_dir or not pool_dir.exists():
         return None
-
     files = _get_audio_files(pool_dir)
     if not files:
         return None
-
     return random.Random(seed).choice(files)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✨ SMART SFX — اكتشاف المؤثر المناسب لكل جملة
+# SMART SFX
 # ═════════════════════════════════════════════════════════════════════════════
-
-def _find_smart_sfx(text: str) -> Path | None:
-    """
-    يبحث في نص الجملة عن كلمات مفتاحية
-    ويُرجع مسار المؤثر الصوتي المناسب.
-
-    يدعم: WAV و MP3
-    """
-    if not SMART_SFX_DIR.exists():
-        return None
-
-    normalized = _normalize_text(text)
-
-    for sfx_name, keywords in SFX_KEYWORDS.items():
-        for kw in keywords:
-            if _normalize_text(kw) in normalized:
-                # ابحث عن الملف بأي امتداد
-                for ext in (".wav", ".mp3", ".WAV", ".MP3"):
-                    sfx_file = SMART_SFX_DIR / f"{sfx_name}{ext}"
-                    if sfx_file.exists():
-                        return sfx_file
-
-                # إذا لم يجد الاسم الدقيق، ابحث عن أي ملف يحتوي الاسم
-                for f in _get_audio_files(SMART_SFX_DIR):
-                    if sfx_name in f.stem.lower():
-                        return f
-
-    return None
-
 
 def detect_smart_sfx_for_sentences(
     sentences: list[str],
 ) -> list[dict | None]:
-    """
-    يحلل كل جملة ويُحدد المؤثر الصوتي المناسب لها.
-
-    Returns:
-        list of {
-            "sfx_path": Path,
-            "sfx_name": str,
-            "keyword":  str,
-        } or None لكل جملة
-    """
     results = []
-
     for sentence in sentences:
         normalized = _normalize_text(sentence)
-        found = False
+        found      = False
 
         for sfx_name, keywords in SFX_KEYWORDS.items():
             for kw in keywords:
                 if _normalize_text(kw) in normalized:
-                    # ابحث عن الملف
                     sfx_path = None
                     for ext in (".wav", ".mp3", ".WAV", ".MP3"):
                         candidate = SMART_SFX_DIR / f"{sfx_name}{ext}"
@@ -376,7 +254,6 @@ def detect_smart_sfx_for_sentences(
                         })
                         found = True
                         break
-
             if found:
                 break
 
@@ -387,48 +264,28 @@ def detect_smart_sfx_for_sentences(
 
 
 def build_smart_sfx_track(
-    sentences:      list[str],
-    aligned:        list[dict],
-    output_path:    str,
-    sfx_volume:     float = 0.4,
+    sentences:   list[str],
+    aligned:     list[dict],
+    output_path: str,
+    sfx_volume:  float = 0.4,
 ) -> Path | None:
-    """
-    يبني track SFX ذكي حيث كل مؤثر يُشغَّل
-    عند بداية الجملة المناسبة له.
-
-    Args:
-        sentences:   قائمة الجمل
-        aligned:     بيانات التوقيت من WhisperX
-        output_path: مسار الملف الناتج
-        sfx_volume:  مستوى صوت المؤثرات
-
-    Returns:
-        Path للملف الناتج أو None إذا لم يوجد مؤثرات
-    """
     if not SMART_SFX_DIR.exists():
-        print("  ⚠️  Smart SFX dir not found — skipping")
         return None
 
     if not sentences or not aligned:
         return None
 
-    # اكتشف المؤثرات لكل جملة
-    sfx_detections = detect_smart_sfx_for_sentences(sentences)
+    sfx_detections  = detect_smart_sfx_for_sentences(sentences)
+    sentence_times  = [float(seg.get("start", 0)) for seg in aligned[:len(sentences)]]
 
-    # احسب أوقات بداية كل جملة
-    sentence_times: list[float] = []
-    for i, seg in enumerate(aligned[:len(sentences)]):
-        sentence_times.append(float(seg.get("start", 0)))
-
-    # اجمع المؤثرات التي وُجدت فعلاً
     active_sfx: list[dict] = []
     for i, detection in enumerate(sfx_detections):
         if detection and i < len(sentence_times):
             active_sfx.append({
-                "path":      detection["sfx_path"],
-                "name":      detection["sfx_name"],
-                "keyword":   detection["keyword"],
-                "time":      sentence_times[i],
+                "path":    detection["sfx_path"],
+                "name":    detection["sfx_name"],
+                "keyword": detection["keyword"],
+                "time":    sentence_times[i],
             })
 
     if not active_sfx:
@@ -436,18 +293,10 @@ def build_smart_sfx_track(
 
     print(f"  🔊 Smart SFX: {len(active_sfx)} effects detected")
     for sfx in active_sfx:
-        print(
-            f"     [{sfx['time']:.2f}s] {sfx['name']} "
-            f"← '{sfx['keyword']}'"
-        )
+        print(f"     [{sfx['time']:.2f}s] {sfx['name']} ← '{sfx['keyword']}'")
 
-    # احسب المدة الكاملة
-    if aligned:
-        total_dur = float(aligned[-1].get("end", 30))
-    else:
-        total_dur = max(s["time"] for s in active_sfx) + 3.0
+    total_dur = float(aligned[-1].get("end", 30)) if aligned else 30.0
 
-    # بناء ffmpeg command
     inputs: list[str] = []
     delays: list[str] = []
 
@@ -455,17 +304,14 @@ def build_smart_sfx_track(
         inputs += ["-i", str(sfx["path"])]
         delay_ms = int(sfx["time"] * 1000)
         delays.append(
-            f"[{i}:a]"
-            f"volume={sfx_volume},"
-            f"adelay={delay_ms}|{delay_ms}"
-            f"[sfx{i}]"
+            f"[{i}:a]volume={sfx_volume},"
+            f"adelay={delay_ms}|{delay_ms}[sfx{i}]"
         )
 
     mix_inputs = "".join(f"[sfx{i}]" for i in range(len(delays)))
     filter_str = (
         ";".join(delays) +
-        f";{mix_inputs}"
-        f"amix=inputs={len(delays)}:normalize=0[out]"
+        f";{mix_inputs}amix=inputs={len(delays)}:normalize=0[out]"
     )
 
     result = subprocess.run(
@@ -486,33 +332,25 @@ def build_smart_sfx_track(
         print(f"  ⚠️  Smart SFX track failed: {result.stderr[-150:]}")
         return None
 
-    print(f"  ✅ Smart SFX track built: {len(active_sfx)} effects")
+    print(f"  ✅ Smart SFX track built")
     return Path(output_path)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# COMPRESSOR
+# COMPRESSOR + EQ
 # ═════════════════════════════════════════════════════════════════════════════
 
-def apply_compressor(
-    audio_path:  str,
-    output_path: str,
-) -> str:
+def apply_compressor(audio_path: str, output_path: str) -> str:
     if not Path(audio_path).exists():
         return audio_path
 
     print("  🎛️  Applying audio compressor...")
 
     r = subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-i", audio_path,
-            "-af", COMPRESSOR_FILTER,
-            "-c:a", "pcm_s16le",
-            output_path,
-        ],
-        capture_output=True,
-        text=True,
+        ["ffmpeg", "-y", "-i", audio_path,
+         "-af", COMPRESSOR_FILTER,
+         "-c:a", "pcm_s16le", output_path],
+        capture_output=True, text=True,
     )
 
     if r.returncode != 0:
@@ -523,29 +361,15 @@ def apply_compressor(
     return output_path
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# EQ
-# ═════════════════════════════════════════════════════════════════════════════
-
-def apply_eq(
-    audio_path:  str,
-    output_path: str,
-    lang:        str = "ar",
-) -> str:
+def apply_eq(audio_path: str, output_path: str, lang: str = "ar") -> str:
     eq_filter = LANG_EQ.get(lang, LANG_EQ["ar"])
-
     print(f"  🎚️  Applying {lang.upper()} EQ...")
 
     r = subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-i", audio_path,
-            "-af", eq_filter,
-            "-c:a", "pcm_s16le",
-            output_path,
-        ],
-        capture_output=True,
-        text=True,
+        ["ffmpeg", "-y", "-i", audio_path,
+         "-af", eq_filter,
+         "-c:a", "pcm_s16le", output_path],
+        capture_output=True, text=True,
     )
 
     if r.returncode != 0:
@@ -557,7 +381,7 @@ def apply_eq(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# DUCKING
+# ✅ DUCKING — إصلاح نهائي
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _build_ducking_filter(
@@ -567,38 +391,51 @@ def _build_ducking_filter(
     duck_volume:  float = 0.06,
     fade_time:    float = 0.3,
 ) -> str:
+    """
+    ✅ إصلاح: بناء filter Ducking صحيح لـ FFmpeg.
+    إذا فشل أي شيء → يُرجع volume ثابت.
+    """
     if not aligned or len(aligned) == 0:
         return f"volume={music_volume}"
 
-    volume_points = [f"0/{music_volume}"]
+    try:
+        volume_points: list[str] = [f"0/{music_volume}"]
 
-    for seg in aligned:
-        start      = float(seg.get("start", 0))
-        end        = float(seg.get("end", start + 1))
-        duck_start = max(0, start - fade_time)
-        duck_end   = min(voice_dur, end + fade_time)
+        for seg in aligned:
+            start      = float(seg.get("start", 0))
+            end        = float(seg.get("end", start + 1))
+            duck_start = max(0.0, start - fade_time)
+            duck_end   = min(voice_dur, end + fade_time)
 
-        volume_points.append(f"{duck_start:.3f}/{music_volume}")
-        volume_points.append(f"{start:.3f}/{duck_volume}")
-        volume_points.append(f"{end:.3f}/{duck_volume}")
-        volume_points.append(f"{duck_end:.3f}/{music_volume}")
+            volume_points.append(f"{duck_start:.3f}/{music_volume}")
+            volume_points.append(f"{start:.3f}/{duck_volume}")
+            volume_points.append(f"{end:.3f}/{duck_volume}")
+            volume_points.append(f"{duck_end:.3f}/{music_volume}")
 
-    volume_points.append(f"{voice_dur:.3f}/{music_volume}")
+        volume_points.append(f"{voice_dur:.3f}/{music_volume}")
 
-    seen_times  : set[str]  = set()
-    clean_points: list[str] = []
-    for point in volume_points:
-        t = point.split("/")[0]
-        if t not in seen_times:
-            seen_times.add(t)
-            clean_points.append(point)
+        # إزالة التكرار وترتيب
+        seen:   set[str]  = set()
+        clean:  list[str] = []
+        for point in volume_points:
+            t = point.split("/")[0]
+            if t not in seen:
+                seen.add(t)
+                clean.append(point)
 
-    clean_points.sort(key=lambda x: float(x.split("/")[0]))
-    return f"volume='{('|').join(clean_points)}':eval=frame"
+        clean.sort(key=lambda x: float(x.split("/")[0]))
+
+        # ✅ بناء الـ filter بشكل صحيح
+        points_str = "|".join(clean)
+        return f"volume='{points_str}':eval=frame"
+
+    except Exception as e:
+        print(f"  ⚠️  Ducking filter error: {e} — using flat volume")
+        return f"volume={music_volume}"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AUDIO MIXING
+# ✅ AUDIO MIXING — إصلاح نهائي
 # ═════════════════════════════════════════════════════════════════════════════
 
 def mix_audio(
@@ -623,39 +460,33 @@ def mix_audio(
         f"lang={lang.upper()}"
     )
 
-    if aligned and len(aligned) > 0:
-        duck_volume  = music_volume * 0.5
-        duck_filter  = _build_ducking_filter(
-            aligned      = aligned,
-            voice_dur    = voice_dur,
-            music_volume = music_volume,
-            duck_volume  = duck_volume,
-        )
-        music_filter = (
-            f"{duck_filter},"
-            f"afade=t=in:st=0:d={fade_in},"
-            f"afade=t=out:st={fade_out_st:.3f}:d={fade_out},"
-            f"atrim=0:{voice_dur:.3f}"
-        )
-    else:
-        music_filter = (
-            f"volume={music_volume},"
-            f"afade=t=in:st=0:d={fade_in},"
-            f"afade=t=out:st={fade_out_st:.3f}:d={fade_out},"
-            f"atrim=0:{voice_dur:.3f}"
-        )
+    # ✅ بناء music filter بشكل آمن
+    duck_filter = _build_ducking_filter(
+        aligned      = aligned or [],
+        voice_dur    = voice_dur,
+        music_volume = music_volume,
+        duck_volume  = music_volume * 0.5,
+    )
+
+    # ✅ بناء filter_complex بشكل صحيح ومنفصل
+    music_af = (
+        f"{duck_filter},"
+        f"afade=t=in:st=0:d={fade_in:.3f},"
+        f"afade=t=out:st={fade_out_st:.3f}:d={fade_out:.3f},"
+        f"atrim=0:{voice_dur:.3f}"
+    )
+
+    filter_complex = (
+        f"[1:a]{music_af}[music];"
+        f"[0:a][music]amix=inputs=2:duration=first:normalize=0[out]"
+    )
 
     result = subprocess.run(
         [
             "ffmpeg", "-y",
             "-i", voice_path,
             "-stream_loop", "-1", "-i", music_path,
-            "-filter_complex",
-            (
-                f"[1:a]{music_filter}[music];"
-                f"[0:a][music]amix=inputs=2:"
-                f"duration=first:normalize=0[out]"
-            ),
+            "-filter_complex", filter_complex,
             "-map", "[out]",
             "-c:a", "aac", "-b:a", "192k",
             "-t", f"{voice_dur:.3f}",
@@ -666,8 +497,44 @@ def mix_audio(
     )
 
     if result.returncode != 0:
-        print(f"  ⚠️  Audio mix failed: {result.stderr[-200:]}")
-        return Path(voice_path)
+        print(f"  ⚠️  Audio mix failed — trying simple mix...")
+        print(f"     Error: {result.stderr[-200:]}")
+
+        # ✅ Fallback: mix بسيط بدون Ducking
+        simple_filter = (
+            f"[1:a]volume={music_volume},"
+            f"afade=t=in:st=0:d={fade_in:.3f},"
+            f"afade=t=out:st={fade_out_st:.3f}:d={fade_out:.3f},"
+            f"atrim=0:{voice_dur:.3f}[music];"
+            f"[0:a][music]amix=inputs=2:duration=first:normalize=0[out]"
+        )
+
+        result2 = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", voice_path,
+                "-stream_loop", "-1", "-i", music_path,
+                "-filter_complex", simple_filter,
+                "-map", "[out]",
+                "-c:a", "aac", "-b:a", "192k",
+                "-t", f"{voice_dur:.3f}",
+                output_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        if result2.returncode != 0:
+            print(f"  ⚠️  Simple mix also failed — voice only")
+            return Path(voice_path)
+
+        print(f"  ✅ Mixed (simple) → {Path(output_path).name}")
+        return Path(output_path)
+
+    if aligned and len(aligned) > 0:
+        print(
+            f"  🦆 Ducking applied: {len(aligned)} sentences"
+        )
 
     print(f"  ✅ Mixed → {Path(output_path).name}")
     return Path(output_path)
@@ -714,9 +581,7 @@ def build_sfx_track(
         sfx_file   = random.choice(all_sfx)
         inputs    += ["-i", str(sfx_file)]
         delay_ms   = int(trans_t * 1000)
-        delays.append(
-            f"[{i}:a]adelay={delay_ms}|{delay_ms}[sfx{i}]"
-        )
+        delays.append(f"[{i}:a]adelay={delay_ms}|{delay_ms}[sfx{i}]")
 
     mix_inputs = "".join(f"[sfx{i}]" for i in range(len(delays)))
     filter_str = (
@@ -734,8 +599,7 @@ def build_sfx_track(
             "-c:a", "pcm_s16le",
             output_path,
         ],
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
     )
 
     if result.returncode != 0:
@@ -747,7 +611,7 @@ def build_sfx_track(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# FULL PIPELINE — Compressor + EQ + Ducking + Smart SFX
+# FULL PIPELINE
 # ═════════════════════════════════════════════════════════════════════════════
 
 def mix_voice_music_sfx(
@@ -765,12 +629,12 @@ def mix_voice_music_sfx(
 ) -> Path:
     """
     Full audio pipeline:
-      1. Compressor على الصوت
+      1. Compressor
       2. EQ حسب اللغة
       3. اختيار موسيقى
       4. Mix مع Ducking
       5. SFX انتقالات
-      6. ✨ Smart SFX حسب محتوى الجمل
+      6. Smart SFX حسب محتوى الجمل
     """
 
     # ── 1. Compressor ─────────────────────────────────────────────────────────
@@ -784,7 +648,7 @@ def mix_voice_music_sfx(
     if voice_processed != voice_path:
         _safe_unlink(comp_path)
 
-    # ── 3. اختيار الموسيقى ───────────────────────────────────────────────────
+    # ── 3. الموسيقى ───────────────────────────────────────────────────────────
     music_file = get_music_file(content_type, seed=seed)
 
     if music_file is None:
@@ -812,12 +676,12 @@ def mix_voice_music_sfx(
         return Path(voice_path)
 
     # ── 5. SFX انتقالات ──────────────────────────────────────────────────────
-    sfx_tmp_path: str | None = None
     after_transitions = str(mixed)
+    sfx_tmp_path: str | None = None
 
     if clip_durations and len(clip_durations) > 1:
-        sfx_tmp_path    = _make_temp_path("sfx_track_", ".wav")
-        transition_out  = _make_temp_path("after_trans_", ".aac")
+        sfx_tmp_path   = _make_temp_path("sfx_track_", ".wav")
+        transition_out = _make_temp_path("after_trans_", ".aac")
 
         sfx_track = build_sfx_track(
             n_clips        = len(clip_durations),
@@ -847,8 +711,7 @@ def mix_voice_music_sfx(
                     "-t", f"{dur:.3f}",
                     transition_out,
                 ],
-                capture_output=True,
-                text=True,
+                capture_output=True, text=True,
             )
 
             _safe_unlink(mixed_path)
@@ -856,11 +719,12 @@ def mix_voice_music_sfx(
 
             if result.returncode == 0:
                 after_transitions = transition_out
-                print(f"  ✅ Transitions SFX added")
+                print("  ✅ Transitions SFX added")
             else:
                 after_transitions = str(mixed)
+                print(f"  ⚠️  Transitions SFX failed")
 
-    # ── 6. ✨ Smart SFX حسب محتوى الجمل ──────────────────────────────────────
+    # ── 6. Smart SFX ──────────────────────────────────────────────────────────
     if sentences and aligned and SMART_SFX_DIR.exists():
         smart_sfx_path = _make_temp_path("smart_sfx_", ".wav")
         smart_track    = build_smart_sfx_track(
@@ -890,11 +754,9 @@ def mix_voice_music_sfx(
                     "-t", f"{dur:.3f}",
                     output_path,
                 ],
-                capture_output=True,
-                text=True,
+                capture_output=True, text=True,
             )
 
-            # تنظيف
             if after_transitions != str(mixed):
                 _safe_unlink(after_transitions)
             _safe_unlink(smart_sfx_path)
@@ -906,12 +768,9 @@ def mix_voice_music_sfx(
                 )
                 return Path(output_path)
             else:
-                print(
-                    f"  ⚠️  Smart SFX merge failed: "
-                    f"{result.stderr[-150:]}"
-                )
+                print(f"  ⚠️  Smart SFX merge failed")
 
-    # بدون Smart SFX — انقل الملف النهائي
+    # بدون Smart SFX
     if after_transitions != output_path:
         if Path(after_transitions).exists():
             shutil.move(after_transitions, output_path)
