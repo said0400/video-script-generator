@@ -84,9 +84,9 @@ function probeDuration(filePath) {
   return parseFloat(r.stdout.toString().trim()) || 0;
 }
 
-const realAudioDuration  = probeDuration(audio);
-const effectiveDuration  = realAudioDuration > 1 ? realAudioDuration : duration_s;
-const totalFrames        = Math.ceil(effectiveDuration * FPS);
+const realAudioDuration = probeDuration(audio);
+const effectiveDuration = realAudioDuration > 1 ? realAudioDuration : duration_s;
+const totalFrames       = Math.ceil(effectiveDuration * FPS);
 
 console.log(`🎵 Audio: ${realAudioDuration.toFixed(3)}s | Frames: ${totalFrames}`);
 
@@ -129,7 +129,7 @@ function isPowerWord(w) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ BUILD WORD LIST — مباشرة من WhisperX بدون أي تعديل على الـ timestamps
+// BUILD WORD LIST — timestamps مباشرة من WhisperX بدون أي تعديل
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildWordList() {
@@ -142,7 +142,6 @@ function buildWordList() {
         if (!w.word) continue;
         const start = parseFloat(w.start);
         const end   = parseFloat(w.end);
-        // ✅ نقبل فقط الكلمات التي لها timestamps صحيحة وموجبة
         if (isNaN(start) || isNaN(end) || start < 0 || end <= start) continue;
         words.push({
           word:    w.word.trim(),
@@ -171,53 +170,50 @@ function buildWordList() {
 
   if (words.length === 0) return [];
 
-  // ✅ ترتيب بالوقت فقط — لا تعديل على القيم
+  // ✅ ترتيب بالوقت فقط — كما يُرجعه WhisperX مباشرة
   words.sort((a, b) => a.start - b.start);
 
   console.log(`📊 Words: ${words.length}`);
-  console.log(`   [0] ${words[0].start.toFixed(3)}s → ${words[0].end.toFixed(3)}s "${words[0].word}"`);
+  console.log(`   [0]  ${words[0].start.toFixed(3)}s → ${words[0].end.toFixed(3)}s "${words[0].word}"`);
   console.log(`   [-1] ${words[words.length-1].start.toFixed(3)}s → ${words[words.length-1].end.toFixed(3)}s "${words[words.length-1].word}"`);
 
   return words;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ FRAME → WORD LOOKUP
-// لكل frame: وقته الفعلي = f / FPS
-// نبحث عن الكلمة التي start <= t < end بالضبط
+// ✅ BUILD FRAME STATE MAP
+// - t = f / FPS (بداية الـ frame — لا انزياح)
+// - سماحية 5ms عند البداية للتوافق مع النطق البشري
+// - linear scan بترتيب الزمن (أدق من binary search للبيانات المرتبة)
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildFrameStateMap(words) {
   const map = new Array(totalFrames).fill(null);
-  if (words.length === 0) return map;
+
+  if (!words.length) return map;
+
+  let wi = 0;
 
   for (let f = 0; f < totalFrames; f++) {
-    // ✅ وقت منتصف الـ frame للدقة القصوى
-    const t = (f + 0.5) / FPS;
+    // ✅ بداية الـ frame بالضبط — لا (f + 0.5)
+    const t = f / FPS;
 
-    // binary search
-    let lo = 0, hi = words.length - 1, found = null;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      const w   = words[mid];
-      if (t >= w.start && t < w.end) {
-        found = w;
-        break;
-      }
-      if (t < w.start) hi = mid - 1;
-      else             lo = mid + 1;
+    // تقدم wi إلى الكلمة الصحيحة
+    while (wi < words.length - 1 && t >= words[wi].end) {
+      wi++;
     }
 
-    if (found) {
-      const dur      = found.end - found.start;
-      const progress = (t - found.start) / dur;
+    const w = words[wi];
+
+    // ✅ سماحية 5ms عند البداية فقط (مثل TikTok/CapCut)
+    if (t >= w.start - 0.005 && t < w.end) {
       map[f] = {
-        word:     found.word,
-        isPower:  found.isPower,
-        progress: Math.min(Math.max(progress, 0), 1),
+        word:     w.word,
+        isPower:  w.isPower,
+        // progress لحساب الـ scale animation
+        progress: (t - w.start) / Math.max(w.end - w.start, 0.001),
       };
     }
-    // إذا لم تكن هناك كلمة في هذا الوقت → null → شاشة فارغة
   }
 
   const covered = map.filter(Boolean).length;
@@ -227,27 +223,25 @@ function buildFrameStateMap(words) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STATE KEY — مركزي لضمان تطابق renderAllPNGs و buildFrameDir
+// ✅ sc = "z" دائماً (لا animation في الـ cache key) للتزامن الكامل
 // ═══════════════════════════════════════════════════════════════════════════
 
 function stateKey(state, globalFrame) {
-  const hook  = globalFrame < HOOK_FRAMES     ? "h" : "n";
+  const hook  = globalFrame < HOOK_FRAMES      ? "h" : "n";
   const slide = globalFrame < TITLE_SLIDE_FRAMES ? `s${globalFrame}` : "sx";
 
   if (!state) return `empty_${hook}_${slide}`;
 
-  // scale animation: نفصل فقط بداية الكلمة (progress < 0.15)
-  const sc = state.progress < 0.15
-    ? `a${Math.floor(state.progress * 100)}`
-    : "z";
-
-  return `w_${state.word}_${state.isPower ? 1 : 0}_${sc}_${hook}_${slide}`;
+  // ✅ sc ثابت = "z" — لا تمييز بحالات الـ progress
+  // يضمن أن كل كلمة لها صورة واحدة فقط → لا تعارض في الـ cache
+  return `w_${state.word}_${state.isPower ? 1 : 0}_z_${hook}_${slide}`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HTML BUILDER
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildHTML({ word, progress = 0, isPower = false, isHook = false, globalFrame = 0 }) {
+function buildHTML({ word, isPower = false, isHook = false, globalFrame = 0 }) {
   if (!word) {
     return `<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>` +
            `<body style="width:${WIDTH}px;height:${HEIGHT}px;background:transparent;margin:0;padding:0;"></body></html>`;
@@ -263,15 +257,16 @@ function buildHTML({ word, progress = 0, isPower = false, isHook = false, global
 
   const wlen = word.length;
   let fontSize;
-  if (isPower)       fontSize = ar ? 185 : 175;
+  if (isPower)        fontSize = ar ? 185 : 175;
   else if (wlen <= 2) fontSize = ar ? 165 : 155;
   else if (wlen <= 4) fontSize = ar ? 145 : 135;
   else if (wlen <= 6) fontSize = ar ? 125 : 115;
   else if (wlen <= 9) fontSize = ar ? 105 : 98;
-  else if (wlen <= 12) fontSize = ar ? 88 : 82;
-  else                 fontSize = ar ? 72 : 68;
+  else if (wlen <= 12) fontSize = ar ? 88  : 82;
+  else                 fontSize = ar ? 72  : 68;
 
-  const scaleIn = progress < 0.12 ? 0.65 + (progress / 0.12) * 0.35 : 1.0;
+  // ✅ scaleIn = 1 دائماً — لا animation تؤثر على التوقيت
+  const scaleIn = 1;
 
   const wordColor = isPower ? COLORS.power : COLORS.word;
   const glowColor = COLORS.glow;
@@ -282,11 +277,11 @@ function buildHTML({ word, progress = 0, isPower = false, isHook = false, global
     ? `background:rgba(200,0,0,0.88);padding:22px 55px;border-radius:9999px;`
     : `background:transparent;padding:0;`;
 
-  const slideP   = globalFrame < TITLE_SLIDE_FRAMES ? globalFrame / TITLE_SLIDE_FRAMES : 1.0;
-  const eased    = 1 - Math.pow(1 - slideP, 3);
-  const slideX   = (titleDir === "rtl" ? 120 : -120) * (1 - eased);
-  const titleOp  = eased;
-  const titleSz  = titleAr ? 38 : 34;
+  const slideP  = globalFrame < TITLE_SLIDE_FRAMES ? globalFrame / TITLE_SLIDE_FRAMES : 1.0;
+  const eased   = 1 - Math.pow(1 - slideP, 3);
+  const slideX  = (titleDir === "rtl" ? 120 : -120) * (1 - eased);
+  const titleOp = eased;
+  const titleSz = titleAr ? 38 : 34;
 
   const defaultHooks = { ar: "🔴 لا تتجاوز هذا", fr: "🔴 Ne ratez pas ça", en: "🔴 Don't skip this" };
   const hookText = (custom_hook && custom_hook.trim()) || defaultHooks[lang] || defaultHooks.en;
@@ -307,7 +302,7 @@ html,body{width:${WIDTH}px;height:${HEIGHT}px;overflow:hidden;background:transpa
 .tb{display:inline-block;background:rgba(220,0,0,0.92);padding:13px 32px;border-radius:9999px;box-shadow:0 0 32px rgba(220,0,0,0.55),0 6px 22px rgba(0,0,0,0.45)}
 .tt{font-family:${titleFnt};font-size:${titleSz}px;font-weight:800;color:#fff;display:inline-flex;align-items:center;gap:10px;white-space:nowrap;text-shadow:0 2px 6px rgba(0,0,0,0.45)}
 .te{font-size:${titleAr?"40px":"36px"}}
-.wc{position:absolute;left:50%;top:52%;transform:translate(-50%,-50%) scale(${scaleIn.toFixed(4)});direction:${dir};text-align:center;z-index:10;width:95%;max-width:1000px}
+.wc{position:absolute;left:50%;top:52%;transform:translate(-50%,-50%) scale(${scaleIn});direction:${dir};text-align:center;z-index:10;width:95%;max-width:1000px}
 .wp{display:inline-block;${pillBg}box-shadow:${isPower?"0 0 70px rgba(200,0,0,0.75),0 14px 40px rgba(0,0,0,0.65)":"none"}}
 .wt{font-family:${font};font-size:${fontSize}px;font-weight:900;color:${wordColor};line-height:1.2;text-shadow:0 0 ${glowSize} ${glowColor},0 0 ${glowSize2} ${glowColor},0 5px 25px ${shadowClr},2px 2px 0px rgba(0,0,0,0.8),-2px -2px 0px rgba(0,0,0,0.8);letter-spacing:${ar?"1px":"3px"};display:block;word-break:break-word}
 </style>
@@ -331,9 +326,8 @@ async function renderAllPNGs(page, frameStateMap) {
     const key = stateKey(frameStateMap[f], f);
     if (!unique.has(key)) {
       unique.set(key, {
-        word:        frameStateMap[f]?.word     ?? null,
-        progress:    frameStateMap[f]?.progress ?? 0,
-        isPower:     frameStateMap[f]?.isPower  ?? false,
+        word:        frameStateMap[f]?.word    ?? null,
+        isPower:     frameStateMap[f]?.isPower ?? false,
         isHook:      f < HOOK_FRAMES,
         globalFrame: f,
       });
@@ -344,7 +338,7 @@ async function renderAllPNGs(page, frameStateMap) {
 
   // warmup fonts
   for (const [w, l] of [["مرحبا", "ar"], ["Hello", "en"]]) {
-    const html = buildHTML({ word: w, progress: 1, isPower: false, isHook: false, globalFrame: TITLE_SLIDE_FRAMES });
+    const html = buildHTML({ word: w, isPower: false, isHook: false, globalFrame: TITLE_SLIDE_FRAMES });
     const p    = `${TMP}/init_${l}.html`;
     writeFileSync(p, html, "utf-8");
     await page.goto(`file://${p}`, { waitUntil: "networkidle" });
@@ -356,8 +350,13 @@ async function renderAllPNGs(page, frameStateMap) {
   let   done  = 0;
 
   for (const [key, s] of unique) {
-    const html = buildHTML({ word: s.word, progress: s.progress, isPower: s.isPower, isHook: s.isHook, globalFrame: s.globalFrame });
-    const hp   = `${TMP}/${key}.html`;
+    const html = buildHTML({
+      word:        s.word,
+      isPower:     s.isPower,
+      isHook:      s.isHook,
+      globalFrame: s.globalFrame,
+    });
+    const hp = `${TMP}/${key}.html`;
     writeFileSync(hp, html, "utf-8");
     await page.goto(`file://${hp}`, { waitUntil: "load" });
     await page.waitForTimeout(35);
@@ -386,7 +385,6 @@ function buildFrameDir(clipMap, cache, idx, clipStartFrame) {
     const key  = stateKey(clipMap[f], gf);
     const src  = cache.get(key);
     const dest = `${dir}/frame_${String(f).padStart(6, "0")}.png`;
-
     if (!src) continue;
     try { symlinkSync(src, dest); }
     catch { copyFileSync(src, dest); }
@@ -407,8 +405,8 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   ) || 0;
 
   const loop   = srcDur < duration + 0.5 ? ["-stream_loop", "-1"] : [];
-  const mtype  = idx % 4;
   const frames = Math.ceil(duration * FPS);
+  const mtype  = idx % 4;
 
   const zooms = [
     `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',zoompan=z='min(zoom+0.0008,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
@@ -426,7 +424,8 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   const cin = [
     "curves=r='0/0 0.3/0.28 0.7/0.76 1/0.92':g='0/0 0.3/0.28 0.7/0.78 1/0.94':b='0/0.02 0.3/0.30 0.7/0.82 1/0.98'",
     "hue=s=0.9",
-    isHook ? "eq=contrast=1.15:brightness=0.02:saturation=1.1" : "eq=contrast=1.08:brightness=-0.01:saturation=0.95",
+    isHook ? "eq=contrast=1.15:brightness=0.02:saturation=1.1"
+           : "eq=contrast=1.08:brightness=-0.01:saturation=0.95",
     "vignette=PI/5:eval=frame",
     "unsharp=3:3:0.4:3:3:0.0",
     ...(isHook ? [] : ["noise=alls=2:allf=t+u"]),
@@ -481,7 +480,8 @@ function framesToMov(frameDir, outPath) {
 function overlayOnBg(bgMp4, capMov, outPath) {
   spawnSync("ffmpeg", [
     "-y", "-i", bgMp4, "-i", capMov,
-    "-filter_complex", "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
+    "-filter_complex",
+    "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
     "-map", "[out]",
     "-c:v", "libx264", "-preset", "fast", "-crf", "19",
     "-pix_fmt", "yuv420p", "-an", outPath,
@@ -566,8 +566,10 @@ async function main() {
 
   const browser = await chromium.launch({
     headless: true,
-    args: ["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage",
-           "--disable-gpu","--no-zygote","--font-render-hinting=none","--lang=ar,fr,en"],
+    args: [
+      "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
+      "--disable-gpu", "--no-zygote", "--font-render-hinting=none", "--lang=ar,fr,en",
+    ],
   });
 
   const context = await browser.newContext({
@@ -582,8 +584,8 @@ async function main() {
   await browser.close();
   console.log(`✅ ${pngCache.size} PNGs\n`);
 
-  const totalClips       = Math.max(1, Math.floor(effectiveDuration / clip_duration));
-  const actualClipDur    = effectiveDuration / totalClips;
+  const totalClips    = Math.max(1, Math.floor(effectiveDuration / clip_duration));
+  const actualClipDur = effectiveDuration / totalClips;
 
   console.log(`📊 ${totalClips} clips × ${actualClipDur.toFixed(2)}s`);
 
@@ -597,8 +599,8 @@ async function main() {
     const nFrames   = Math.ceil(clipDur * FPS);
     const clipMap   = frameStateMap.slice(startF, startF + nFrames);
 
-    const isHook  = i === 0 && has_hook;
-    const vidSrc  = videos[i % videos.length];
+    const isHook = i === 0 && has_hook;
+    const vidSrc = videos[i % videos.length];
 
     process.stdout.write(`  [${i+1}/${totalClips}] ${clipDur.toFixed(2)}s${isHook?" 🔥":""}... `);
 
