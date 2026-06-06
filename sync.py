@@ -118,9 +118,15 @@ def extract_transcript_from_audio(
         # ── Transcribe ─────────────────────────────────────────────────────
         print(f"  📝 Transcribing ({wlang})...")
         t0       = time.time()
-        res      = model.transcribe(audio, batch_size=BATCH_SIZE, language=wlang, task="transcribe")
+        res      = model.transcribe(
+            audio, batch_size=BATCH_SIZE,
+            language=wlang, task="transcribe",
+        )
         segs_raw = res.get("segments", [])
-        print(f"  ✅ {len(segs_raw)} segs in {time.time()-t0:.1f}s | detected: {res.get('language','?')}")
+        print(
+            f"  ✅ {len(segs_raw)} segs in {time.time()-t0:.1f}s"
+            f" | detected: {res.get('language','?')}"
+        )
 
         if not segs_raw:
             return empty
@@ -133,9 +139,10 @@ def extract_transcript_from_audio(
 
         if am is not None:
             try:
-                ar           = whisperx.align(
+                ar = whisperx.align(
                     segs_raw, am, meta, audio,
-                    device=WHISPERX_DEVICE, return_char_alignments=False,
+                    device=WHISPERX_DEVICE,
+                    return_char_alignments=False,
                 )
                 aligned_segs = ar.get("segments", [])
                 print(f"  ✅ Aligned in {time.time()-t0:.1f}s")
@@ -182,7 +189,7 @@ def extract_transcript_from_audio(
                 ws = float(wstart)
                 we = float(wend)
 
-                # ✅ نقبل فقط timestamps منطقية — لا تعديل على القيم
+                # ✅ نقبل فقط timestamps منطقية — لا تعديل
                 if ws < 0 or we <= ws:
                     continue
 
@@ -214,7 +221,7 @@ def extract_transcript_from_audio(
         if not sentences:
             return empty
 
-        # ✅ ترتيب فقط — لا تعديل على أي قيمة
+        # ✅ ترتيب فقط — لا تعديل
         all_words.sort(key=lambda x: x["start"])
 
         # ── Build output ───────────────────────────────────────────────────
@@ -227,7 +234,11 @@ def extract_transcript_from_audio(
                     "start":    sw[0]["start"],
                     "end":      sw[-1]["end"],
                     "words": [
-                        {"word": w["word"], "start": w["start"], "end": w["end"]}
+                        {
+                            "word":  w["word"],
+                            "start": w["start"],
+                            "end":   w["end"],
+                        }
                         for w in sw
                     ],
                 })
@@ -250,8 +261,14 @@ def extract_transcript_from_audio(
         for w in all_words[:8]:
             print(f"     {w['start']:.3f}s → {w['end']:.3f}s  '{w['word']}'")
         if all_words and aud_dur > 0:
-            cov = (all_words[-1]["end"] - all_words[0]["start"]) / aud_dur * 100
-            print(f"  📊 {all_words[0]['start']:.3f}s → {all_words[-1]['end']:.3f}s ({cov:.0f}%)")
+            cov = (
+                (all_words[-1]["end"] - all_words[0]["start"])
+                / aud_dur * 100
+            )
+            print(
+                f"  📊 {all_words[0]['start']:.3f}s"
+                f" → {all_words[-1]['end']:.3f}s ({cov:.0f}%)"
+            )
 
         return {
             "sentences":      sentences,
@@ -265,7 +282,8 @@ def extract_transcript_from_audio(
         print(f"  ❌ WhisperX not installed: {e}")
         return empty
     except Exception as e:
-        import traceback; traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return empty
 
 
@@ -290,8 +308,11 @@ def build_word_timeline(sentences, word_timestamps, total_duration):
                     if idx < len(word_timestamps):
                         ts = word_timestamps[idx]
                         wt.append({
-                            "word": word, "start": ts["start"], "end": ts["end"],
-                            "s_idx": s_idx, "w_idx": w_idx,
+                            "word":  word,
+                            "start": ts["start"],
+                            "end":   ts["end"],
+                            "s_idx": s_idx,
+                            "w_idx": w_idx,
                         })
                         idx += 1
             if wt:
@@ -300,21 +321,27 @@ def build_word_timeline(sentences, word_timestamps, total_duration):
 
 
 def _equal_split(sentences, total_duration):
-    all_w = [w for s in sentences for w in s.split()]
+    """
+    ✅ إصلاح: بناء قائمة الكلمات مع s_idx صحيح دائماً
+    حتى عند تكرار نفس الكلمة في جمل مختلفة.
+    """
+    all_w: list[tuple[int, int, str]] = []
+    for s_idx, s in enumerate(sentences):
+        for w_idx, w in enumerate(s.split()):
+            all_w.append((s_idx, w_idx, w))
+
     if not all_w:
         return [], []
+
     dur = total_duration / len(all_w)
     wt  = []
-    for i, w in enumerate(all_w):
-        s_idx = next(
-            si for si, s in enumerate(sentences) if w in s.split()
-        )
+    for i, (s_idx, w_idx, w) in enumerate(all_w):
         wt.append({
             "word":  w,
             "start": round(i * dur, 4),
             "end":   round((i + 1) * dur, 4),
             "s_idx": s_idx,
-            "w_idx": i,
+            "w_idx": w_idx,
         })
     return _build_out(sentences, wt, total_duration)
 
@@ -329,7 +356,11 @@ def _build_out(sentences, word_times, total_duration):
                 "start":    sw[0]["start"],
                 "end":      sw[-1]["end"],
                 "words": [
-                    {"word": w["word"], "start": w["start"], "end": w["end"]}
+                    {
+                        "word":  w["word"],
+                        "start": w["start"],
+                        "end":   w["end"],
+                    }
                     for w in sw
                 ],
             })
