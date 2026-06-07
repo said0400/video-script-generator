@@ -402,7 +402,7 @@ function buildHTML({
     /* ✅ العنوان في الأعلى — بارز وجذاب */
     .tc {
       position:absolute;
-      top:90px;
+      top:210px;
       left:50%;
       width:92%;
       max-width:980px;
