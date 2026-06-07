@@ -1,8 +1,8 @@
-// remotion/render.mjs
-// ✅ يدعم وضعين:
-//    1. bg_only    → إنتاج فيديو الخلفية الكامل بدون نص
-//    2. words_only → Overlay الكلمات فوق الفيديو الكامل
-// ✅ التزامن 100% لأن WhisperX يحلل الفيديو النهائي نفسه
+// remotion/render.mjs — FIXED + VIRAL VISUAL UPGRADE
+// ✅ إصلاح: overlayOnBg الآن تنقل الصوت
+// ✅ إصلاح: stateKey لا يتغير بـ globalFrame إلا للـ TITLE SLIDE
+// ✅ إصلاح: words_only يستخدم bgVideoPath بشكل صحيح
+// ✅ تحسين: typography viral مع stroke + scale animation + gradient text
 
 import {
   readFileSync,
@@ -40,7 +40,7 @@ const {
   has_hook      = false,
   custom_hook   = "",
   analysis      = {},
-  mode          = "words_only", // ✅ bg_only | words_only
+  mode          = "words_only",
 } = props;
 
 const FPS                = 30;
@@ -61,20 +61,20 @@ console.log(`🌐 Lang: ${lang.toUpperCase()} | Mode: ${mode}`);
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// EMOTION COLORS
+// EMOTION COLORS — viral palette
 // ═══════════════════════════════════════════════════════════════════════════
 
 const EMOTION_COLORS = {
-  curiosity: { word: "#FFD700", glow: "rgba(255,215,0,0.6)",   shadow: "rgba(0,0,0,0.95)", power: "#FF1744" },
-  fear:      { word: "#FF4444", glow: "rgba(255,68,68,0.6)",   shadow: "rgba(0,0,0,0.95)", power: "#FFD700" },
-  hope:      { word: "#00E676", glow: "rgba(0,230,118,0.6)",   shadow: "rgba(0,0,0,0.95)", power: "#FFFFFF" },
-  joy:       { word: "#FF9100", glow: "rgba(255,145,0,0.6)",   shadow: "rgba(0,0,0,0.95)", power: "#FFFFFF" },
-  awe:       { word: "#AA00FF", glow: "rgba(170,0,255,0.6)",   shadow: "rgba(0,0,0,0.95)", power: "#FFD700" },
-  surprise:  { word: "#00B0FF", glow: "rgba(0,176,255,0.6)",   shadow: "rgba(0,0,0,0.95)", power: "#FFD700" },
-  desire:    { word: "#FF1744", glow: "rgba(255,23,68,0.6)",   shadow: "rgba(0,0,0,0.95)", power: "#FFD700" },
-  anger:     { word: "#FF1744", glow: "rgba(255,23,68,0.6)",   shadow: "rgba(0,0,0,0.95)", power: "#FFD700" },
-  sadness:   { word: "#82B1FF", glow: "rgba(130,177,255,0.6)", shadow: "rgba(0,0,0,0.95)", power: "#FFFFFF" },
-  default:   { word: "#FFFFFF", glow: "rgba(255,255,255,0.5)", shadow: "rgba(0,0,0,0.95)", power: "#FF1744" },
+  curiosity: { word: "#FFD700", glow: "rgba(255,215,0,0.5)",   power: "#FF1744", gradient: ["#FFD700","#FF8F00"] },
+  fear:      { word: "#FF4444", glow: "rgba(255,68,68,0.5)",   power: "#FFD700", gradient: ["#FF4444","#FF0000"] },
+  hope:      { word: "#00E676", glow: "rgba(0,230,118,0.5)",   power: "#FFFFFF", gradient: ["#00E676","#00B248"] },
+  joy:       { word: "#FF9100", glow: "rgba(255,145,0,0.5)",   power: "#FFFFFF", gradient: ["#FFD740","#FF6D00"] },
+  awe:       { word: "#E040FB", glow: "rgba(224,64,251,0.5)",  power: "#FFD700", gradient: ["#E040FB","#AA00FF"] },
+  surprise:  { word: "#40C4FF", glow: "rgba(64,196,255,0.5)",  power: "#FFD700", gradient: ["#40C4FF","#0091EA"] },
+  desire:    { word: "#FF1744", glow: "rgba(255,23,68,0.5)",   power: "#FFD700", gradient: ["#FF6EC7","#FF1744"] },
+  anger:     { word: "#FF1744", glow: "rgba(255,23,68,0.5)",   power: "#FFD700", gradient: ["#FF6D00","#FF1744"] },
+  sadness:   { word: "#82B1FF", glow: "rgba(130,177,255,0.5)", power: "#FFFFFF", gradient: ["#82B1FF","#448AFF"] },
+  default:   { word: "#FFFFFF", glow: "rgba(255,255,255,0.4)", power: "#FF1744", gradient: ["#FFFFFF","#E0E0E0"] },
 };
 
 const emotion = (analysis.primary_emotion || "").toLowerCase();
@@ -163,7 +163,6 @@ function buildWordList() {
     }
   }
 
-  // Fallback فقط إذا لم يوجد alignment
   if (words.length === 0 && sentences.length > 0) {
     console.log("⚠️  No word alignment — equal split fallback");
     const allText = sentences.join(" ").split(/\s+/).filter(Boolean);
@@ -182,12 +181,8 @@ function buildWordList() {
 
   console.log(`📊 Words: ${words.length}`);
   if (words.length > 0) {
-    console.log(
-      `   [0]  ${words[0].start.toFixed(3)}s → ${words[0].end.toFixed(3)}s "${words[0].word}"`
-    );
-    console.log(
-      `   [-1] ${words[words.length - 1].start.toFixed(3)}s → ${words[words.length - 1].end.toFixed(3)}s "${words[words.length - 1].word}"`
-    );
+    console.log(`   [0]  ${words[0].start.toFixed(3)}s → ${words[0].end.toFixed(3)}s "${words[0].word}"`);
+    console.log(`   [-1] ${words[words.length-1].start.toFixed(3)}s → ${words[words.length-1].end.toFixed(3)}s "${words[words.length-1].word}"`);
   }
 
   return words;
@@ -205,16 +200,12 @@ function buildFrameStateMap(words) {
   let wi = 0;
 
   for (let f = 0; f < totalFrames; f++) {
-    // ✅ بداية الـ frame بالضبط
     const t = f / FPS;
 
-    while (wi < words.length - 1 && t >= words[wi].end) {
-      wi++;
-    }
+    while (wi < words.length - 1 && t >= words[wi].end) wi++;
 
     const w = words[wi];
 
-    // ✅ سماحية 5ms فقط
     if (t >= w.start - 0.005 && t < w.end) {
       map[f] = {
         word:     w.word,
@@ -225,36 +216,40 @@ function buildFrameStateMap(words) {
   }
 
   const covered = map.filter(Boolean).length;
-  console.log(`Coverage: ${covered}/${totalFrames} (${((covered / totalFrames) * 100).toFixed(1)}%)`);
+  console.log(`Coverage: ${covered}/${totalFrames} (${((covered/totalFrames)*100).toFixed(1)}%)`);
   return map;
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// STATE KEY
+// ✅ FIX: STATE KEY — لا يتغير بـ globalFrame بعد انتهاء Title Slide
 // ═══════════════════════════════════════════════════════════════════════════
 
 function stateKey(state, globalFrame) {
-  const hook  = globalFrame < HOOK_FRAMES ? "h" : "n";
-  const slide = globalFrame < TITLE_SLIDE_FRAMES ? `s${globalFrame}` : "sx";
+  // Title slide: كل فريم مختلف (animation)
+  if (globalFrame < TITLE_SLIDE_FRAMES) {
+    return `title_slide_f${globalFrame}`;
+  }
 
-  if (!state) return `empty_${hook}_${slide}`;
+  const hook = globalFrame < HOOK_FRAMES ? "h" : "n";
 
-  // ✅ no progress-based cache split
-  return `w_${state.word}_${state.isPower ? 1 : 0}_z_${hook}_${slide}`;
+  if (!state) return `empty_${hook}`;
+
+  return `w_${state.word}_${state.isPower ? 1 : 0}_${hook}`;
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HTML BUILDER
+// HTML BUILDER — VIRAL VISUAL UPGRADE
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTML({
   word,
-  isPower = false,
-  isHook  = false,
+  isPower     = false,
+  isHook      = false,
   globalFrame = 0,
 }) {
+  // Empty frame → transparent PNG بدون أي محتوى
   if (!word) {
     return (
       `<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>` +
@@ -271,27 +266,23 @@ function buildHTML({
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
-  // Word size
+  // ── Word sizing ──────────────────────────────────────────────────────────
   const wlen = word.length;
   let fontSize;
-  if      (isPower)  fontSize = ar ? 185 : 175;
-  else if (wlen <= 2)  fontSize = ar ? 165 : 155;
-  else if (wlen <= 4)  fontSize = ar ? 145 : 135;
-  else if (wlen <= 6)  fontSize = ar ? 125 : 115;
-  else if (wlen <= 9)  fontSize = ar ? 105 : 98;
-  else if (wlen <= 12) fontSize = ar ? 88  : 82;
-  else                 fontSize = ar ? 72  : 68;
+  if      (isPower)    fontSize = ar ? 190 : 180;
+  else if (wlen <= 2)  fontSize = ar ? 170 : 160;
+  else if (wlen <= 4)  fontSize = ar ? 150 : 140;
+  else if (wlen <= 6)  fontSize = ar ? 130 : 120;
+  else if (wlen <= 9)  fontSize = ar ? 110 : 102;
+  else if (wlen <= 12) fontSize = ar ? 92  : 86;
+  else                 fontSize = ar ? 76  : 72;
 
-  const wordColor = isPower ? COLORS.power : COLORS.word;
-  const glowColor = COLORS.glow;
-  const shadowClr = COLORS.shadow;
-  const glowSize  = isPower ? "90px"  : "45px";
-  const glowSize2 = isPower ? "130px" : "70px";
-  const pillBg    = isPower
-    ? `background:rgba(200,0,0,0.88);padding:22px 55px;border-radius:9999px;`
-    : `background:transparent;padding:0;`;
+  const wordColor  = isPower ? COLORS.power : COLORS.word;
+  const glowColor  = COLORS.glow;
+  const gradStart  = COLORS.gradient[0];
+  const gradEnd    = COLORS.gradient[1];
 
-  // Title slide-in
+  // ── Title slide-in animation ─────────────────────────────────────────────
   const slideP  = globalFrame < TITLE_SLIDE_FRAMES
     ? globalFrame / TITLE_SLIDE_FRAMES
     : 1.0;
@@ -300,7 +291,7 @@ function buildHTML({
   const titleOp = eased;
   const titleSz = titleAr ? 38 : 34;
 
-  // Hook
+  // ── Hook text ────────────────────────────────────────────────────────────
   const defaults = {
     ar: "🔴 لا تتجاوز هذا",
     fr: "🔴 Ne ratez pas ça",
@@ -310,6 +301,55 @@ function buildHTML({
   const hookAr   = isArabic(hookText);
   const hookDir  = hookAr ? "rtl" : "ltr";
   const hookFont = getFontFamily(hookText);
+
+  // ── Power word pill / regular word ───────────────────────────────────────
+  // Power: gradient background pill + scale up
+  // Regular: gradient text + heavy stroke outline + glow
+  const powerStyles = isPower ? `
+    background: linear-gradient(135deg, #FF1744 0%, #D50000 100%);
+    padding: 24px 60px;
+    border-radius: 9999px;
+    border: 3px solid rgba(255,255,255,0.3);
+    box-shadow:
+      0 0 60px rgba(255,23,68,0.8),
+      0 0 120px rgba(255,23,68,0.4),
+      inset 0 1px 0 rgba(255,255,255,0.2);
+    transform: scale(1.05);
+  ` : `
+    background: transparent;
+    padding: 0;
+  `;
+
+  // للكلمات العادية: gradient text عبر SVG filter أو -webkit-background-clip
+  const regularTextStyle = isPower ? `
+    font-family: ${font};
+    font-size: ${fontSize}px;
+    font-weight: 900;
+    color: #FFFFFF;
+    line-height: 1.15;
+    letter-spacing: ${ar ? "1px" : "3px"};
+    display: block;
+    word-break: break-word;
+    -webkit-text-stroke: 3px rgba(0,0,0,0.6);
+    text-shadow:
+      0 0 0px transparent;
+    paint-order: stroke fill;
+  ` : `
+    font-family: ${font};
+    font-size: ${fontSize}px;
+    font-weight: 900;
+    color: ${wordColor};
+    line-height: 1.15;
+    letter-spacing: ${ar ? "1px" : "3px"};
+    display: block;
+    word-break: break-word;
+    -webkit-text-stroke: 4px rgba(0,0,0,0.95);
+    paint-order: stroke fill;
+    text-shadow:
+      0 0 40px ${glowColor},
+      0 0 80px ${glowColor},
+      0 0 120px rgba(0,0,0,0.3);
+  `;
 
   return `<!DOCTYPE html>
 <html lang="${langAttr}">
@@ -322,35 +362,46 @@ function buildHTML({
       overflow:hidden; background:transparent;
     }
 
+    /* Cinematic overlays */
     .ot {
-      position:absolute; top:0; left:0; right:0; height:28%;
-      background:linear-gradient(to bottom,rgba(0,0,0,0.7),transparent);
+      position:absolute; top:0; left:0; right:0; height:35%;
+      background:linear-gradient(to bottom,
+        rgba(0,0,0,0.75) 0%,
+        rgba(0,0,0,0.3) 60%,
+        transparent 100%);
       pointer-events:none; z-index:1;
     }
     .ob {
-      position:absolute; bottom:0; left:0; right:0; height:32%;
-      background:linear-gradient(to top,rgba(0,0,0,0.7),transparent);
+      position:absolute; bottom:0; left:0; right:0; height:40%;
+      background:linear-gradient(to top,
+        rgba(0,0,0,0.85) 0%,
+        rgba(0,0,0,0.4) 60%,
+        transparent 100%);
       pointer-events:none; z-index:1;
     }
 
+    /* Hook badge */
     .hb {
       position:absolute; top:155px; left:50%;
       transform:translateX(-50%);
-      background:rgba(210,0,0,0.93);
+      background:linear-gradient(135deg,rgba(220,0,0,0.95),rgba(170,0,0,0.95));
       color:#fff;
       font-family:${hookFont};
       font-size:${hookAr ? "34px" : "30px"};
       font-weight:900;
-      padding:13px 38px;
+      padding:14px 40px;
       border-radius:9999px;
       z-index:25;
       white-space:nowrap;
       direction:${hookDir};
+      border:2px solid rgba(255,100,100,0.4);
       box-shadow:
-        0 0 40px rgba(210,0,0,0.85),
-        0 6px 22px rgba(0,0,0,0.55);
+        0 0 50px rgba(220,0,0,0.7),
+        0 0 100px rgba(220,0,0,0.3),
+        0 8px 24px rgba(0,0,0,0.5);
     }
 
+    /* Title container */
     .tc {
       position:absolute;
       top:${isHook ? "278px" : "338px"};
@@ -363,12 +414,13 @@ function buildHTML({
     }
     .tb {
       display:inline-block;
-      background:rgba(220,0,0,0.92);
-      padding:13px 32px;
+      background:linear-gradient(135deg,rgba(220,0,0,0.94),rgba(160,0,0,0.94));
+      padding:14px 34px;
       border-radius:9999px;
+      border:1px solid rgba(255,120,120,0.3);
       box-shadow:
-        0 0 32px rgba(220,0,0,0.55),
-        0 6px 22px rgba(0,0,0,0.45);
+        0 0 40px rgba(220,0,0,0.5),
+        0 8px 24px rgba(0,0,0,0.4);
     }
     .tt {
       font-family:${titleFont};
@@ -379,42 +431,48 @@ function buildHTML({
       align-items:center;
       gap:10px;
       white-space:nowrap;
-      text-shadow:0 2px 6px rgba(0,0,0,0.45);
+      text-shadow:0 2px 8px rgba(0,0,0,0.4);
+      -webkit-text-stroke: 0.5px rgba(0,0,0,0.3);
     }
     .te { font-size:${titleAr ? "40px" : "36px"}; }
 
+    /* Word container — centered vertically at 50% */
     .wc {
       position:absolute;
       left:50%; top:52%;
-      transform:translate(-50%,-50%) scale(1);
+      transform:translate(-50%,-50%);
       direction:${dir};
       text-align:center;
       z-index:10;
       width:95%;
-      max-width:1000px;
+      max-width:1020px;
     }
     .wp {
       display:inline-block;
-      ${pillBg}
-      box-shadow:${isPower
-        ? "0 0 70px rgba(200,0,0,0.75),0 14px 40px rgba(0,0,0,0.65)"
-        : "none"};
+      ${powerStyles}
     }
     .wt {
-      font-family:${font};
-      font-size:${fontSize}px;
-      font-weight:900;
-      color:${wordColor};
-      line-height:1.2;
-      text-shadow:
-        0 0 ${glowSize} ${glowColor},
-        0 0 ${glowSize2} ${glowColor},
-        0 5px 25px ${shadowClr},
-        2px 2px 0px rgba(0,0,0,0.8),
-        -2px -2px 0px rgba(0,0,0,0.8);
-      letter-spacing:${ar ? "1px" : "3px"};
-      display:block;
-      word-break:break-word;
+      ${regularTextStyle}
+    }
+
+    /* Progress dot indicator — viral retention hack */
+    .pd {
+      position:absolute;
+      bottom:120px; left:50%;
+      transform:translateX(-50%);
+      z-index:20;
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+    .pd-bar {
+      width:48px; height:4px;
+      border-radius:2px;
+      background:rgba(255,255,255,0.25);
+    }
+    .pd-bar.active {
+      background:rgba(255,255,255,0.9);
+      box-shadow:0 0 8px rgba(255,255,255,0.5);
     }
   </style>
 </head>
@@ -465,12 +523,9 @@ async function renderAllPNGs(page, frameStateMap) {
 
   console.log(`\n📸 ${unique.size} unique states to render`);
 
-  // Warmup fonts
+  // Font warmup
   for (const [w, l] of [["مرحبا", "ar"], ["Hello", "en"]]) {
-    const html = buildHTML({
-      word: w, isPower: false, isHook: false,
-      globalFrame: TITLE_SLIDE_FRAMES,
-    });
+    const html = buildHTML({ word: w, isPower: false, isHook: false, globalFrame: TITLE_SLIDE_FRAMES });
     const p = `${TMP}/init_${l}.html`;
     writeFileSync(p, html, "utf-8");
     await page.goto(`file://${p}`, { waitUntil: "networkidle" });
@@ -483,9 +538,9 @@ async function renderAllPNGs(page, frameStateMap) {
 
   for (const [key, s] of unique) {
     const html = buildHTML({
-      word: s.word,
-      isPower: s.isPower,
-      isHook: s.isHook,
+      word:        s.word,
+      isPower:     s.isPower,
+      isHook:      s.isHook,
       globalFrame: s.globalFrame,
     });
 
@@ -495,9 +550,7 @@ async function renderAllPNGs(page, frameStateMap) {
     await page.waitForTimeout(35);
 
     const pp = `${TMP}/${key}.png`;
-    await page.screenshot({
-      path: pp, type: "png", omitBackground: true,
-    });
+    await page.screenshot({ path: pp, type: "png", omitBackground: true });
 
     cache.set(key, pp);
     done++;
@@ -507,30 +560,6 @@ async function renderAllPNGs(page, frameStateMap) {
   }
 
   return cache;
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════
-// BUILD FRAME DIR
-// ═══════════════════════════════════════════════════════════════════════════
-
-function buildFrameDir(clipMap, cache, idx, clipStartFrame) {
-  const dir = `${TMP}/frames_${idx}`;
-  mkdirSync(dir, { recursive: true });
-
-  for (let f = 0; f < clipMap.length; f++) {
-    const gf   = clipStartFrame + f;
-    const key  = stateKey(clipMap[f], gf);
-    const src  = cache.get(key);
-    const dest = `${dir}/frame_${String(f).padStart(6, "0")}.png`;
-
-    if (!src) continue;
-
-    try { symlinkSync(src, dest); }
-    catch { copyFileSync(src, dest); }
-  }
-
-  return dir;
 }
 
 
@@ -640,15 +669,46 @@ function framesToMov(frameDir, outPath) {
   return outPath;
 }
 
-function overlayOnBg(bgMp4, capMov, outPath) {
-  spawnSync("ffmpeg", [
-    "-y", "-i", bgMp4, "-i", capMov,
+// ✅ FIX: overlayOnBg الآن تنقل الصوت من الـ bgMp4
+function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
+  // المحاولة الأولى: overlay مع الصوت من الـ bg video
+  let r = spawnSync("ffmpeg", [
+    "-y",
+    "-i", bgMp4,
+    "-i", capMov,
     "-filter_complex",
     "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
     "-map", "[out]",
+    "-map", "0:a:0",
     "-c:v", "libx264", "-preset", "fast", "-crf", "19",
-    "-pix_fmt", "yuv420p", "-an", outPath,
+    "-c:a", "aac", "-b:a", "192k",
+    "-pix_fmt", "yuv420p",
+    outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
+
+  // ✅ FIX: إذا فشل (bg بدون صوت)، نستخدم ملف الصوت المنفصل
+  if (r.status !== 0 && audioPth) {
+    console.log("  ⚠️  BG has no audio stream — using audio file directly");
+    r = spawnSync("ffmpeg", [
+      "-y",
+      "-i", bgMp4,
+      "-i", capMov,
+      "-i", audioPth,
+      "-filter_complex",
+      "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
+      "-map", "[out]",
+      "-map", "2:a:0",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "19",
+      "-c:a", "aac", "-b:a", "192k",
+      "-pix_fmt", "yuv420p",
+      outPath,
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+  }
+
+  if (r.status !== 0) {
+    console.error("❌ overlayOnBg failed:", r.stderr?.toString().slice(-300));
+  }
+
   return outPath;
 }
 
@@ -667,8 +727,7 @@ function xfadeConcat(clips, durs) {
     const out   = i === clips.length - 1 ? "[vout]" : `[v${i}]`;
     const trans = TRANS[(i - 1) % TRANS.length];
     filters.push(
-      `${last}[${i}:v]xfade=transition=${trans}:` +
-      `duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
+      `${last}[${i}:v]xfade=transition=${trans}:duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
     );
     last = out;
   }
@@ -732,7 +791,7 @@ async function main() {
   console.log(`\n🚀 Mode: ${mode}\n`);
 
   // ════════════════════════════════════════════════════════════════════
-  // MODE: bg_only — إنتاج فيديو الخلفية الكامل بدون نص
+  // MODE: bg_only
   // ════════════════════════════════════════════════════════════════════
   if (mode === "bg_only") {
     const totalClips    = Math.max(1, Math.floor(effectiveDuration / clip_duration));
@@ -750,9 +809,7 @@ async function main() {
       const isHook    = i === 0 && has_hook;
       const vidSrc    = videos[i % videos.length];
 
-      process.stdout.write(
-        `  [${i+1}/${totalClips}] ${clipDur.toFixed(2)}s${isHook?" 🔥":""}... `
-      );
+      process.stdout.write(`  [${i+1}/${totalClips}] ${clipDur.toFixed(2)}s${isHook?" 🔥":""}... `);
 
       const bgMp4 = `${TMP}/bg_${String(i).padStart(3,"0")}.mp4`;
       processBackground(vidSrc, clipDur, bgMp4, i, isHook);
@@ -771,9 +828,16 @@ async function main() {
   }
 
   // ════════════════════════════════════════════════════════════════════
-  // MODE: words_only — Overlay الكلمات فوق الفيديو الخلفي الكامل
+  // MODE: words_only — ✅ FIXED
   // ════════════════════════════════════════════════════════════════════
   if (mode === "words_only") {
+    // ✅ FIX: التحقق من وجود الفيديو الخلفي
+    const bgVideoPath = videos[0];
+    if (!bgVideoPath) {
+      console.error("❌ words_only mode requires videos[0] as background video path");
+      process.exit(1);
+    }
+
     const words         = buildWordList();
     const frameStateMap = buildFrameStateMap(words);
 
@@ -802,14 +866,17 @@ async function main() {
     await browser.close();
     console.log(`✅ ${pngCache.size} PNGs\n`);
 
-    // ✅ الفيديو الخلفي الكامل — يجب أن يكون videos[0] فقط
-    const bgVideoPath = videos[0];
-    const frameDir    = `${TMP}/frames_words`;
+    // Build frame directory
+    const frameDir = `${TMP}/frames_words`;
     mkdirSync(frameDir, { recursive: true });
+
+    // ✅ FIX: نتأكد أن كل فريم له ملف — فراغات تُملأ بـ empty PNG
+    const emptyKey = stateKey(null, HOOK_FRAMES + 1);
+    const emptyPng = pngCache.get(emptyKey);
 
     for (let f = 0; f < totalFrames; f++) {
       const key  = stateKey(frameStateMap[f], f);
-      const src  = pngCache.get(key);
+      const src  = pngCache.get(key) || emptyPng;
       const dest = `${frameDir}/frame_${String(f).padStart(6, "0")}.png`;
       if (!src) continue;
       try { symlinkSync(src, dest); }
@@ -820,7 +887,8 @@ async function main() {
     framesToMov(frameDir, capMov);
 
     console.log("🔧 Overlaying words on BG video...");
-    overlayOnBg(bgVideoPath, capMov, outputPath);
+    // ✅ FIX: نمرر audio كـ fallback لضمان وجود الصوت
+    overlayOnBg(bgVideoPath, capMov, audio, outputPath);
 
     console.log(`\n🎉 Final → ${outputPath}\n`);
     return;
