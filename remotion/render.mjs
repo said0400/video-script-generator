@@ -32,6 +32,7 @@ const {
   aligned       = [],
   lang          = "ar",
   clip_duration = 3.0,
+  clip_durations = [],   // ✅ NEW: مدد الكليبات الفعلية لكل جملة
   has_hook      = false,
   custom_hook   = "",
   analysis      = {},
@@ -136,7 +137,58 @@ function isPowerWord(w) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WORD LIST
+// ✅ NEW: بناء خطة الكليبات من clip_durations الفعلية
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildClipPlan() {
+  // إذا توفرت clip_durations من main.py → نستخدمها
+  if (clip_durations && clip_durations.length > 0) {
+    let offset = 0;
+    const plan = clip_durations.map((dur, i) => {
+      const entry = {
+        index:     i,
+        start:     parseFloat(offset.toFixed(3)),
+        duration:  parseFloat(Math.max(dur, 0.5).toFixed(3)),
+        videoPath: videos[i % videos.length],
+        isHook:    i === 0 && has_hook,
+      };
+      offset += entry.duration;
+      return entry;
+    });
+
+    console.log(`\n📋 Clip plan from sentence durations (${plan.length} clips):`);
+    plan.forEach(c =>
+      console.log(
+        `   [${c.index + 1}] ${c.start.toFixed(2)}s → ` +
+        `${(c.start + c.duration).toFixed(2)}s ` +
+        `(${c.duration.toFixed(2)}s)${c.isHook ? " 🔥" : ""}`
+      )
+    );
+
+    return plan;
+  }
+
+  // fallback: clip_duration موحد
+  const totalClips    = Math.max(1, Math.floor(effectiveDuration / clip_duration));
+  const actualClipDur = effectiveDuration / totalClips;
+
+  console.log(
+    `\n📋 Clip plan fallback: ` +
+    `${totalClips} clips × ${actualClipDur.toFixed(2)}s`
+  );
+
+  return Array.from({ length: totalClips }, (_, i) => ({
+    index:     i,
+    start:     parseFloat((i * actualClipDur).toFixed(3)),
+    duration:  parseFloat(actualClipDur.toFixed(3)),
+    videoPath: videos[i % videos.length],
+    isHook:    i === 0 && has_hook,
+  }));
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WORD LIST — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildWordList() {
@@ -185,7 +237,7 @@ function buildWordList() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FRAME STATE MAP
+// FRAME STATE MAP — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildFrameStateMap(words) {
@@ -214,17 +266,15 @@ function buildFrameStateMap(words) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// STATE KEY
+// STATE KEY — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 function stateKey(state, globalFrame) {
-  // Title animation: أول ثانية + آخر ثانية
   const INTRO_FRAMES = Math.floor(1.0 * FPS);
   const OUTRO_FRAMES = Math.floor(1.0 * FPS);
   const isIntro = globalFrame < INTRO_FRAMES;
   const isOutro = globalFrame >= totalFrames - OUTRO_FRAMES;
 
-  // خلال الـ intro/outro كل فريم مختلف (animation)
   if (isIntro) return `title_intro_f${globalFrame}`;
   if (isOutro) return `title_outro_f${globalFrame}`;
 
@@ -239,7 +289,7 @@ function stateKey(state, globalFrame) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HTML BUILDER
+// HTML BUILDER — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTML({
@@ -258,7 +308,6 @@ function buildHTML({
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
-  // ── Title animation ──────────────────────────────────────────────────────
   const INTRO_FRAMES = Math.floor(1.0 * FPS);
   const OUTRO_FRAMES = Math.floor(1.0 * FPS);
   const isIntro = globalFrame < INTRO_FRAMES;
@@ -267,23 +316,20 @@ function buildHTML({
   let titleOpacity, titleTranslateY;
 
   if (isIntro) {
-    // Slide down + fade in
     const t        = globalFrame / INTRO_FRAMES;
-    const ease     = 1 - Math.pow(1 - t, 3);  // ease out cubic
+    const ease     = 1 - Math.pow(1 - t, 3);
     titleOpacity   = ease;
-    titleTranslateY = (1 - ease) * -80;         // يأتي من الأعلى
+    titleTranslateY = (1 - ease) * -80;
   } else if (isOutro) {
-    // Slide up + fade out
     const t        = (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
-    const ease     = Math.pow(t, 2);            // ease in quad
+    const ease     = Math.pow(t, 2);
     titleOpacity   = 1 - ease;
-    titleTranslateY = ease * -60;               // يخرج لأعلى
+    titleTranslateY = ease * -60;
   } else {
     titleOpacity   = 1.0;
     titleTranslateY = 0;
   }
 
-  // ── Word animation ───────────────────────────────────────────────────────
   let wordScale, wordOpacity, wordTranslateY;
 
   if (!word) {
@@ -307,7 +353,6 @@ function buildHTML({
     wordTranslateY = 0;
   }
 
-  // ── Word sizing ──────────────────────────────────────────────────────────
   const wlen = word ? word.length : 0;
   let baseFontSize = 100;
   if (word) {
@@ -323,20 +368,16 @@ function buildHTML({
   const wordColor = isPower ? COLORS.power : COLORS.word;
   const glowColor = COLORS.glow;
 
-  // ── Hook ─────────────────────────────────────────────────────────────────
   const defaults = { ar: "🔴 لا تتجاوز هذا", fr: "🔴 Ne ratez pas ça", en: "🔴 Don't skip this" };
   const hookText = (custom_hook && custom_hook.trim()) || defaults[lang] || defaults.en;
   const hookAr   = isArabic(hookText);
   const hookDir  = hookAr ? "rtl" : "ltr";
   const hookFont = getFontFamily(hookText);
 
-  // ── Title sizing ─────────────────────────────────────────────────────────
-  // العنوان في الأعلى — نجعله أكبر وأكثر وضوحاً
   const titleArabic    = isArabic(display_title);
   const titleFontSize  = titleArabic ? 52 : 46;
   const emojiSize      = titleArabic ? 56 : 50;
 
-  // ── Power word container ─────────────────────────────────────────────────
   const powerContainerStyle = isPower ? `
     background:linear-gradient(135deg,#FF1744 0%,#D50000 100%);
     padding:24px 60px;
@@ -380,8 +421,6 @@ function buildHTML({
       width:${WIDTH}px; height:${HEIGHT}px;
       overflow:hidden; background:transparent;
     }
-
-    /* Cinematic overlays */
     .ot {
       position:absolute; top:0; left:0; right:0; height:40%;
       background:linear-gradient(to bottom,
@@ -398,8 +437,6 @@ function buildHTML({
         transparent 100%);
       pointer-events:none; z-index:1;
     }
-
-    /* ✅ العنوان في الأعلى — بارز وجذاب */
     .tc {
       position:absolute;
       top:410px;
@@ -412,8 +449,6 @@ function buildHTML({
       transform:translateX(-50%) translateY(${titleTranslateY.toFixed(2)}px);
       opacity:${titleOpacity.toFixed(4)};
     }
-
-    /* الخط الأحمر تحت العنوان */
     .tc::after {
       content:'';
       display:block;
@@ -424,7 +459,6 @@ function buildHTML({
       background:linear-gradient(90deg,transparent,#FF1744,transparent);
       opacity:${titleOpacity.toFixed(4)};
     }
-
     .tt {
       font-family:${titleFont};
       font-size:${titleFontSize}px;
@@ -447,8 +481,6 @@ function buildHTML({
         -2px -2px 0 rgba(0,0,0,0.8);
     }
     .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
-
-    /* Hook badge */
     .hb {
       position:absolute;
       top:${titleArabic ? "290px" : "270px"};
@@ -470,8 +502,6 @@ function buildHTML({
         0 0 100px rgba(220,0,0,0.3),
         0 8px 24px rgba(0,0,0,0.5);
     }
-
-    /* Word container */
     .wc {
       position:absolute;
       left:50%;
@@ -495,8 +525,6 @@ function buildHTML({
 <body>
   <div class="ot"></div>
   <div class="ob"></div>
-
-  <!-- ✅ العنوان دائماً في الأعلى مع animation -->
   <div class="tc">
     <div class="tt">
       <span class="te">${emoji_left}</span>
@@ -504,23 +532,20 @@ function buildHTML({
       <span class="te">${emoji_right}</span>
     </div>
   </div>
-
   ${isHook ? `<div class="hb">${esc(hookText)}</div>` : ""}
-
   ${word ? `
   <div class="wc">
     <div class="wp">
       <span class="wt">${esc(word)}</span>
     </div>
   </div>` : ""}
-
 </body>
 </html>`;
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RENDER PNGs
+// RENDER PNGs — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function renderAllPNGs(page, frameStateMap) {
@@ -541,7 +566,6 @@ async function renderAllPNGs(page, frameStateMap) {
 
   console.log(`\n📸 ${unique.size} unique states to render`);
 
-  // Font warmup
   for (const [w, l] of [["مرحبا", "ar"], ["Hello", "en"]]) {
     const html = buildHTML({
       word: w, isPower: false, isHook: false,
@@ -586,7 +610,7 @@ async function renderAllPNGs(page, frameStateMap) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// BACKGROUND PROCESSING
+// BACKGROUND PROCESSING — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 function processBackground(videoPath, duration, outPath, idx, isHook = false) {
@@ -678,7 +702,7 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FFMPEG HELPERS
+// FFMPEG HELPERS — لم تتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 function framesToMov(frameDir, outPath) {
@@ -692,7 +716,6 @@ function framesToMov(frameDir, outPath) {
 }
 
 function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
-  // المحاولة الأولى: overlay + صوت من bg
   let r = spawnSync("ffmpeg", [
     "-y",
     "-i", bgMp4,
@@ -707,7 +730,6 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
-  // Fallback: صوت من ملف منفصل
   if (r.status !== 0 && audioPth) {
     console.log("  ⚠️  BG has no audio — using audio file directly");
     r = spawnSync("ffmpeg", [
@@ -813,29 +835,30 @@ async function main() {
 
   // ════════════════════════════════════════════════════════════════════
   // MODE: bg_only
+  // ✅ التعديل الوحيد هنا: يقرأ clip_durations الفعلية لكل جملة
   // ════════════════════════════════════════════════════════════════════
   if (mode === "bg_only") {
-    const totalClips    = Math.max(1, Math.floor(effectiveDuration / clip_duration));
-    const actualClipDur = effectiveDuration / totalClips;
 
-    console.log(`📊 ${totalClips} clips × ${actualClipDur.toFixed(2)}s`);
+    // ✅ بناء خطة الكليبات من clip_durations أو fallback
+    const clipPlan = buildClipPlan();
+
+    console.log(`📊 ${clipPlan.length} clips total`);
 
     const finalClips = [];
     const clipDurs   = [];
 
-    for (let i = 0; i < totalClips; i++) {
-      const clipStart = i * actualClipDur;
-      const clipEnd   = Math.min((i + 1) * actualClipDur, effectiveDuration);
-      const clipDur   = Math.max(clipEnd - clipStart, 0.5);
-      const isHookClip = i === 0 && has_hook;
-      const vidSrc    = videos[i % videos.length];
+    for (const clip of clipPlan) {
+      const { index, duration, videoPath, isHook } = clip;
 
-      process.stdout.write(`  [${i+1}/${totalClips}] ${clipDur.toFixed(2)}s${isHookClip?" 🔥":""}... `);
+      process.stdout.write(
+        `  [${index + 1}/${clipPlan.length}] ` +
+        `${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
+      );
 
-      const bgMp4 = `${TMP}/bg_${String(i).padStart(3,"0")}.mp4`;
-      processBackground(vidSrc, clipDur, bgMp4, i, isHookClip);
+      const bgMp4 = `${TMP}/bg_${String(index).padStart(3, "0")}.mp4`;
+      processBackground(videoPath, duration, bgMp4, index, isHook);
       finalClips.push(bgMp4);
-      clipDurs.push(clipDur);
+      clipDurs.push(duration);
       process.stdout.write("✓\n");
     }
 
@@ -849,7 +872,7 @@ async function main() {
   }
 
   // ════════════════════════════════════════════════════════════════════
-  // MODE: words_only
+  // MODE: words_only — لم يتغير شيء هنا إطلاقاً
   // ════════════════════════════════════════════════════════════════════
   if (mode === "words_only") {
     const bgVideoPath = videos[0];
@@ -886,11 +909,9 @@ async function main() {
     await browser.close();
     console.log(`✅ ${pngCache.size} PNGs\n`);
 
-    // Build frame directory
     const frameDir = `${TMP}/frames_words`;
     mkdirSync(frameDir, { recursive: true });
 
-    // Empty frame fallback
     const emptyKey = `empty_n`;
     const emptyPng = pngCache.get(emptyKey);
 
