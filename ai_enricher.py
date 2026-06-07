@@ -36,13 +36,19 @@ LANG_NAMES: dict[str, str] = {
     "en": "English",
 }
 
+# ✅ FIX: مفتاح JSON لكل لغة — AI يُرجع أحياناً "fr" بدل "ar"
+LANG_KEY: dict[str, str] = {
+    "ar": "ar",
+    "fr": "fr",
+    "en": "en",
+}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # EXCEPTIONS
 # ═════════════════════════════════════════════════════════════════════════════
 
 class AIEnrichmentError(Exception):
-    """خطأ في توليد المحتوى بـ Groq — يوقف الفيديو."""
     pass
 
 
@@ -193,6 +199,78 @@ def _parse_json_response(
         )
     except ValueError as e:
         raise AIEnrichmentError(f"❌ {operation}: {e}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✅ FIX: helper يستخرج قيمة اللغة من JSON بغض النظر عن المفتاح
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _extract_lang_value(
+    data:      dict,
+    lang:      str,
+    operation: str,
+    min_count: int = 3,
+) -> list:
+    """
+    ✅ يستخرج قيمة اللغة من الـ JSON بطريقة مرنة.
+    يقبل:
+      - المفتاح الصحيح: "fr", "ar", "en"
+      - أي مفتاح يحتوي على قيم كافية كـ fallback
+    """
+    lang_key = LANG_KEY.get(lang, lang)
+
+    # 1. المفتاح الصحيح
+    if lang_key in data and isinstance(data[lang_key], list):
+        values = [str(x).strip() for x in data[lang_key] if str(x).strip()]
+        if len(values) >= min_count:
+            return values
+
+    # 2. fallback: أي مفتاح يعطي قيم كافية غير "en"
+    for key, val in data.items():
+        if key == "en":
+            continue
+        if isinstance(val, list):
+            values = [str(x).strip() for x in val if str(x).strip()]
+            if len(values) >= min_count:
+                print(f"  ⚠️  {operation}: using key '{key}' instead of '{lang_key}'")
+                return values
+
+    # 3. آخر محاولة: "en" كـ fallback نهائي
+    if "en" in data and isinstance(data["en"], list):
+        values = [str(x).strip() for x in data["en"] if str(x).strip()]
+        if len(values) >= min_count:
+            print(f"  ⚠️  {operation}: falling back to 'en' key")
+            return values
+
+    raise AIEnrichmentError(
+        f"❌ {operation}: cannot find valid '{lang_key}' data in response.\n"
+        f"   Keys found: {list(data.keys())}"
+    )
+
+
+def _extract_en_value(
+    data:      dict,
+    operation: str,
+    min_count: int = 3,
+) -> list:
+    """يستخرج القيم الإنجليزية دائماً."""
+    if "en" in data and isinstance(data["en"], list):
+        values = [str(x).strip() for x in data["en"] if str(x).strip()]
+        if len(values) >= min_count:
+            return values
+
+    # fallback: آخر مفتاح في الـ dict
+    for key, val in reversed(list(data.items())):
+        if isinstance(val, list):
+            values = [str(x).strip() for x in val if str(x).strip()]
+            if len(values) >= min_count:
+                print(f"  ⚠️  {operation} EN: using key '{key}'")
+                return values
+
+    raise AIEnrichmentError(
+        f"❌ {operation}: cannot find valid 'en' data.\n"
+        f"   Keys found: {list(data.keys())}"
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -363,7 +441,7 @@ Example: ["word1","word2","word3",...]"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4️⃣ ✨ VISUAL KEYWORDS — B-Roll ذكي لكل جملة
+# 4️⃣ VISUAL KEYWORDS
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_visual_keywords(
@@ -371,13 +449,6 @@ def generate_visual_keywords(
     title:     str,
     context:   dict,
 ) -> list[list[str]]:
-    """
-    ✨ B-Roll ذكي — AI يفهم محتوى كل جملة ويختار فيديو يُكمّلها بصرياً.
-
-    مثال:
-    جملة "المال يفسد العلاقات" → ["couple arguing money", "cash destroying love", "financial stress couple"]
-    جملة "النجاح يحتاج صبراً"   → ["person waiting patient", "slow growth plant", "long road success journey"]
-    """
     if not sentences:
         raise AIEnrichmentError("Cannot generate keywords for empty sentences")
 
@@ -406,19 +477,6 @@ CRITICAL RULES:
 - CONCRETE visual scene (not abstract)
 - Match the EXACT meaning of each sentence
 - Each sentence MUST have DIFFERENT keywords from others
-- Think like a film director: what shot would you use for this sentence?
-
-GOOD examples:
-- "المال يفسد العلاقات" → ["couple arguing over money bills", "businessman losing friends success", "money tearing family apart"]
-- "النجاح يحتاج صبراً"  → ["person sitting waiting patiently", "slow plant growing time lapse", "marathon runner long distance road"]
-- "الخوف يمنعك من التقدم" → ["person frozen fear doorway", "bird cage open afraid fly", "shadow blocking bright path"]
-- "الثقة بالنفس مفتاح" → ["confident person standing tall mirror", "key unlocking golden door sunrise", "strong woman assertive meeting"]
-
-BAD examples:
-- "success" (too abstract)
-- "motivation" (not visual)
-- "life" (too vague)
-- "good" (meaningless visually)
 
 Sentences ({n} total):
 {sentences_text}
@@ -459,7 +517,7 @@ Format: [["kw1","kw2","kw3"],["kw1","kw2","kw3"],...]"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 5️⃣ PATTERN INTERRUPTS
+# 5️⃣ PATTERN INTERRUPTS — ✅ FIX: يدعم fr/ar/en
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_pattern_interrupts(
@@ -472,6 +530,7 @@ def generate_pattern_interrupts(
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "curiosity")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
+    lang_key     = LANG_KEY.get(lang, lang)
 
     prompt = f"""Generate {count} SHORT pattern interrupt phrases \
 in {lang_name} AND English.
@@ -480,33 +539,36 @@ Title: "{title}" | Type: {content_type} | Emotion: {emotion}
 
 Rules: 1-4 words MAX, shocking, can include emojis.
 
-Return ONLY JSON:
-{{"ar": ["phrase1",...], "en": ["phrase1",...]}}"""
+Return ONLY JSON with exactly these two keys:
+{{"{lang_key}": ["phrase1",...], "en": ["phrase1",...]}}"""
 
     raw  = _call_groq(prompt, max_tokens=500, temperature=0.8,
                       operation_name="Pattern Interrupts")
     data = _parse_json_response(raw, dict, "Pattern Interrupts")
 
-    if "ar" not in data or "en" not in data:
-        raise AIEnrichmentError("Pattern Interrupts: missing 'ar' or 'en' keys")
+    # ✅ FIX: استخدام helper المرن
+    lang_values = _extract_lang_value(data, lang, "Pattern Interrupts",
+                                      min_count=3)
+    en_values   = _extract_en_value(data, "Pattern Interrupts", min_count=3)
 
     result = {
-        "ar": [str(x).strip() for x in data["ar"][:count] if str(x).strip()],
-        "en": [str(x).strip() for x in data["en"][:count] if str(x).strip()],
+        lang_key: lang_values[:count],
+        "en":     en_values[:count],
     }
 
-    if len(result["ar"]) < 3 or len(result["en"]) < 3:
+    if len(result[lang_key]) < 3 or len(result["en"]) < 3:
         raise AIEnrichmentError("❌ Pattern Interrupts: not enough phrases")
 
     print(
         f"  ✅ Pattern Interrupts: "
-        f"AR({len(result['ar'])}) | EN({len(result['en'])})"
+        f"{lang_key.upper()}({len(result[lang_key])}) | "
+        f"EN({len(result['en'])})"
     )
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 6️⃣ ENGAGEMENT QUESTIONS
+# 6️⃣ ENGAGEMENT QUESTIONS — ✅ FIX: يدعم fr/ar/en
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_engagement_questions(
@@ -518,6 +580,7 @@ def generate_engagement_questions(
 ) -> dict[str, list[str]]:
     content_type = context.get("content_type", "general")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
+    lang_key     = LANG_KEY.get(lang, lang)
 
     prompt = f"""Generate {count} SHORT engagement questions \
 in {lang_name} AND English.
@@ -526,33 +589,36 @@ Title: "{title}" | Type: {content_type}
 
 Rules: 3-7 words, encourage comments, can include emojis.
 
-Return ONLY JSON:
-{{"ar": ["q1",...], "en": ["q1",...]}}"""
+Return ONLY JSON with exactly these two keys:
+{{"{lang_key}": ["q1",...], "en": ["q1",...]}}"""
 
     raw  = _call_groq(prompt, max_tokens=500, temperature=0.8,
                       operation_name="Engagement Questions")
     data = _parse_json_response(raw, dict, "Engagement Questions")
 
-    if "ar" not in data or "en" not in data:
-        raise AIEnrichmentError("Engagement Questions: missing keys")
+    # ✅ FIX
+    lang_values = _extract_lang_value(data, lang, "Engagement Questions",
+                                      min_count=3)
+    en_values   = _extract_en_value(data, "Engagement Questions", min_count=3)
 
     result = {
-        "ar": [str(x).strip() for x in data["ar"][:count] if str(x).strip()],
-        "en": [str(x).strip() for x in data["en"][:count] if str(x).strip()],
+        lang_key: lang_values[:count],
+        "en":     en_values[:count],
     }
 
-    if len(result["ar"]) < 3 or len(result["en"]) < 3:
+    if len(result[lang_key]) < 3 or len(result["en"]) < 3:
         raise AIEnrichmentError("❌ Engagement Questions: not enough")
 
     print(
         f"  ✅ Engagement Questions: "
-        f"AR({len(result['ar'])}) | EN({len(result['en'])})"
+        f"{lang_key.upper()}({len(result[lang_key])}) | "
+        f"EN({len(result['en'])})"
     )
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 7️⃣ HASHTAGS
+# 7️⃣ HASHTAGS — ✅ FIX الرئيسي: يدعم fr/ar/en
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_hashtags(
@@ -564,6 +630,7 @@ def generate_hashtags(
 ) -> dict[str, list[str]]:
     content_type = context.get("content_type", "general")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
+    lang_key     = LANG_KEY.get(lang, lang)
 
     prompt = f"""Generate {count} hashtags per language \
 in {lang_name} AND English.
@@ -572,15 +639,12 @@ Title: "{title}" | Type: {content_type}
 
 Rules: start with #, underscores instead of spaces, no spaces.
 
-Return ONLY JSON:
-{{"ar": ["#tag1",...], "en": ["#tag1",...]}}"""
+Return ONLY JSON with exactly these two keys:
+{{"{lang_key}": ["#tag1",...], "en": ["#tag1",...]}}"""
 
     raw  = _call_groq(prompt, max_tokens=600, temperature=0.6,
                       operation_name="Hashtags")
     data = _parse_json_response(raw, dict, "Hashtags")
-
-    if "ar" not in data or "en" not in data:
-        raise AIEnrichmentError("Hashtags: missing keys")
 
     def clean_tags(tags: list) -> list[str]:
         result: list[str] = []
@@ -593,20 +657,28 @@ Return ONLY JSON:
             result.append(tag)
         return result
 
+    # ✅ FIX الرئيسي
+    lang_values = _extract_lang_value(data, lang, "Hashtags", min_count=5)
+    en_values   = _extract_en_value(data, "Hashtags", min_count=5)
+
     result = {
-        "ar": clean_tags(data["ar"][:count]),
-        "en": clean_tags(data["en"][:count]),
+        lang_key: clean_tags(lang_values[:count]),
+        "en":     clean_tags(en_values[:count]),
     }
 
-    if len(result["ar"]) < 5 or len(result["en"]) < 5:
+    if len(result[lang_key]) < 5 or len(result["en"]) < 5:
         raise AIEnrichmentError("❌ Hashtags: not enough")
 
-    print(f"  ✅ Hashtags: AR({len(result['ar'])}) | EN({len(result['en'])})")
+    print(
+        f"  ✅ Hashtags: "
+        f"{lang_key.upper()}({len(result[lang_key])}) | "
+        f"EN({len(result['en'])})"
+    )
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 8️⃣ CAPTIONS
+# 8️⃣ CAPTIONS — ✅ FIX: يدعم fr/ar/en
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_captions(
@@ -617,8 +689,13 @@ def generate_captions(
     lang:     str = "ar",
 ) -> dict[str, str]:
     lang_name = LANG_NAMES.get(lang, "Arabic")
-    ar_tags   = " ".join(hashtags.get("ar", [])[:10])
-    en_tags   = " ".join(hashtags.get("en", [])[:10])
+    lang_key  = LANG_KEY.get(lang, lang)
+
+    # ✅ FIX: نأخذ الـ hashtags بالمفتاح الصحيح
+    lang_tags = hashtags.get(lang_key, hashtags.get(lang, []))
+    en_tags   = hashtags.get("en", [])
+    lang_tags_str = " ".join(lang_tags[:10])
+    en_tags_str   = " ".join(en_tags[:10])
 
     prompt = f"""Write a professional Facebook caption \
 in {lang_name} AND English.
@@ -638,32 +715,49 @@ Rules:
 - 5-7 lines total
 - NO hashtags in caption body
 
-Return ONLY JSON:
-{{"ar": "caption here", "en": "caption here"}}"""
+Return ONLY JSON with exactly these two keys:
+{{"{lang_key}": "caption here", "en": "caption here"}}"""
 
     raw  = _call_groq(prompt, max_tokens=800, temperature=0.7,
                       operation_name="Captions")
     data = _parse_json_response(raw, dict, "Captions")
 
-    if "ar" not in data or "en" not in data:
-        raise AIEnrichmentError("Captions: missing keys")
+    # ✅ FIX: استخراج مرن
+    lang_caption = ""
+    en_caption   = ""
 
-    ar_caption = data["ar"].strip()
-    en_caption = data["en"].strip()
+    # اللغة المطلوبة
+    for key in [lang_key, lang, "ar", "fr"]:
+        if key in data and isinstance(data[key], str) and data[key].strip():
+            lang_caption = data[key].strip()
+            break
 
-    if ar_tags:
-        ar_caption = f"{ar_caption}\n.\n.\n.\n{ar_tags}"
-    if en_tags:
-        en_caption = f"{en_caption}\n.\n.\n.\n{en_tags}"
+    # الإنجليزية
+    if "en" in data and isinstance(data["en"], str) and data["en"].strip():
+        en_caption = data["en"].strip()
+
+    if not lang_caption:
+        raise AIEnrichmentError(
+            f"❌ Captions: missing {lang_key} caption.\n"
+            f"   Keys found: {list(data.keys())}"
+        )
+    if not en_caption:
+        en_caption = lang_caption  # fallback
+
+    if lang_tags_str:
+        lang_caption = f"{lang_caption}\n.\n.\n.\n{lang_tags_str}"
+    if en_tags_str:
+        en_caption = f"{en_caption}\n.\n.\n.\n{en_tags_str}"
 
     result = {
-        "ar": ar_caption[:60000],
-        "en": en_caption[:60000],
+        lang_key: lang_caption[:60000],
+        "en":     en_caption[:60000],
     }
 
     print(
         f"  ✅ Captions: "
-        f"AR({len(result['ar'])} chars) | EN({len(result['en'])} chars)"
+        f"{lang_key.upper()}({len(result[lang_key])} chars) | "
+        f"EN({len(result['en'])} chars)"
     )
     return result
 
@@ -712,7 +806,7 @@ Example: ["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🔟 HOOK KEYWORD — للفيديو الخلفي
+# 🔟 HOOK KEYWORD
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_hook_keyword(
@@ -767,10 +861,6 @@ def generate_custom_hook(
     context: dict,
     lang:    str = "ar",
 ) -> str:
-    """
-    ✨ توليد جملة Hook مخصصة تُعرض في أول 3 ثواني.
-    بدلاً من أول جملة من السكريبت.
-    """
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "curiosity")
@@ -794,14 +884,14 @@ The hook must:
 - Make the viewer NEED to watch more
 - Sound like a secret or revelation
 
-GOOD examples in Arabic:
-- "90٪ من الناس لا يعرفون هذا السر"
-- "هناك كلمة واحدة تغيّر كل شيء"
-- "توقف... هذا سيصدمك"
-
 GOOD examples in French:
 - "Ce que personne ne te dit..."
 - "Le secret que 90% ignorent"
+- "Arrête tout... tu dois savoir ça"
+
+GOOD examples in Arabic:
+- "90٪ من الناس لا يعرفون هذا السر"
+- "هناك كلمة واحدة تغيّر كل شيء"
 
 GOOD examples in English:
 - "Nobody tells you this truth"
@@ -837,22 +927,10 @@ Return ONLY the hook sentence, nothing else."""
 
 def enrich_record(
     record:  dict,
-    lang:    str              = "ar",
+    lang:    str               = "ar",
     tagged:  list[dict] | None = None,
-    verbose: bool             = True,
+    verbose: bool              = True,
 ) -> dict:
-    """
-    تطبيق كل عمليات Groq على record واحد.
-
-    Args:
-        record:  dict يحتوي على: number, title, content
-        lang:    اللغة (ar, fr, en)
-        tagged:  قائمة الجمل المُصنَّفة (اختياري)
-        verbose: طباعة التقدم
-
-    Returns:
-        dict يحتوي على كل البيانات المُولَّدة
-    """
     title   = record.get("title", "")
     content = record.get("content", "").strip()
 
@@ -862,38 +940,30 @@ def enrich_record(
         raise AIEnrichmentError("Cannot enrich: content is empty")
 
     lang_name = LANG_NAMES.get(lang, "Arabic")
+    lang_key  = LANG_KEY.get(lang, lang)
 
     if verbose:
-        print(
-            f"\n  🧠 AI Enrichment for: '{title[:50]}' ({lang_name})"
-        )
+        print(f"\n  🧠 AI Enrichment for: '{title[:50]}' ({lang_name})")
         print(f"  {'─' * 50}")
-        print(
-            f"  📌 Title: "
-            f"{DEFAULT_EMOJI_LEFT} {title} {DEFAULT_EMOJI_RIGHT}"
-        )
+        print(f"  📌 Title: {DEFAULT_EMOJI_LEFT} {title} {DEFAULT_EMOJI_RIGHT}")
 
-    # ── 1. Content Analysis ──────────────────────────────────────────────────
+    # 1. Content Analysis
     analysis = analyze_content(title, content, lang)
 
-    # ── 2. Suggest tags ──────────────────────────────────────────────────────
+    # 2. Suggest tags
     if tagged:
         tags_needed = [s for s in tagged if s.get("final_tag") is None]
         if tags_needed:
-            suggested = suggest_tags_for_sentences(
-                tags_needed, analysis, lang
-            )
+            suggested = suggest_tags_for_sentences(tags_needed, analysis, lang)
             for i, sent in enumerate(tags_needed):
                 sent["final_tag"]     = suggested[i]
                 sent["tag_source"]    = "ai_suggested"
-                sent["text_with_tag"] = (
-                    f"[{suggested[i]}] {sent['text']}"
-                )
+                sent["text_with_tag"] = f"[{suggested[i]}] {sent['text']}"
 
-    # ── 3. Power Words ───────────────────────────────────────────────────────
+    # 3. Power Words
     power_words = generate_power_words(content, analysis, lang)
 
-    # ── 4. ✨ B-Roll ذكي — Visual Keywords ────────────────────────────────────
+    # 4. Visual Keywords
     sentences_for_keywords = (
         [s["text"] for s in tagged] if tagged else [content[:200]]
     )
@@ -901,28 +971,28 @@ def enrich_record(
         sentences_for_keywords, title, analysis
     )
 
-    # ── 5. Pattern Interrupts ────────────────────────────────────────────────
+    # 5. Pattern Interrupts
     interrupts = generate_pattern_interrupts(title, content, analysis, lang)
 
-    # ── 6. Engagement Questions ──────────────────────────────────────────────
+    # 6. Engagement Questions
     questions = generate_engagement_questions(title, content, analysis, lang)
 
-    # ── 7. Hashtags ──────────────────────────────────────────────────────────
+    # 7. Hashtags
     hashtags = generate_hashtags(title, content, analysis, lang)
 
-    # ── 8. Captions ──────────────────────────────────────────────────────────
+    # 8. Captions
     captions = generate_captions(title, content, analysis, hashtags, lang)
 
-    # ── 9. Accent Colors ─────────────────────────────────────────────────────
+    # 9. Accent Colors
     accent_colors = suggest_accent_colors(analysis)
 
-    # ── 10. Hook Keyword ─────────────────────────────────────────────────────
+    # 10. Hook Keyword
     hook_keyword = generate_hook_keyword(title, content, analysis)
 
-    # ── 11. ✨ Custom Hook Sentence ───────────────────────────────────────────
+    # 11. Custom Hook
     custom_hook = generate_custom_hook(title, content, analysis, lang)
 
-    # ── 12. Title + Emojis ───────────────────────────────────────────────────
+    # 12. Title + Emojis
     attractive_title = {
         "title":       title,
         "emoji_left":  DEFAULT_EMOJI_LEFT,
