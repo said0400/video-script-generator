@@ -4,9 +4,8 @@
 Pipeline النهائي (تزامن 100%):
   A. TTS → Trim → Speed Up → Mix Music + SFX
   B. فيديوهات خلفية + Ken Burns → فيديو خلفية كامل
-  C. استخراج الصوت من الفيديو النهائي
-  D. WhisperX على الصوت المستخرج → timestamps دقيقة
-  E. Render الكلمات فوق الفيديو
+  C. WhisperX على الصوت النظيف (قبل الموسيقى) → timestamps دقيقة
+  D. Render الكلمات فوق الفيديو
 """
 
 from __future__ import annotations
@@ -126,6 +125,14 @@ def _reset_used_videos() -> int:
     return count
 
 
+def _safe_unlink(path: str) -> None:
+    """حذف ملف مؤقت بأمان."""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # TRIM SILENCE
 # ═════════════════════════════════════════════════════════════════════════════
@@ -188,6 +195,8 @@ def _speed_up_audio(audio_path: str, speed: float, output_path: str) -> str:
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP A: PRODUCE FULL AUDIO
+# ✅ يُرجع (mixed_audio, clean_voice, duration)
+# clean_voice = الصوت بدون موسيقى → يُستخدم في WhisperX
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_full_audio(
@@ -195,10 +204,11 @@ def produce_full_audio(
     output_base:  str,
     music_volume: float = 0.12,
     sfx_type:     str   = "swoosh",
-) -> tuple[Path, float]:
+) -> tuple[Path, Path, float]:
     """
     TTS → Trim → Speed Up → Mix Music + SFX
-    Returns: (audio_path, duration)
+    Returns: (mixed_audio_path, clean_voice_path, duration)
+    ✅ clean_voice_path = الصوت النظيف بدون موسيقى للـ WhisperX
     """
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
@@ -233,7 +243,7 @@ def produce_full_audio(
     else:
         wav_path = None
 
-    # 2. Trim
+    # 2. Trim silence
     if wav_path:
         trimmed = _trim_silence(wav_path, f"{output_base}_voice_trimmed.wav")
         if trimmed != wav_path:
@@ -253,9 +263,12 @@ def produce_full_audio(
                 real_dur = d
             print(f"  📏 After speed: {real_dur:.3f}s")
 
+    # ✅ حفظ مسار الصوت النظيف قبل إضافة الموسيقى
+    clean_voice_path = Path(wav_path) if wav_path else Path(f"{output_base}_voice_0.wav")
+
     # 4. Mix Music + SFX
-    mixed_out      = f"{output_base}_audio_mixed.aac"
-    fallback_voice = wav_path or f"{output_base}_voice_0.wav"
+    mixed_out     = f"{output_base}_audio_mixed.aac"
+    fallback_voice = str(clean_voice_path)
     n_clips        = max(1, int(real_dur / CLIP_DURATION))
     clip_dur_list  = [real_dur / n_clips] * n_clips
 
@@ -275,15 +288,15 @@ def produce_full_audio(
         if d >= 5:
             real_dur = d
         print(f"  ✅ Audio ready: {real_dur:.3f}s")
-        return Path(final_audio), real_dur
+        return Path(final_audio), clean_voice_path, real_dur
 
     except Exception as e:
         print(f"  ⚠️  Mix error: {e} — using raw voice")
-        return Path(fallback_voice), real_dur
+        return clean_voice_path, clean_voice_path, real_dur
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP B: PRODUCE BACKGROUND VIDEO (بدون نص)
+# STEP B: PRODUCE BACKGROUND VIDEO
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_bg_video(
@@ -295,7 +308,7 @@ def produce_bg_video(
     has_hook:    bool,
 ) -> Path:
     """
-    إنتاج فيديو خلفية كامل مع الصوت — بدون نص.
+    إنتاج فيديو خلفية كامل مع الصوت المدمج — بدون نص.
     render.mjs وضع "bg_only"
     """
     manifest = {
@@ -332,7 +345,7 @@ def produce_bg_video(
     if not script.exists():
         raise FileNotFoundError(f"render.mjs not found at {script}")
 
-    print(f"\n  🎬 Producing background video (no text)...")
+    print(f"\n  🎬 Producing background video...")
 
     r = subprocess.run(
         ["node", str(script), str(manifest_path), str(out)],
@@ -350,43 +363,63 @@ def produce_bg_video(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP C: EXTRACT AUDIO FROM VIDEO
+# STEP C: WHISPERX على الصوت النظيف
+# ✅ إصلاح: نحلل الصوت النظيف (بدون موسيقى) لدقة أعلى
 # ═════════════════════════════════════════════════════════════════════════════
 
-def extract_audio_from_video(
-    video_path:  str,
-    output_path: str,
-) -> str:
+def run_whisperx(
+    clean_voice_path: Path,
+    out_base:         str,
+    lang:             str,
+) -> tuple[list, list]:
     """
-    ✅ استخراج الصوت من الفيديو النهائي.
-    WhisperX يحلل هذا الصوت = نفس ما يسمعه المشاهد.
+    ✅ WhisperX على الصوت النظيف بدون موسيقى.
+    الموسيقى تشوش على WhisperX وتعطي timestamps خاطئة.
+    Returns: (aligned, sentences)
     """
-    print(f"\n  🔊 Extracting audio from final video...")
+    print(f"\n  🎤 WhisperX on clean voice: {clean_voice_path.name}")
 
+    # ✅ تحويل الصوت لـ 16kHz mono WAV إذا لم يكن كذلك
+    whisper_input = f"{out_base}_whisper_input.wav"
     r = subprocess.run(
         [
             "ffmpeg", "-y",
-            "-i", video_path,
-            "-vn",
+            "-i", str(clean_voice_path),
             "-acodec", "pcm_s16le",
             "-ar", "16000",
             "-ac", "1",
-            output_path,
+            whisper_input,
         ],
         capture_output=True, text=True,
     )
 
     if r.returncode != 0:
-        print(f"  ⚠️  Extraction failed: {r.stderr[-150:]}")
-        return video_path
+        print(f"  ⚠️  Audio conversion failed — using original")
+        whisper_input = str(clean_voice_path)
 
-    dur = get_audio_duration(output_path)
-    print(f"  ✅ Extracted: {dur:.3f}s")
-    return output_path
+    transcript = extract_transcript_from_audio(whisper_input, lang=lang)
+
+    # cleanup
+    _safe_unlink(whisper_input)
+
+    if transcript["success"]:
+        aligned   = transcript["aligned"]
+        sentences = transcript["sentences"]
+        total_words = sum(len(s.get("words", [])) for s in aligned)
+        print(
+            f"  ✅ WhisperX: {len(sentences)} sentences, "
+            f"{total_words} words"
+        )
+        generate_srt(aligned, f"{out_base}.srt")
+        generate_word_srt(aligned, f"{out_base}_words.srt")
+        return aligned, sentences
+    else:
+        print(f"  ⚠️  WhisperX failed — no text overlay")
+        return [], []
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP E: RENDER WORDS OVERLAY
+# STEP D: RENDER WORDS OVERLAY
 # ═════════════════════════════════════════════════════════════════════════════
 
 def render_words_overlay(
@@ -399,7 +432,7 @@ def render_words_overlay(
 ) -> Path:
     """
     Render الكلمات فوق الفيديو الخلفي.
-    aligned من WhisperX على الفيديو النهائي → تزامن 100%.
+    aligned من WhisperX على الصوت النظيف → تزامن دقيق.
     """
     audio_dur = get_audio_duration(str(audio_path))
 
@@ -410,7 +443,6 @@ def render_words_overlay(
         "emoji_right":   script_data.get("emoji_right", "💥"),
         "sentences":     sentences,
         "audio":         str(Path(str(audio_path)).resolve()),
-        # ✅ الفيديو الخلفي الكامل كمصدر واحد
         "videos":        [str(bg_video.resolve())],
         "duration_s":    audio_dur,
         "lang":          script_data.get("lang", "ar"),
@@ -418,12 +450,10 @@ def render_words_overlay(
         "power_words":   script_data.get("power_words",   []),
         "accent_colors": script_data.get("accent_colors", []),
         "analysis":      script_data.get("analysis",      {}),
-        # ✅ كليب واحد = مدة الفيديو كاملة
         "clip_duration": audio_dur,
         "has_hook":      bool(script_data.get("hook_keyword", "")),
         "hook_keyword":  script_data.get("hook_keyword", ""),
         "custom_hook":   script_data.get("custom_hook",  ""),
-        # ✅ aligned من WhisperX على الفيديو النهائي
         "aligned":       aligned,
         "mode":          "words_only",
     }
@@ -731,20 +761,20 @@ def process_video(
 
     try:
         # ══════════════════════════════════════════════════════════════════
-        # ✅ PIPELINE الجديد — تزامن 100%
+        # PIPELINE — تزامن 100%
         # ══════════════════════════════════════════════════════════════════
 
         # A. إنتاج الصوت الكامل
         print(f"\n  {'─'*55}")
         print(f"  ✅ STEP A: Full audio (TTS + Music + SFX)")
-        audio_path, real_dur = produce_full_audio(
+        audio_path, clean_voice_path, real_dur = produce_full_audio(
             script_data=script_data,
             output_base=out_base,
         )
 
         # B. فيديو خلفية بدون نص
         print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP B: Background video (no text)")
+        print(f"  ✅ STEP B: Background video")
         bg_video = produce_bg_video(
             video_paths = video_paths,
             audio_path  = audio_path,
@@ -754,40 +784,22 @@ def process_video(
             has_hook    = bool(hook_keyword),
         )
 
-        # C. استخراج الصوت من الفيديو النهائي
+        # C. WhisperX على الصوت النظيف (بدون موسيقى)
         print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP C: Extract audio from final video")
-        extracted_audio = f"{out_base}_from_video.wav"
-        extract_audio_from_video(str(bg_video), extracted_audio)
-
-        # D. WhisperX على الصوت المستخرج من الفيديو
-        print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP D: WhisperX on final video audio")
-        transcript = extract_transcript_from_audio(
-            extracted_audio, lang=lang,
+        print(f"  ✅ STEP C: WhisperX on clean voice")
+        aligned, whisper_sentences = run_whisperx(
+            clean_voice_path = clean_voice_path,
+            out_base         = out_base,
+            lang             = lang,
         )
 
-        if transcript["success"]:
-            aligned           = transcript["aligned"]
-            whisper_sentences = transcript["sentences"]
-            total_words       = sum(
-                len(s.get("words", [])) for s in aligned
-            )
-            print(
-                f"  ✅ WhisperX: {len(whisper_sentences)} sentences, "
-                f"{total_words} words"
-            )
-            # SRT subtitles
-            generate_srt(aligned, f"{out_base}.srt")
-            generate_word_srt(aligned, f"{out_base}_words.srt")
-        else:
-            print(f"  ⚠️  WhisperX failed — no text overlay")
-            aligned           = []
+        # fallback للجمل إذا فشل WhisperX
+        if not whisper_sentences:
             whisper_sentences = script_data["sentences"]
 
-        # E. Render الكلمات فوق الفيديو
+        # D. Render الكلمات فوق الفيديو
         print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP E: Render words overlay")
+        print(f"  ✅ STEP D: Render words overlay")
         final_video = render_words_overlay(
             bg_video    = bg_video,
             audio_path  = audio_path,
@@ -797,7 +809,7 @@ def process_video(
             out_base    = out_base,
         )
 
-        # Export additional formats
+        # Export
         if export_formats:
             export_all(str(final_video), out_base, export_formats)
 
@@ -805,14 +817,9 @@ def process_video(
 
         # Publish
         if should_publish:
-            _do_publish(
-                str(final_video), record, ai_data, lang, num,
-            )
+            _do_publish(str(final_video), record, ai_data, lang, num)
 
-        mb = (
-            final_video.stat().st_size / 1_048_576
-            if final_video.exists() else 0
-        )
+        mb = final_video.stat().st_size / 1_048_576 if final_video.exists() else 0
         print(
             f"\n  ✅ Video #{num} ({lang.upper()}) → "
             f"{final_video.name} ({mb:.1f} MB)"
@@ -832,7 +839,6 @@ def main() -> None:
     args = parse_args()
     init_db()
 
-    # Cache management
     if args.show_ai_cache is not None:
         show_ai_cache(
             args.show_ai_cache if args.show_ai_cache != "all" else None
@@ -866,7 +872,7 @@ def main() -> None:
     print(f"  Input    : {args.input_file}")
     print(f"  Language : {lang.upper()}")
     print(f"  Output   : {args.output_dir}")
-    print(f"  Pipeline : WhisperX from final video ✅")
+    print(f"  Pipeline : WhisperX on clean voice ✅")
     print()
     print_db_summary()
 
@@ -930,9 +936,7 @@ def main() -> None:
                         get_ai_cache(f"{record['number']}_{lang}")
                         or {"captions": {}}
                     )
-                    _do_publish(
-                        path, record, ai_data, lang, record["number"],
-                    )
+                    _do_publish(path, record, ai_data, lang, record["number"])
             else:
                 print(f"  ⏭️  #{record['number']} already done")
             continue
