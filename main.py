@@ -3,10 +3,11 @@
 🎬 Video Generator — Multi-Language + Auto Schedule
 Pipeline النهائي (تزامن 100%):
   A. TTS → Trim → Speed Up → Mix Music + SFX
-  B. WhisperX على الصوت النظيف (قبل الموسيقى) → timestamps دقيقة
+  B. WhisperX على الصوت النظيف → timestamps دقيقة
   C. بناء خطة الفيديوهات من التوقيتات الحقيقية (جملة = فيديو)
   D. إنتاج فيديو خلفية حسب مدة كل جملة الفعلية
   E. Render الكلمات فوق الفيديو
+  ✅ aligned يحتوي على tag لكل جملة لتأثيرات بصرية صحيحة
 """
 
 from __future__ import annotations
@@ -139,6 +140,49 @@ def _safe_unlink(path: str) -> None:
     except Exception:
         pass
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✅ TAG INJECTION INTO ALIGNED
+# إضافة tag لكل segment في aligned حتى يستخدمه render.mjs
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _inject_tags_into_aligned(
+    aligned: list[dict],
+    tagged:  list[dict],
+) -> list[dict]:
+    """
+    ✅ يضيف حقل "tag" لكل segment في aligned
+    بحيث يستخدمه render.mjs لتحديد نوع التأثير البصري.
+
+    يعتمد على مطابقة الترتيب:
+      aligned[i] ↔ tagged[i]
+
+    إذا لم يتطابق العدد → يستخدم DEFAULT_TAG.
+    """
+    if not aligned or not tagged:
+        return aligned
+
+    result = []
+    for i, seg in enumerate(aligned):
+        seg_copy = dict(seg)
+        if i < len(tagged):
+            seg_copy["tag"] = (
+                tagged[i].get("final_tag") or "information"
+            )
+        else:
+            seg_copy["tag"] = "information"
+        result.append(seg_copy)
+
+    print(
+        f"  🏷️  Tags injected into aligned: "
+        f"{len(result)} segments"
+    )
+    return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SENTENCE DURATIONS
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _estimate_sentence_durations(
     sentences:      list[str],
@@ -472,8 +516,6 @@ def produce_full_audio(
     mixed_out      = f"{output_base}_audio_mixed.aac"
     fallback_voice = str(clean_voice_path)
 
-    # ✅ clip_durations مبسطة للمكس الأولي
-    # (سيتم إعادة المكس بعد WhisperX بالتوقيتات الحقيقية)
     n_clips       = max(1, int(real_dur / CLIP_DURATION))
     clip_dur_list = [real_dur / n_clips] * n_clips
 
@@ -489,7 +531,7 @@ def produce_full_audio(
             lang           = lang,
             aligned        = aligned or [],
             sentences      = script_data.get("sentences", []),
-            tagged         = tagged_sentences,      # ✅ NEW
+            tagged         = tagged_sentences,       # ✅
         )
         d = get_audio_duration(str(final_audio))
         if d >= 5:
@@ -649,7 +691,7 @@ def produce_bg_video(
         "accent_colors":  script_data.get("accent_colors", []),
         "analysis":       script_data.get("analysis", {}),
         "clip_duration":  avg_clip,
-        "clip_durations": clip_durations,           # ✅ NEW
+        "clip_durations": clip_durations,           # ✅
         "has_hook":       has_hook,
         "hook_keyword":   script_data.get("hook_keyword", ""),
         "custom_hook":    script_data.get("custom_hook", ""),
@@ -657,7 +699,9 @@ def produce_bg_video(
         "mode":           "bg_only",
     }
 
-    manifest_path = Path(f"{out_base}_bg_manifest.json").resolve()
+    manifest_path = Path(
+        f"{out_base}_bg_manifest.json"
+    ).resolve()
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -704,6 +748,7 @@ def render_words_overlay(
 ) -> Path:
     """
     Render الكلمات فوق الفيديو الخلفي.
+    ✅ aligned يحتوي على tag لكل segment.
     لا يتغير أي منطق للتزامن هنا.
     """
     audio_dur = get_audio_duration(str(audio_path))
@@ -728,7 +773,7 @@ def render_words_overlay(
         "has_hook":      bool(script_data.get("hook_keyword", "")),
         "hook_keyword":  script_data.get("hook_keyword", ""),
         "custom_hook":   script_data.get("custom_hook",  ""),
-        "aligned":       aligned,
+        "aligned":       aligned,                   # ✅ يحتوي على tag
         "mode":          "words_only",
     }
 
@@ -851,9 +896,11 @@ def _build_script_data(
         "primary_emotion", ""
     )
     bg_styles = {
-        "fear": "cinematic", "sadness": "cinematic", "awe": "blur"
+        "fear":    "cinematic",
+        "sadness": "cinematic",
+        "awe":     "blur",
     }
-    bg_style  = bg_styles.get(emotion, "video")
+    bg_style = bg_styles.get(emotion, "video")
 
     return {
         "title":             record["title"],
@@ -1022,17 +1069,17 @@ def process_video(
 
     try:
         # ══════════════════════════════════════════════════════════════════
-        # PIPELINE الجديد — 5 خطوات
+        # PIPELINE — 5 خطوات
         # ══════════════════════════════════════════════════════════════════
 
-        # ── STEP A: TTS + Music (بدون aligned بعد) ────────────────────────
+        # ── STEP A: TTS + Music ────────────────────────────────────────────
         print(f"\n  {'─' * 55}")
         print("  ✅ STEP A: Full audio (TTS + Music + SFX)")
 
         audio_path, clean_voice_path, real_dur = produce_full_audio(
             script_data  = script_data,
             output_base  = out_base,
-            aligned      = None,        # لا يوجد aligned بعد
+            aligned      = None,
             music_volume = 0.12,
         )
 
@@ -1049,6 +1096,9 @@ def process_video(
 
         if not whisper_sentences:
             whisper_sentences = script_data["sentences"]
+
+        # ✅ إضافة tag لكل segment في aligned
+        aligned = _inject_tags_into_aligned(aligned, tagged)
 
         # ── STEP C: خطة الفيديوهات + جلبها ───────────────────────────────
         print(f"\n  {'─' * 55}")
@@ -1100,7 +1150,7 @@ def process_video(
         final_video = render_words_overlay(
             bg_video    = bg_video,
             audio_path  = audio_path,
-            aligned     = aligned,
+            aligned     = aligned,        # ✅ يحتوي على tags
             sentences   = whisper_sentences,
             script_data = script_data,
             out_base    = out_base,
@@ -1174,7 +1224,7 @@ def main() -> None:
     print(f"  Input    : {args.input_file}")
     print(f"  Language : {lang.upper()}")
     print(f"  Output   : {args.output_dir}")
-    print(f"  Pipeline : WhisperX → sentence-based clips ✅")
+    print(f"  Pipeline : WhisperX → sentence clips → visual FX ✅")
     print()
     print_db_summary()
 
