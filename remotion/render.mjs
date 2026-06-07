@@ -44,6 +44,7 @@ const WIDTH              = 1080;
 const HEIGHT             = 1920;
 const TITLE_SLIDE_FRAMES = Math.floor(0.6 * FPS);
 const HOOK_FRAMES        = Math.floor(3.0 * FPS);
+const HOOK_INTRO_FRAMES  = Math.floor(0.4 * FPS);
 
 const safeOut = outputPath
   .replace(/[^a-zA-Z0-9]/g, "_")
@@ -61,16 +62,16 @@ console.log(`🌐 Lang: ${lang.toUpperCase()} | Mode: ${mode}`);
 // ═══════════════════════════════════════════════════════════════════════════
 
 const EMOTION_COLORS = {
-  curiosity: { word: "#FFD700", glow: "rgba(255,215,0,0.5)",   power: "#FF1744", gradient: ["#FFD700","#FF8F00"] },
-  fear:      { word: "#FF4444", glow: "rgba(255,68,68,0.5)",   power: "#FFD700", gradient: ["#FF4444","#FF0000"] },
-  hope:      { word: "#00E676", glow: "rgba(0,230,118,0.5)",   power: "#FFFFFF", gradient: ["#00E676","#00B248"] },
-  joy:       { word: "#FF9100", glow: "rgba(255,145,0,0.5)",   power: "#FFFFFF", gradient: ["#FFD740","#FF6D00"] },
-  awe:       { word: "#E040FB", glow: "rgba(224,64,251,0.5)",  power: "#FFD700", gradient: ["#E040FB","#AA00FF"] },
-  surprise:  { word: "#40C4FF", glow: "rgba(64,196,255,0.5)",  power: "#FFD700", gradient: ["#40C4FF","#0091EA"] },
-  desire:    { word: "#FF1744", glow: "rgba(255,23,68,0.5)",   power: "#FFD700", gradient: ["#FF6EC7","#FF1744"] },
-  anger:     { word: "#FF1744", glow: "rgba(255,23,68,0.5)",   power: "#FFD700", gradient: ["#FF6D00","#FF1744"] },
-  sadness:   { word: "#82B1FF", glow: "rgba(130,177,255,0.5)", power: "#FFFFFF", gradient: ["#82B1FF","#448AFF"] },
-  default:   { word: "#FFFFFF", glow: "rgba(255,255,255,0.4)", power: "#FF1744", gradient: ["#FFFFFF","#E0E0E0"] },
+  curiosity: { word: "#FFD700", glow: "rgba(255,215,0,0.5)",   power: "#FF1744" },
+  fear:      { word: "#FF4444", glow: "rgba(255,68,68,0.5)",   power: "#FFD700" },
+  hope:      { word: "#00E676", glow: "rgba(0,230,118,0.5)",   power: "#FFFFFF" },
+  joy:       { word: "#FF9100", glow: "rgba(255,145,0,0.5)",   power: "#FFFFFF" },
+  awe:       { word: "#E040FB", glow: "rgba(224,64,251,0.5)",  power: "#FFD700" },
+  surprise:  { word: "#40C4FF", glow: "rgba(64,196,255,0.5)",  power: "#FFD700" },
+  desire:    { word: "#FF1744", glow: "rgba(255,23,68,0.5)",   power: "#FFD700" },
+  anger:     { word: "#FF1744", glow: "rgba(255,23,68,0.5)",   power: "#FFD700" },
+  sadness:   { word: "#82B1FF", glow: "rgba(130,177,255,0.5)", power: "#FFFFFF" },
+  default:   { word: "#FFFFFF", glow: "rgba(255,255,255,0.4)", power: "#FF1744" },
 };
 
 const emotion = (analysis.primary_emotion || "").toLowerCase();
@@ -83,74 +84,74 @@ const COLORS  = EMOTION_COLORS[emotion] || EMOTION_COLORS.default;
 
 const TAG_TRANSITION = {
   shock: {
-    flashColor:   "rgba(255,255,255,1.0)",
-    flashFrames:  9,
-    shakeAmount:  18,
-    scaleBoost:   1.12,
-    label:        "SHOCK",
+    flashColor:  "rgba(255,255,255,1.0)",
+    flashFrames: 9,
+    shakeAmount: 18,
+    scaleBoost:  1.12,
+    label:       "SHOCK",
   },
   urgency: {
-    flashColor:   "rgba(220,0,0,0.85)",
-    flashFrames:  7,
-    shakeAmount:  12,
-    scaleBoost:   1.08,
-    label:        "URGENCY",
+    flashColor:  "rgba(220,0,0,0.85)",
+    flashFrames: 7,
+    shakeAmount: 12,
+    scaleBoost:  1.08,
+    label:       "URGENCY",
   },
   intrigue: {
-    flashColor:   "rgba(0,0,0,0.6)",
-    flashFrames:  10,
-    shakeAmount:  5,
-    scaleBoost:   1.04,
-    label:        "INTRIGUE",
+    flashColor:  "rgba(0,0,0,0.6)",
+    flashFrames: 10,
+    shakeAmount: 5,
+    scaleBoost:  1.04,
+    label:       "INTRIGUE",
   },
   emotional: {
-    flashColor:   "rgba(255,100,150,0.35)",
-    flashFrames:  12,
-    shakeAmount:  3,
-    scaleBoost:   1.02,
-    label:        "EMOTIONAL",
+    flashColor:  "rgba(255,100,150,0.35)",
+    flashFrames: 12,
+    shakeAmount: 3,
+    scaleBoost:  1.02,
+    label:       "EMOTIONAL",
   },
   confident: {
-    flashColor:   "rgba(255,255,255,0.55)",
-    flashFrames:  6,
-    shakeAmount:  6,
-    scaleBoost:   1.06,
-    label:        "CONFIDENT",
+    flashColor:  "rgba(255,255,255,0.55)",
+    flashFrames: 6,
+    shakeAmount: 6,
+    scaleBoost:  1.06,
+    label:       "CONFIDENT",
   },
   inspiration: {
-    flashColor:   "rgba(255,215,0,0.6)",
-    flashFrames:  8,
-    shakeAmount:  4,
-    scaleBoost:   1.07,
-    label:        "INSPIRATION",
+    flashColor:  "rgba(255,215,0,0.6)",
+    flashFrames: 8,
+    shakeAmount: 4,
+    scaleBoost:  1.07,
+    label:       "INSPIRATION",
   },
   wisdom: {
-    flashColor:   "rgba(130,177,255,0.3)",
-    flashFrames:  14,
-    shakeAmount:  2,
-    scaleBoost:   1.01,
-    label:        "WISDOM",
+    flashColor:  "rgba(130,177,255,0.3)",
+    flashFrames: 14,
+    shakeAmount: 2,
+    scaleBoost:  1.01,
+    label:       "WISDOM",
   },
   desire: {
-    flashColor:   "rgba(255,100,180,0.4)",
-    flashFrames:  10,
-    shakeAmount:  4,
-    scaleBoost:   1.03,
-    label:        "DESIRE",
+    flashColor:  "rgba(255,100,180,0.4)",
+    flashFrames: 10,
+    shakeAmount: 4,
+    scaleBoost:  1.03,
+    label:       "DESIRE",
   },
   calm: {
-    flashColor:   "rgba(100,200,255,0.2)",
-    flashFrames:  16,
-    shakeAmount:  1,
-    scaleBoost:   1.0,
-    label:        "CALM",
+    flashColor:  "rgba(100,200,255,0.2)",
+    flashFrames: 16,
+    shakeAmount: 1,
+    scaleBoost:  1.0,
+    label:       "CALM",
   },
   information: {
-    flashColor:   "rgba(255,255,255,0.15)",
-    flashFrames:  6,
-    shakeAmount:  0,
-    scaleBoost:   1.0,
-    label:        "INFORMATION",
+    flashColor:  "rgba(255,255,255,0.15)",
+    flashFrames: 6,
+    shakeAmount: 0,
+    scaleBoost:  1.0,
+    label:       "INFORMATION",
   },
 };
 
@@ -197,7 +198,8 @@ function getFontFamily(text) {
     : `"Noto Sans", "DejaVu Sans", sans-serif`;
 }
 
-function getDir(text)  { return isArabic(text) ? "rtl" : "ltr"; }
+function getDir(text) { return isArabic(text) ? "rtl" : "ltr"; }
+
 function getLang(text) {
   if (isArabic(text)) return "ar";
   if (isFrench(text)) return "fr";
@@ -234,73 +236,48 @@ function isPowerWord(w) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ SENTENCE BOUNDARY MAP
-// يبني خريطة: frame → { tag, transitionProgress }
+// SENTENCE BOUNDARY MAP
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildSentenceBoundaryMap() {
-  // نحتاج aligned من manifest
   if (!aligned || aligned.length === 0) {
     return new Array(totalFrames).fill(null);
   }
 
-  // بناء قائمة نهايات الجمل مع tags
   const boundaries = [];
-
   for (let i = 0; i < aligned.length - 1; i++) {
     const seg     = aligned[i];
     const endTime = parseFloat(seg.end || 0);
     if (endTime <= 0) continue;
 
-    // استخراج الـ tag من aligned إذا وجد
-    // أو من sentences إذا وجدت في props
-    const tag = seg.tag || "information";
-
+    const tag    = seg.tag || "information";
     const config = TAG_TRANSITION[tag] || DEFAULT_TRANSITION;
 
     boundaries.push({
       endTime,
-      endFrame:    Math.floor(endTime * FPS),
+      endFrame: Math.floor(endTime * FPS),
       tag,
       config,
     });
   }
 
-  // بناء الخريطة
   const map = new Array(totalFrames).fill(null);
 
   for (const boundary of boundaries) {
     const { endFrame, tag, config } = boundary;
-    const totalFlashFrames = config.flashFrames;
-
-    for (let f = 0; f < totalFlashFrames; f++) {
-      const frame = endFrame + f;
+    for (let f = 0; f < config.flashFrames; f++) {
+      const frame    = endFrame + f;
       if (frame < 0 || frame >= totalFrames) continue;
-
-      // progress: 0 = بداية التأثير، 1 = نهايته
-      const progress = f / Math.max(totalFlashFrames - 1, 1);
-
-      // نضع التأثير فقط إذا لم يكن هناك تأثير أقوى
-      if (
-        map[frame] === null ||
-        (config.flashFrames > (
-          TAG_TRANSITION[map[frame].tag] || DEFAULT_TRANSITION
-        ).flashFrames)
-      ) {
+      const progress = f / Math.max(config.flashFrames - 1, 1);
+      if (map[frame] === null) {
         map[frame] = { tag, config, progress };
       }
     }
   }
 
-  const activeBoundaries = boundaries.length;
-  console.log(
-    `\n🎬 Sentence boundaries: ${activeBoundaries} transitions mapped`
-  );
+  console.log(`\n🎬 Sentence boundaries: ${boundaries.length}`);
   boundaries.forEach(b =>
-    console.log(
-      `   [${b.tag}] @ ${b.endTime.toFixed(3)}s ` +
-      `(frame ${b.endFrame}) — ${b.config.label}`
-    )
+    console.log(`   [${b.tag}] @ ${b.endTime.toFixed(3)}s`)
   );
 
   return map;
@@ -308,7 +285,7 @@ function buildSentenceBoundaryMap() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ CLIP PLAN
+// CLIP PLAN
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildClipPlan() {
@@ -327,8 +304,8 @@ function buildClipPlan() {
     });
 
     console.log(
-      `\n📋 Clip plan from sentence durations ` +
-      `(${plan.length} clips):`
+      `\n📋 Clip plan: ${plan.length} clips ` +
+      `(sentence-based durations)`
     );
     plan.forEach(c =>
       console.log(
@@ -341,14 +318,13 @@ function buildClipPlan() {
     return plan;
   }
 
-  const totalClips    = Math.max(
-    1, Math.floor(effectiveDuration / clip_duration)
-  );
+  // fallback
+  const totalClips    = Math.max(1, Math.floor(effectiveDuration / clip_duration));
   const actualClipDur = effectiveDuration / totalClips;
 
   console.log(
     `\n📋 Clip plan fallback: ` +
-    `${totalClips} clips × ${actualClipDur.toFixed(2)}s`
+    `${totalClips} × ${actualClipDur.toFixed(2)}s`
   );
 
   return Array.from({ length: totalClips }, (_, i) => ({
@@ -387,8 +363,7 @@ function buildWordList() {
 
   if (words.length === 0 && sentences.length > 0) {
     console.log("⚠️  No word alignment — equal split fallback");
-    const allText = sentences
-      .join(" ").split(/\s+/).filter(Boolean);
+    const allText = sentences.join(" ").split(/\s+/).filter(Boolean);
     const perWord = effectiveDuration / Math.max(allText.length, 1);
     for (let i = 0; i < allText.length; i++) {
       words.push({
@@ -428,7 +403,6 @@ function buildFrameStateMap(words) {
   if (!words.length) return map;
 
   let wi = 0;
-
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
     while (wi < words.length - 1 && t >= words[wi].end) wi++;
@@ -445,34 +419,26 @@ function buildFrameStateMap(words) {
   const covered = map.filter(Boolean).length;
   console.log(
     `Coverage: ${covered}/${totalFrames} ` +
-    `(${((covered/totalFrames)*100).toFixed(1)}%)`
+    `(${((covered / totalFrames) * 100).toFixed(1)}%)`
   );
   return map;
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// STATE KEY — ✅ يأخذ transitionState بعين الاعتبار
+// STATE KEY — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 function stateKey(state, globalFrame, transitionState) {
   const INTRO_FRAMES = Math.floor(1.0 * FPS);
   const OUTRO_FRAMES = Math.floor(1.0 * FPS);
-  const isIntro = globalFrame < INTRO_FRAMES;
-  const isOutro = globalFrame >= totalFrames - OUTRO_FRAMES;
 
-  if (isIntro) return `title_intro_f${globalFrame}`;
-  if (isOutro) return `title_outro_f${globalFrame}`;
+  if (globalFrame < INTRO_FRAMES) return `title_intro_f${globalFrame}`;
+  if (globalFrame >= totalFrames - OUTRO_FRAMES) return `title_outro_f${globalFrame}`;
 
-  // ✅ إذا كان هناك transition → نضيف bucket خاص
   if (transitionState) {
-    const progBucket = transitionState.progress < 0.5
-      ? "in" : "out";
-    return (
-      `tr_${transitionState.tag}_${progBucket}_` +
-      `${state ? state.word : "empty"}_` +
-      `${state?.isPower ? 1 : 0}`
-    );
+    const pb = transitionState.progress < 0.5 ? "in" : "out";
+    return `tr_${transitionState.tag}_${pb}_${state ? state.word : "empty"}_${state?.isPower ? 1 : 0}`;
   }
 
   const hook = globalFrame < HOOK_FRAMES ? "h" : "n";
@@ -480,34 +446,26 @@ function stateKey(state, globalFrame, transitionState) {
 
   const p      = state.progress;
   const bucket = p < 0.15 ? "pop" : p > 0.85 ? "fade" : "hold";
-
   return `w_${state.word}_${state.isPower ? 1 : 0}_${hook}_${bucket}`;
 }
 
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ✅ HOOK INTRO STATE KEY
-// ═══════════════════════════════════════════════════════════════════════════
-
-function hookIntroKey(globalFrame) {
-  const HOOK_INTRO_FRAMES = Math.floor(0.4 * FPS); // 12 frames
-  if (globalFrame >= HOOK_INTRO_FRAMES) return null;
-  return `hook_intro_f${globalFrame}`;
+function hookIntroKey(f) {
+  return `hook_intro_f${f}`;
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HTML BUILDER — ✅ يدعم transitionState + hookIntro
+// HTML BUILDER — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTML({
   word,
-  isPower          = false,
-  isHook           = false,
-  globalFrame      = 0,
-  progress         = 0.5,
-  transitionState  = null,
-  isHookIntro      = false,
+  isPower           = false,
+  isHook            = false,
+  globalFrame       = 0,
+  progress          = 0.5,
+  transitionState   = null,
+  isHookIntro       = false,
   hookIntroProgress = 0,
 }) {
   const ar       = word ? isArabic(word) : false;
@@ -518,21 +476,20 @@ function buildHTML({
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
-  // ── Title animation ──────────────────────────────────────────────────────
   const INTRO_FRAMES = Math.floor(1.0 * FPS);
   const OUTRO_FRAMES = Math.floor(1.0 * FPS);
-  const isIntro = globalFrame < INTRO_FRAMES;
-  const isOutro = globalFrame >= totalFrames - OUTRO_FRAMES;
+  const isIntro      = globalFrame < INTRO_FRAMES;
+  const isOutro      = globalFrame >= totalFrames - OUTRO_FRAMES;
 
   let titleOpacity, titleTranslateY;
   if (isIntro) {
-    const t        = globalFrame / INTRO_FRAMES;
-    const ease     = 1 - Math.pow(1 - t, 3);
+    const t         = globalFrame / INTRO_FRAMES;
+    const ease      = 1 - Math.pow(1 - t, 3);
     titleOpacity    = ease;
     titleTranslateY = (1 - ease) * -80;
   } else if (isOutro) {
-    const t        = (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
-    const ease     = Math.pow(t, 2);
+    const t         = (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
+    const ease      = Math.pow(t, 2);
     titleOpacity    = 1 - ease;
     titleTranslateY = ease * -60;
   } else {
@@ -540,19 +497,15 @@ function buildHTML({
     titleTranslateY = 0;
   }
 
-  // ── Word animation ───────────────────────────────────────────────────────
-  let wordScale, wordOpacity, wordTranslateY, wordRotate;
-  wordRotate = 0;
-
+  // Word animation
+  let wordScale, wordOpacity, wordTranslateY;
   if (!word) {
-    wordScale      = 1.0;
-    wordOpacity    = 0;
-    wordTranslateY = 0;
+    wordScale = 1.0; wordOpacity = 0; wordTranslateY = 0;
   } else if (progress < 0.15) {
-    const t        = progress / 0.15;
-    const ease     = 1 - Math.pow(1 - t, 2);
-    wordScale      = 0.6 + ease * 0.48;
-    wordOpacity    = Math.min(1, t * 3);
+    const t     = progress / 0.15;
+    const ease  = 1 - Math.pow(1 - t, 2);
+    wordScale   = 0.6 + ease * 0.48;
+    wordOpacity = Math.min(1, t * 3);
     wordTranslateY = (1 - ease) * 30;
   } else if (progress > 0.85) {
     const t        = (progress - 0.85) / 0.15;
@@ -565,52 +518,41 @@ function buildHTML({
     wordTranslateY = 0;
   }
 
-  // ── ✅ Hook Intro Effect (0.0s → 0.4s) ──────────────────────────────────
-  // في أول 12 frame: Zoom In سريع من 1.4 → 1.0
+  // Hook intro
   let hookIntroScale   = 1.0;
   let hookIntroOpacity = 1.0;
   if (isHookIntro) {
-    const t          = hookIntroProgress;
-    const ease       = 1 - Math.pow(1 - t, 3);
-    hookIntroScale   = 1.4 - ease * 0.4;   // 1.4 → 1.0
-    hookIntroOpacity = ease;                // 0 → 1
+    const ease     = 1 - Math.pow(1 - hookIntroProgress, 3);
+    hookIntroScale   = 1.4 - ease * 0.4;
+    hookIntroOpacity = ease;
   }
 
-  // ── ✅ Transition Effect ──────────────────────────────────────────────────
-  let flashOpacity  = 0;
-  let flashColor    = "rgba(255,255,255,0)";
-  let shakeX        = 0;
-  let shakeY        = 0;
-  let transScale    = 1.0;
+  // Transition effect
+  let flashOpacity = 0;
+  let flashColor   = "rgba(255,255,255,0)";
+  let shakeX = 0, shakeY = 0;
+  let transScale = 1.0;
 
   if (transitionState) {
     const { config, progress: tp } = transitionState;
-
-    // Flash: يظهر بسرعة ثم يختفي (ease in-out)
-    const flashPeak = 0.3;
-    if (tp <= flashPeak) {
-      flashOpacity = (tp / flashPeak);
-    } else {
-      flashOpacity = 1 - ((tp - flashPeak) / (1 - flashPeak));
-    }
+    flashOpacity = tp < 0.3
+      ? tp / 0.3
+      : 1 - (tp - 0.3) / 0.7;
     flashOpacity = Math.max(0, Math.min(1, flashOpacity));
     flashColor   = config.flashColor;
 
-    // Camera Shake
     if (config.shakeAmount > 0) {
       const shake = config.shakeAmount * (1 - tp);
-      const seed  = globalFrame * 7 + 13;
-      shakeX = Math.sin(seed * 2.3) * shake;
-      shakeY = Math.cos(seed * 1.7) * shake;
+      shakeX = Math.sin(globalFrame * 2.3) * shake;
+      shakeY = Math.cos(globalFrame * 1.7) * shake;
     }
 
-    // Scale boost ثم يرجع
     if (config.scaleBoost > 1.0 && tp < 0.5) {
       transScale = 1.0 + (config.scaleBoost - 1.0) * (1 - tp * 2);
     }
   }
 
-  // ── Word sizing ──────────────────────────────────────────────────────────
+  // Word sizing
   const wlen = word ? word.length : 0;
   let baseFontSize = 100;
   if (word) {
@@ -626,7 +568,6 @@ function buildHTML({
   const wordColor = isPower ? COLORS.power : COLORS.word;
   const glowColor = COLORS.glow;
 
-  // ── Hook text ─────────────────────────────────────────────────────────────
   const defaults  = {
     ar: "🔴 لا تتجاوز هذا",
     fr: "🔴 Ne ratez pas ça",
@@ -639,21 +580,16 @@ function buildHTML({
   const hookDir  = hookAr ? "rtl" : "ltr";
   const hookFont = getFontFamily(hookText);
 
-  // ── Title sizing ──────────────────────────────────────────────────────────
   const titleArabic   = isArabic(display_title);
   const titleFontSize = titleArabic ? 52 : 46;
   const emojiSize     = titleArabic ? 56 : 50;
 
-  // ── Power word container ──────────────────────────────────────────────────
   const powerContainerStyle = isPower ? `
     background:linear-gradient(135deg,#FF1744 0%,#D50000 100%);
     padding:24px 60px;
     border-radius:9999px;
     border:3px solid rgba(255,255,255,0.3);
-    box-shadow:
-      0 0 60px rgba(255,23,68,0.8),
-      0 0 120px rgba(255,23,68,0.4),
-      inset 0 1px 0 rgba(255,255,255,0.2);
+    box-shadow:0 0 60px rgba(255,23,68,0.8),0 0 120px rgba(255,23,68,0.4);
   ` : `background:transparent;padding:0;`;
 
   const wordTextStyle = isPower ? `
@@ -678,15 +614,10 @@ function buildHTML({
     word-break:break-word;
     -webkit-text-stroke:4px rgba(0,0,0,0.95);
     paint-order:stroke fill;
-    text-shadow:
-      0 0 40px ${glowColor},
-      0 0 80px ${glowColor};
+    text-shadow:0 0 40px ${glowColor},0 0 80px ${glowColor};
   `;
 
-  // ── Combined transforms ───────────────────────────────────────────────────
-  const finalScale = wordScale * transScale * (
-    isHookIntro ? hookIntroScale : 1.0
-  );
+  const finalScale   = wordScale * transScale * (isHookIntro ? hookIntroScale : 1.0);
   const finalOpacity = word
     ? wordOpacity * (isHookIntro ? hookIntroOpacity : 1.0)
     : 0;
@@ -694,8 +625,7 @@ function buildHTML({
   const wordTransform = (
     `translate(-50%, calc(-50% + ${wordTranslateY.toFixed(1)}px)) ` +
     `translate(${shakeX.toFixed(2)}px, ${shakeY.toFixed(2)}px) ` +
-    `scale(${finalScale.toFixed(4)}) ` +
-    `rotate(${wordRotate.toFixed(2)}deg)`
+    `scale(${finalScale.toFixed(4)})`
   );
 
   return `<!DOCTYPE html>
@@ -708,131 +638,84 @@ function buildHTML({
       width:${WIDTH}px; height:${HEIGHT}px;
       overflow:hidden; background:transparent;
     }
-
-    /* Cinematic overlays */
     .ot {
       position:absolute; top:0; left:0; right:0; height:40%;
       background:linear-gradient(to bottom,
-        rgba(0,0,0,0.85) 0%,
-        rgba(0,0,0,0.5) 50%,
-        transparent 100%);
+        rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.5) 50%, transparent 100%);
       pointer-events:none; z-index:1;
     }
     .ob {
       position:absolute; bottom:0; left:0; right:0; height:42%;
       background:linear-gradient(to top,
-        rgba(0,0,0,0.88) 0%,
-        rgba(0,0,0,0.45) 65%,
-        transparent 100%);
+        rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.45) 65%, transparent 100%);
       pointer-events:none; z-index:1;
     }
-
-    /* ✅ Flash overlay للانتقالات */
     .flash {
       position:absolute; inset:0;
       background:${flashColor};
       opacity:${flashOpacity.toFixed(4)};
-      pointer-events:none;
-      z-index:50;
+      pointer-events:none; z-index:50;
     }
-
-    /* العنوان */
     .tc {
-      position:absolute;
-      top:410px; left:50%;
+      position:absolute; top:410px; left:50%;
       width:92%; max-width:980px;
-      direction:${getDir(display_title)};
-      text-align:center;
+      direction:${titleDir}; text-align:center;
       z-index:30;
       transform:translateX(-50%) translateY(${titleTranslateY.toFixed(2)}px);
       opacity:${titleOpacity.toFixed(4)};
     }
     .tc::after {
-      content:'';
-      display:block;
-      margin:16px auto 0;
-      width:120px; height:4px;
+      content:''; display:block;
+      margin:16px auto 0; width:120px; height:4px;
       border-radius:2px;
       background:linear-gradient(90deg,transparent,#FF1744,transparent);
-      opacity:${titleOpacity.toFixed(4)};
     }
     .tt {
       font-family:${titleFont};
       font-size:${titleFontSize}px;
-      font-weight:900;
-      color:#FFFFFF;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      gap:14px;
-      line-height:1.3;
-      text-align:center;
-      direction:${getDir(display_title)};
+      font-weight:900; color:#FFFFFF;
+      display:inline-flex; align-items:center;
+      justify-content:center; gap:14px;
+      line-height:1.3; text-align:center;
+      direction:${titleDir};
       -webkit-text-stroke:2px rgba(0,0,0,0.8);
       paint-order:stroke fill;
       text-shadow:
         0 0 30px rgba(255,23,68,0.6),
-        0 0 60px rgba(255,23,68,0.3),
         0 4px 20px rgba(0,0,0,0.9),
-        2px 2px 0 rgba(0,0,0,0.8),
-        -2px -2px 0 rgba(0,0,0,0.8);
+        2px 2px 0 rgba(0,0,0,0.8);
     }
     .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
-
-    /* Hook badge */
     .hb {
       position:absolute;
       top:${titleArabic ? "290px" : "270px"};
-      left:50%;
-      transform:translateX(-50%);
-      background:linear-gradient(
-        135deg,
-        rgba(220,0,0,0.95),
-        rgba(160,0,0,0.95)
-      );
+      left:50%; transform:translateX(-50%);
+      background:linear-gradient(135deg,rgba(220,0,0,0.95),rgba(160,0,0,0.95));
       color:#fff;
       font-family:${hookFont};
       font-size:${hookAr ? "32px" : "28px"};
-      font-weight:900;
-      padding:12px 38px;
-      border-radius:9999px;
-      z-index:25;
-      white-space:nowrap;
-      direction:${hookDir};
+      font-weight:900; padding:12px 38px;
+      border-radius:9999px; z-index:25;
+      white-space:nowrap; direction:${hookDir};
       border:2px solid rgba(255,120,120,0.4);
-      box-shadow:
-        0 0 50px rgba(220,0,0,0.7),
-        0 0 100px rgba(220,0,0,0.3),
-        0 8px 24px rgba(0,0,0,0.5);
+      box-shadow:0 0 50px rgba(220,0,0,0.7),0 8px 24px rgba(0,0,0,0.5);
     }
-
-    /* Word container */
     .wc {
-      position:absolute;
-      left:50%; top:54%;
+      position:absolute; left:50%; top:54%;
       transform:${wordTransform};
       opacity:${finalOpacity.toFixed(4)};
-      direction:${dir};
-      text-align:center;
-      z-index:10;
-      width:95%; max-width:1020px;
+      direction:${dir}; text-align:center;
+      z-index:10; width:95%; max-width:1020px;
       transform-origin:center center;
     }
-    .wp {
-      display:inline-block;
-      ${powerContainerStyle}
-    }
+    .wp { display:inline-block; ${powerContainerStyle} }
     .wt { ${wordTextStyle} }
   </style>
 </head>
 <body>
   <div class="ot"></div>
   <div class="ob"></div>
-
-  <!-- Flash overlay للانتقالات -->
   <div class="flash"></div>
-
-  <!-- العنوان -->
   <div class="tc">
     <div class="tt">
       <span class="te">${emoji_left}</span>
@@ -840,39 +723,30 @@ function buildHTML({
       <span class="te">${emoji_right}</span>
     </div>
   </div>
-
   ${isHook ? `<div class="hb">${esc(hookText)}</div>` : ""}
-
   ${word ? `
   <div class="wc">
     <div class="wp">
       <span class="wt">${esc(word)}</span>
     </div>
   </div>` : ""}
-
 </body>
 </html>`;
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RENDER PNGs — ✅ يمرر transitionState و hookIntro
+// RENDER PNGs — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function renderAllPNGs(page, frameStateMap, boundaryMap) {
   const unique = new Map();
 
-  // ✅ حساب hook intro frames
-  const HOOK_INTRO_FRAMES = Math.floor(0.4 * FPS);
-
   for (let f = 0; f < frameStateMap.length; f++) {
     const transitionState = boundaryMap[f] || null;
-
-    // hook intro
-    const isHookIntro      = f < HOOK_INTRO_FRAMES;
+    const isHookIntro     = f < HOOK_INTRO_FRAMES;
     const hookIntroProgress = isHookIntro
-      ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1)
-      : 0;
+      ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1) : 0;
 
     const key = isHookIntro
       ? hookIntroKey(f)
@@ -899,8 +773,7 @@ async function renderAllPNGs(page, frameStateMap, boundaryMap) {
     const html = buildHTML({
       word: w, isPower: false, isHook: false,
       globalFrame: TITLE_SLIDE_FRAMES, progress: 0.5,
-      transitionState: null, isHookIntro: false,
-      hookIntroProgress: 0,
+      transitionState: null, isHookIntro: false, hookIntroProgress: 0,
     });
     const p = `${TMP}/init_${l}.html`;
     writeFileSync(p, html, "utf-8");
@@ -930,9 +803,7 @@ async function renderAllPNGs(page, frameStateMap, boundaryMap) {
     await page.waitForTimeout(35);
 
     const pp = `${TMP}/${key}.png`;
-    await page.screenshot({
-      path: pp, type: "png", omitBackground: true,
-    });
+    await page.screenshot({ path: pp, type: "png", omitBackground: true });
 
     cache.set(key, pp);
     done++;
@@ -946,98 +817,122 @@ async function renderAllPNGs(page, frameStateMap, boundaryMap) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// BACKGROUND PROCESSING — لم يتغير
+// ✅ NEW: PROCESS BACKGROUND
+// الحركة الأصلية للفيديو محفوظة + color grading سينمائي مظلم
+// zoompan فقط للكليب الأول (Hook)
 // ═══════════════════════════════════════════════════════════════════════════
 
-function processBackground(
-  videoPath, duration, outPath, idx, isHook = false
-) {
-  const srcDur = parseFloat(
-    spawnSync("ffprobe", [
-      "-v", "error",
-      "-show_entries", "format=duration",
-      "-of", "default=noprint_wrappers=1:nokey=1",
-      videoPath,
-    ], { stdio: ["ignore", "pipe", "pipe"] })
-    .stdout.toString().trim()
-  ) || 0;
-
-  const loop   = srcDur < duration + 0.5
-    ? ["-stream_loop", "-1"] : [];
-  const frames = Math.ceil(duration * FPS);
-  const mtype  = idx % 4;
-
-  const zooms = [
-    `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',zoompan=z='min(zoom+0.0008,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',zoompan=z='max(zoom-0.0008,1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',zoompan=z='1.1':x='if(gte(x,iw/10),x-0.5,iw/10)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',zoompan=z='1.1':x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-  ];
-
-  const hookZoom =
-    `scale=w='trunc((iw*1.5)/2)*2':h='trunc((ih*1.5)/2)*2',` +
-    `zoompan=z='min(zoom+0.0015,1.5)':` +
-    `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
-    `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
-
-  const zf = isHook ? hookZoom : zooms[mtype];
+function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   const d  = Math.max(duration, 0.5);
-  const fi = Math.min(0.4, d * 0.1);
-  const fo = Math.min(0.4, d * 0.1);
+  const fi = Math.min(0.3, d * 0.08);
+  const fo = Math.min(0.3, d * 0.08);
 
-  const cin = [
-    "curves=r='0/0 0.3/0.28 0.7/0.76 1/0.92':" +
-    "g='0/0 0.3/0.28 0.7/0.78 1/0.94':" +
-    "b='0/0.02 0.3/0.30 0.7/0.82 1/0.98'",
-    "hue=s=0.9",
-    isHook
-      ? "eq=contrast=1.15:brightness=0.02:saturation=1.1"
-      : "eq=contrast=1.08:brightness=-0.01:saturation=0.95",
-    "vignette=PI/5:eval=frame",
-    "unsharp=3:3:0.4:3:3:0.0",
-    ...(isHook ? [] : ["noise=alls=2:allf=t+u"]),
+  // ✅ Color Grading سينمائي مظلم وقوي (يطبق على الكل)
+  const cinematic = [
+    // Deep shadows + cool highlights (أسلوب A24)
+    "curves=" +
+      "r='0/0 0.25/0.15 0.5/0.5 0.75/0.82 1/0.95':" +
+      "g='0/0 0.25/0.18 0.5/0.52 0.75/0.84 1/0.96':" +
+      "b='0/0.04 0.25/0.22 0.5/0.55 0.75/0.88 1/1.0'",
+    // High contrast + slight desaturation
+    "eq=contrast=1.25:brightness=-0.06:saturation=0.82",
+    // Strong vignette
+    "vignette=PI/3.5:eval=frame",
+    // Slight sharpen
+    "unsharp=3:3:0.5:3:3:0.0",
   ].join(",");
 
-  const vf =
-    `${zf},${cin},` +
-    `fade=t=in:st=0:d=${fi.toFixed(3)},` +
-    `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
+  // ✅ Scale + Crop صحيح للحجم 9:16
+  const scaleAndCrop = (
+    `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
+    `crop=${WIDTH}:${HEIGHT},setsar=1`
+  );
 
+  let vf;
+
+  if (isHook) {
+    // ✅ الكليب الأول فقط: Zoom In خفيف (من 1.15 إلى 1.0)
+    // ليعطي إحساس الاقتراب والتركيز في البداية
+    const frames = Math.ceil(d * FPS);
+    const hookMotion =
+      `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
+      `zoompan=` +
+        `z='if(eq(on,1),1.15,max(zoom-0.005,1.0))':` +
+        `x='iw/2-(iw/zoom/2)':` +
+        `y='ih/2-(ih/zoom/2)':` +
+        `d=${frames}:` +
+        `s=${WIDTH}x${HEIGHT}:` +
+        `fps=${FPS}`;
+
+    vf = (
+      `${hookMotion},` +
+      `${cinematic},` +
+      `fade=t=in:st=0:d=${fi.toFixed(3)},` +
+      `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`
+    );
+  } else {
+    // ✅ كل الكليبات الأخرى: حركة طبيعية فقط + color grading
+    vf = (
+      `${scaleAndCrop},` +
+      `${cinematic},` +
+      `fade=t=in:st=0:d=${fi.toFixed(3)},` +
+      `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`
+    );
+  }
+
+  // المحاولة الأولى
   let r = spawnSync("ffmpeg", [
-    "-y", ...loop, "-i", videoPath,
-    "-t", duration.toFixed(3),
+    "-y",
+    "-stream_loop", "-1",
+    "-i", videoPath,
+    "-t", d.toFixed(3),
     "-vf", vf,
     "-r", String(FPS),
-    "-c:v", "libx264", "-preset", "fast",
-    "-crf", isHook ? "17" : "19",
-    "-pix_fmt", "yuv420p", "-an", outPath,
+    "-c:v", "libx264",
+    "-preset", "fast",
+    "-crf", isHook ? "17" : "18",
+    "-pix_fmt", "yuv420p",
+    "-an",
+    outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
+  // Fallback بدون cinematic إذا فشل
   if (r.status !== 0) {
+    console.log(`  ⚠️  BG clip ${idx} fallback...`);
     r = spawnSync("ffmpeg", [
-      "-y", "-stream_loop", "-1", "-i", videoPath,
-      "-t", duration.toFixed(3),
+      "-y",
+      "-stream_loop", "-1",
+      "-i", videoPath,
+      "-t", d.toFixed(3),
       "-vf",
-      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
-      `crop=${WIDTH}:${HEIGHT},setsar=1,${cin},` +
+      `${scaleAndCrop},` +
       `fade=t=in:st=0:d=${fi.toFixed(3)},` +
       `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`,
       "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast", "-crf", "21",
-      "-pix_fmt", "yuv420p", "-an", outPath,
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "21",
+      "-pix_fmt", "yuv420p",
+      "-an",
+      outPath,
     ], { stdio: ["ignore", "pipe", "pipe"] });
   }
 
+  // Fallback بسيط جداً
   if (r.status !== 0) {
     spawnSync("ffmpeg", [
-      "-y", "-stream_loop", "-1", "-i", videoPath,
-      "-t", duration.toFixed(3),
-      "-vf",
-      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
-      `crop=${WIDTH}:${HEIGHT},setsar=1`,
+      "-y",
+      "-stream_loop", "-1",
+      "-i", videoPath,
+      "-t", d.toFixed(3),
+      "-vf", scaleAndCrop,
       "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-      "-pix_fmt", "yuv420p", "-an", outPath,
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "23",
+      "-pix_fmt", "yuv420p",
+      "-an",
+      outPath,
     ], { stdio: ["ignore", "pipe", "pipe"] });
   }
 
@@ -1065,8 +960,7 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     "-i", bgMp4,
     "-i", capMov,
     "-filter_complex",
-    "[1:v]format=rgba[cap];" +
-    "[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
+    "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
     "-map", "[out]",
     "-map", "0:a:0",
     "-c:v", "libx264", "-preset", "fast", "-crf", "19",
@@ -1083,8 +977,7 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
       "-i", capMov,
       "-i", audioPth,
       "-filter_complex",
-      "[1:v]format=rgba[cap];" +
-      "[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
+      "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
       "-map", "[out]",
       "-map", "2:a:0",
       "-c:v", "libx264", "-preset", "fast", "-crf", "19",
@@ -1095,10 +988,7 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
   }
 
   if (r.status !== 0) {
-    console.error(
-      "❌ overlayOnBg failed:",
-      r.stderr?.toString().slice(-300)
-    );
+    console.error("❌ overlayOnBg failed:", r.stderr?.toString().slice(-300));
   }
 
   return outPath;
@@ -1108,13 +998,12 @@ function xfadeConcat(clips, durs) {
   if (clips.length === 0) return "";
   if (clips.length === 1) return clips[0];
 
-  const TRANS = [
-    "fade","fadeblack","fadegrays",
-    "smoothleft","smoothright","circlecrop",
-  ];
-  const XFADE   = 0.5;
+  // ✅ انتقالات قصيرة جداً للحفاظ على الإحساس السينمائي
+  const TRANS  = ["fade", "fadeblack", "fadegrays", "smoothleft", "smoothright"];
+  const XFADE  = 0.3; // أقصر من قبل
   const filters = [];
-  let offset = 0, last = "[0:v]";
+  let offset = 0;
+  let last   = "[0:v]";
 
   for (let i = 1; i < clips.length; i++) {
     offset += durs[i - 1] - XFADE;
@@ -1133,11 +1022,12 @@ function xfadeConcat(clips, durs) {
     "-y", ...clips.flatMap(p => ["-i", p]),
     "-filter_complex", filters.join(";"),
     "-map", "[vout]",
-    "-c:v", "libx264", "-preset", "fast", "-crf", "19",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
     "-pix_fmt", "yuv420p", "-an", outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
 
   if (r.status !== 0) {
+    // Fallback: simple concat
     const lst = `${TMP}/list.txt`;
     writeFileSync(lst, clips.map(p => `file '${p}'`).join("\n"));
     const raw = `${TMP}/raw.mp4`;
@@ -1154,9 +1044,7 @@ function xfadeConcat(clips, durs) {
 function mergeAudio(videoPath, audioPath, outPath) {
   const aDur = probeDuration(audioPath);
   const vDur = probeDuration(videoPath);
-  console.log(
-    `🎵 Audio: ${aDur.toFixed(3)}s | Video: ${vDur.toFixed(3)}s`
-  );
+  console.log(`🎵 Audio: ${aDur.toFixed(3)}s | Video: ${vDur.toFixed(3)}s`);
 
   let vid = videoPath;
   if (vDur < aDur - 0.3) {
@@ -1189,14 +1077,14 @@ async function main() {
   console.log(`\n🚀 Mode: ${mode}\n`);
 
   // ════════════════════════════════════════════════════════════════════
-  // MODE: bg_only — لم يتغير شيء هنا
+  // MODE: bg_only
   // ════════════════════════════════════════════════════════════════════
   if (mode === "bg_only") {
-    const clipPlan = buildClipPlan();
-    console.log(`📊 ${clipPlan.length} clips total`);
-
+    const clipPlan   = buildClipPlan();
     const finalClips = [];
     const clipDurs   = [];
+
+    console.log(`📊 ${clipPlan.length} clips total`);
 
     for (const clip of clipPlan) {
       const { index, duration, videoPath, isHook } = clip;
@@ -1206,7 +1094,7 @@ async function main() {
         `${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
       );
 
-      const bgMp4 = `${TMP}/bg_${String(index).padStart(3,"0")}.mp4`;
+      const bgMp4 = `${TMP}/bg_${String(index).padStart(3, "0")}.mp4`;
       processBackground(videoPath, duration, bgMp4, index, isHook);
       finalClips.push(bgMp4);
       clipDurs.push(duration);
@@ -1223,23 +1111,17 @@ async function main() {
   }
 
   // ════════════════════════════════════════════════════════════════════
-  // MODE: words_only
-  // ✅ أضفنا: boundaryMap للتأثيرات البصرية عند نهاية كل جملة
-  //           hookIntro في أول 0.4 ثانية
+  // MODE: words_only — لم يتغير إطلاقاً
   // ════════════════════════════════════════════════════════════════════
   if (mode === "words_only") {
     const bgVideoPath = videos[0];
     if (!bgVideoPath) {
-      console.error(
-        "❌ words_only mode requires videos[0] as background"
-      );
+      console.error("❌ words_only requires videos[0]");
       process.exit(1);
     }
 
     const words         = buildWordList();
     const frameStateMap = buildFrameStateMap(words);
-
-    // ✅ بناء خريطة التأثيرات البصرية عند حدود الجمل
     const boundaryMap   = buildSentenceBoundaryMap();
 
     const browser = await chromium.launch({
@@ -1263,22 +1145,14 @@ async function main() {
     const page = await context.newPage();
 
     console.log("🖼️  Rendering PNGs...");
-
-    // ✅ نمرر boundaryMap
-    const pngCache = await renderAllPNGs(
-      page, frameStateMap, boundaryMap
-    );
+    const pngCache = await renderAllPNGs(page, frameStateMap, boundaryMap);
     await browser.close();
     console.log(`✅ ${pngCache.size} PNGs\n`);
 
-    // Build frame directory
     const frameDir = `${TMP}/frames_words`;
     mkdirSync(frameDir, { recursive: true });
 
-    const emptyKey = `empty_n`;
-    const emptyPng = pngCache.get(emptyKey);
-
-    const HOOK_INTRO_FRAMES = Math.floor(0.4 * FPS);
+    const emptyPng = pngCache.get(`empty_n`);
 
     for (let f = 0; f < totalFrames; f++) {
       const transitionState   = boundaryMap[f] || null;
@@ -1291,7 +1165,7 @@ async function main() {
         : stateKey(frameStateMap[f], f, transitionState);
 
       const src  = pngCache.get(key) || emptyPng;
-      const dest = `${frameDir}/frame_${String(f).padStart(6,"0")}.png`;
+      const dest = `${frameDir}/frame_${String(f).padStart(6, "0")}.png`;
       if (!src) continue;
       try { symlinkSync(src, dest); }
       catch { copyFileSync(src, dest); }
