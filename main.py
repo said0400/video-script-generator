@@ -3,9 +3,10 @@
 🎬 Video Generator — Multi-Language + Auto Schedule
 Pipeline النهائي (تزامن 100%):
   A. TTS → Trim → Speed Up → Mix Music + SFX
-  B. فيديوهات خلفية + Ken Burns → فيديو خلفية كامل
-  C. WhisperX على الصوت النظيف (قبل الموسيقى) → timestamps دقيقة
-  D. Render الكلمات فوق الفيديو
+  B. WhisperX على الصوت النظيف (قبل الموسيقى) → timestamps دقيقة
+  C. جلب فيديو واحد لكل جملة حسب المعنى الحقيقي
+  D. إنتاج فيديو خلفية حسب مدة كل جملة الفعلية
+  E. Render الكلمات فوق الفيديو
 """
 
 from __future__ import annotations
@@ -37,7 +38,11 @@ from srt            import generate_srt, generate_word_srt
 from export         import export_all
 from thumb_gen      import generate_thumbnail_html
 from thumbnail      import render_thumbnails_batch
-from sync           import get_audio_duration, extract_transcript_from_audio
+from sync           import (
+    get_audio_duration,
+    extract_transcript_from_audio,
+    build_word_timeline,
+)
 from audio_manager  import mix_voice_music_sfx
 from facebook       import (
     publish_to_facebook, credentials_available, check_credentials,
@@ -73,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("input_file",       type=str, nargs="?", default=None)
     p.add_argument("--output-dir",     type=str, default="output")
     p.add_argument("--video-number",   type=str, default=None)
-    p.add_argument("--lang",           type=str, default="ar", choices=["ar","fr","en"])
+    p.add_argument("--lang",           type=str, default="ar", choices=["ar", "fr", "en"])
     p.add_argument("--auto-next",      action="store_true")
     p.add_argument("--formats",        type=str, default="9x16")
     p.add_argument("--no-export",      action="store_true")
@@ -98,9 +103,12 @@ def _estimate_duration(text: str) -> int:
 
 
 def _should_publish(args: argparse.Namespace) -> bool:
-    if args.no_publish:  return False
-    if args.script_only: return False
-    if args.no_video:    return False
+    if args.no_publish:
+        return False
+    if args.script_only:
+        return False
+    if args.no_video:
+        return False
     return credentials_available() or args.publish_fb
 
 
@@ -111,8 +119,10 @@ def _get_content_for_lang(record: dict, lang: str) -> str:
         content = record.get("fr_content", "").strip()
     else:
         content = record.get("en_content", "").strip()
+
     if not content:
         content = record.get("content", "").strip()
+
     return content
 
 
@@ -126,11 +136,166 @@ def _reset_used_videos() -> int:
 
 
 def _safe_unlink(path: str) -> None:
-    """حذف ملف مؤقت بأمان."""
     try:
         Path(path).unlink(missing_ok=True)
     except Exception:
         pass
+
+
+def _estimate_sentence_durations(
+    sentences: list[str],
+    total_duration: float,
+) -> list[float]:
+    """
+    fallback فقط إذا فشل remap أو WhisperX.
+    يوزع مدة الصوت على الجمل حسب عدد الكلمات.
+    """
+    if not sentences:
+        return []
+
+    if total_duration <= 0:
+        return [CLIP_DURATION] * len(sentences)
+
+    counts = [max(1, len(s.split())) for s in sentences]
+    total  = sum(counts)
+
+    raw = [
+        max(0.8, total_duration * c / total)
+        for c in counts
+    ]
+
+    s = sum(raw)
+    if s <= 0:
+        return [CLIP_DURATION] * len(sentences)
+
+    scale = total_duration / s
+    out   = [round(d * scale, 3) for d in raw]
+
+    diff = round(total_duration - sum(out), 3)
+    if out:
+        out[-1] = max(0.8, round(out[-1] + diff, 3))
+
+    return out
+
+
+def _normalize_keywords_row(
+    row,
+    index: int,
+) -> list[str]:
+    defaults = [
+        "dramatic close up face dark",
+        "person staring camera shadow",
+        "mysterious cinematic expression slow motion",
+    ]
+
+    if isinstance(row, list):
+        cleaned = [str(x).strip() for x in row if str(x).strip()]
+    else:
+        cleaned = []
+
+    while len(cleaned) < 3:
+        cleaned.append(defaults[len(cleaned) % 3])
+
+    # إزالة التكرار مع الحفاظ على الترتيب
+    dedup: list[str] = []
+    seen: set[str]   = set()
+
+    for item in cleaned:
+        k = item.lower().strip()
+        if k and k not in seen:
+            seen.add(k)
+            dedup.append(item)
+
+    while len(dedup) < 3:
+        dedup.append(defaults[len(dedup) % 3])
+
+    return dedup[:3]
+
+
+def _build_clip_plan(
+    script_data: dict,
+    ai_data:     dict,
+    aligned:     list[dict],
+    total_dur:   float,
+) -> tuple[list[list[str]], list[float]]:
+    """
+    ✅ الخطة الجديدة:
+    - فيديو واحد لكل جملة
+    - مدة كل فيديو = المدة الفعلية للجملة من WhisperX
+    - الجملة الأولى تأخذ hook keyword أيضاً
+    """
+    sentences        = script_data.get("sentences", [])
+    visual_keywords  = ai_data.get("visual_keywords", []) or []
+    hook_keyword     = (script_data.get("hook_keyword") or "").strip()
+
+    if not sentences:
+        return [], []
+
+    clip_keywords: list[list[str]] = []
+    clip_durations: list[float]    = []
+
+    # fallback إذا لم تتوفر alignment حقيقية
+    estimated_durations = _estimate_sentence_durations(sentences, total_dur)
+
+    # ✅ نحاول بناء المدد من start boundaries
+    # مدة الكليب = start(next) - start(current)
+    # وآخر كليب = total_dur - start(last)
+    if aligned and len(aligned) >= len(sentences):
+        print(f"\n  🎞️  Building clip plan from WhisperX sentence timings...")
+
+        for i, sent in enumerate(sentences):
+            cur_start = float(aligned[i].get("start", 0.0))
+
+            if i < len(sentences) - 1:
+                next_start = float(aligned[i + 1].get("start", cur_start))
+                dur = max(0.8, round(next_start - cur_start, 3))
+            else:
+                dur = max(0.8, round(total_dur - cur_start, 3))
+
+            row = (
+                visual_keywords[i]
+                if i < len(visual_keywords)
+                else []
+            )
+            row = _normalize_keywords_row(row, i)
+
+            if i == 0 and hook_keyword:
+                row = [hook_keyword] + [k for k in row if k.lower() != hook_keyword.lower()]
+                row = row[:3]
+                while len(row) < 3:
+                    row.append("dramatic close up dark")
+
+            clip_keywords.append(row)
+            clip_durations.append(dur)
+
+            print(f"     [{i + 1}/{len(sentences)}] {dur:.2f}s → {row}")
+
+        return clip_keywords, clip_durations
+
+    # fallback
+    print(f"\n  ⚠️  Using estimated sentence durations fallback...")
+    for i, sent in enumerate(sentences):
+        row = (
+            visual_keywords[i]
+            if i < len(visual_keywords)
+            else []
+        )
+        row = _normalize_keywords_row(row, i)
+
+        if i == 0 and hook_keyword:
+            row = [hook_keyword] + [k for k in row if k.lower() != hook_keyword.lower()]
+            row = row[:3]
+            while len(row) < 3:
+                row.append("dramatic close up dark")
+
+        dur = estimated_durations[i] if i < len(estimated_durations) else CLIP_DURATION
+
+        clip_keywords.append(row)
+        clip_durations.append(dur)
+
+        print(f"     [{i + 1}/{len(sentences)}] ~{dur:.2f}s → {row}")
+
+    return clip_keywords, clip_durations
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -195,8 +360,6 @@ def _speed_up_audio(audio_path: str, speed: float, output_path: str) -> str:
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP A: PRODUCE FULL AUDIO
-# ✅ يُرجع (mixed_audio, clean_voice, duration)
-# clean_voice = الصوت بدون موسيقى → يُستخدم في WhisperX
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_full_audio(
@@ -208,7 +371,7 @@ def produce_full_audio(
     """
     TTS → Trim → Speed Up → Mix Music + SFX
     Returns: (mixed_audio_path, clean_voice_path, duration)
-    ✅ clean_voice_path = الصوت النظيف بدون موسيقى للـ WhisperX
+    clean_voice_path = الصوت النظيف بدون موسيقى للـ WhisperX
     """
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
@@ -217,7 +380,6 @@ def produce_full_audio(
 
     print(f"\n  🎙️  TTS ({lang.upper()}, voice={voice_key})")
 
-    # 1. TTS
     synthesize_speech(
         tagged_sentences = tagged_sentences,
         output_path      = f"{output_base}_voice",
@@ -243,7 +405,6 @@ def produce_full_audio(
     else:
         wav_path = None
 
-    # 2. Trim silence
     if wav_path:
         trimmed = _trim_silence(wav_path, f"{output_base}_voice_trimmed.wav")
         if trimmed != wav_path:
@@ -252,7 +413,6 @@ def produce_full_audio(
             if d >= 5:
                 real_dur = d
 
-    # 3. Speed Up
     speed = SPEED_MULTIPLIER.get(lang, 1.0)
     if wav_path and speed != 1.0:
         sped = _speed_up_audio(wav_path, speed, f"{output_base}_voice_fast.wav")
@@ -263,14 +423,14 @@ def produce_full_audio(
                 real_dur = d
             print(f"  📏 After speed: {real_dur:.3f}s")
 
-    # ✅ حفظ مسار الصوت النظيف قبل إضافة الموسيقى
     clean_voice_path = Path(wav_path) if wav_path else Path(f"{output_base}_voice_0.wav")
 
-    # 4. Mix Music + SFX
-    mixed_out     = f"{output_base}_audio_mixed.aac"
+    mixed_out      = f"{output_base}_audio_mixed.aac"
     fallback_voice = str(clean_voice_path)
-    n_clips        = max(1, int(real_dur / CLIP_DURATION))
-    clip_dur_list  = [real_dur / n_clips] * n_clips
+
+    # هنا فقط fallback للمكس قبل أن نملك align حقيقي
+    n_clips       = max(1, int(real_dur / CLIP_DURATION))
+    clip_dur_list = [real_dur / n_clips] * n_clips
 
     try:
         final_audio = mix_voice_music_sfx(
@@ -300,37 +460,44 @@ def produce_full_audio(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_bg_video(
-    video_paths: list,
-    audio_path:  Path,
-    real_dur:    float,
-    out_base:    str,
-    script_data: dict,
-    has_hook:    bool,
+    video_paths:     list,
+    audio_path:      Path,
+    real_dur:        float,
+    out_base:        str,
+    script_data:     dict,
+    has_hook:        bool,
+    clip_durations:  list[float],
 ) -> Path:
     """
     إنتاج فيديو خلفية كامل مع الصوت المدمج — بدون نص.
-    render.mjs وضع "bg_only"
+    ✅ كل كليب يأخذ مدته الفعلية حسب الجملة
     """
+    avg_clip = (
+        sum(clip_durations) / len(clip_durations)
+        if clip_durations else CLIP_DURATION
+    )
+
     manifest = {
-        "title":         script_data["title"],
-        "display_title": script_data.get("display_title", script_data["title"]),
-        "emoji_left":    script_data.get("emoji_left",  "🔥"),
-        "emoji_right":   script_data.get("emoji_right", "💥"),
-        "sentences":     script_data["sentences"],
-        "audio":         str(Path(str(audio_path)).resolve()),
-        "videos":        [str(Path(str(p)).resolve()) for p in video_paths],
-        "duration_s":    real_dur,
-        "lang":          script_data.get("lang", "ar"),
-        "content_type":  CONTENT_TYPE,
-        "power_words":   [],
-        "accent_colors": script_data.get("accent_colors", []),
-        "analysis":      script_data.get("analysis", {}),
-        "clip_duration": CLIP_DURATION,
-        "has_hook":      has_hook,
-        "hook_keyword":  script_data.get("hook_keyword", ""),
-        "custom_hook":   script_data.get("custom_hook", ""),
-        "aligned":       [],
-        "mode":          "bg_only",
+        "title":          script_data["title"],
+        "display_title":  script_data.get("display_title", script_data["title"]),
+        "emoji_left":     script_data.get("emoji_left",  "🔥"),
+        "emoji_right":    script_data.get("emoji_right", "💥"),
+        "sentences":      script_data["sentences"],
+        "audio":          str(Path(str(audio_path)).resolve()),
+        "videos":         [str(Path(str(p)).resolve()) for p in video_paths],
+        "duration_s":     real_dur,
+        "lang":           script_data.get("lang", "ar"),
+        "content_type":   CONTENT_TYPE,
+        "power_words":    [],
+        "accent_colors":  script_data.get("accent_colors", []),
+        "analysis":       script_data.get("analysis", {}),
+        "clip_duration":  avg_clip,
+        "clip_durations": clip_durations,
+        "has_hook":       has_hook,
+        "hook_keyword":   script_data.get("hook_keyword", ""),
+        "custom_hook":    script_data.get("custom_hook", ""),
+        "aligned":        [],
+        "mode":           "bg_only",
     }
 
     manifest_path = Path(f"{out_base}_bg_manifest.json").resolve()
@@ -364,22 +531,17 @@ def produce_bg_video(
 
 # ═════════════════════════════════════════════════════════════════════════════
 # STEP C: WHISPERX على الصوت النظيف
-# ✅ إصلاح: نحلل الصوت النظيف (بدون موسيقى) لدقة أعلى
+# ✅ لا نلمس sync.py — فقط نعيد ربط الكلمات بالجمل الأصلية إذا أمكن
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run_whisperx(
     clean_voice_path: Path,
     out_base:         str,
     lang:             str,
+    script_sentences: list[str] | None = None,
 ) -> tuple[list, list]:
-    """
-    ✅ WhisperX على الصوت النظيف بدون موسيقى.
-    الموسيقى تشوش على WhisperX وتعطي timestamps خاطئة.
-    Returns: (aligned, sentences)
-    """
     print(f"\n  🎤 WhisperX on clean voice: {clean_voice_path.name}")
 
-    # ✅ تحويل الصوت لـ 16kHz mono WAV إذا لم يكن كذلك
     whisper_input = f"{out_base}_whisper_input.wav"
     r = subprocess.run(
         [
@@ -399,23 +561,58 @@ def run_whisperx(
 
     transcript = extract_transcript_from_audio(whisper_input, lang=lang)
 
-    # cleanup
     _safe_unlink(whisper_input)
 
-    if transcript["success"]:
-        aligned   = transcript["aligned"]
-        sentences = transcript["sentences"]
-        total_words = sum(len(s.get("words", [])) for s in aligned)
-        print(
-            f"  ✅ WhisperX: {len(sentences)} sentences, "
-            f"{total_words} words"
-        )
-        generate_srt(aligned, f"{out_base}.srt")
-        generate_word_srt(aligned, f"{out_base}_words.srt")
-        return aligned, sentences
-    else:
+    if not transcript["success"]:
         print(f"  ⚠️  WhisperX failed — no text overlay")
         return [], []
+
+    aligned   = transcript["aligned"]
+    sentences = transcript["sentences"]
+
+    # ✅ نحاول إعادة ربط timestamps بالجمل الأصلية
+    # بدون لمس منطق sync.py نفسه
+    if script_sentences:
+        word_timestamps = [
+            w
+            for seg in transcript["aligned"]
+            for w in seg.get("words", [])
+        ]
+        total_script_words = sum(len(s.split()) for s in script_sentences)
+
+        if (
+            word_timestamps and
+            len(word_timestamps) >= 5 and
+            total_script_words > 0 and
+            abs(len(word_timestamps) - total_script_words) / total_script_words <= 0.05
+        ):
+            try:
+                _, rebuilt_aligned = build_word_timeline(
+                    script_sentences,
+                    word_timestamps,
+                    transcript["total_duration"],
+                )
+                if rebuilt_aligned and len(rebuilt_aligned) == len(script_sentences):
+                    aligned   = rebuilt_aligned
+                    sentences = list(script_sentences)
+                    print(
+                        f"  ✅ Re-mapped alignment to original script sentences: "
+                        f"{len(sentences)}"
+                    )
+            except Exception as e:
+                print(f"  ⚠️  Sentence remap skipped: {e}")
+        else:
+            print("  ⚠️  Sentence remap skipped — word count mismatch")
+
+    total_words = sum(len(s.get("words", [])) for s in aligned)
+    print(
+        f"  ✅ WhisperX: {len(sentences)} sentences, "
+        f"{total_words} words"
+    )
+
+    generate_srt(aligned, f"{out_base}.srt")
+    generate_word_srt(aligned, f"{out_base}_words.srt")
+    return aligned, sentences
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -430,10 +627,6 @@ def render_words_overlay(
     script_data: dict,
     out_base:    str,
 ) -> Path:
-    """
-    Render الكلمات فوق الفيديو الخلفي.
-    aligned من WhisperX على الصوت النظيف → تزامن دقيق.
-    """
     audio_dur = get_audio_duration(str(audio_path))
 
     manifest = {
@@ -699,56 +892,13 @@ def process_video(
         print_tags_summary(tagged, lang=lang)
         analysis = ai_data.get("analysis", {})
         if analysis:
-            print(f"  📊 {analysis.get('content_type')} | {analysis.get('primary_emotion')}")
+            print(
+                f"  📊 {analysis.get('content_type')} | "
+                f"{analysis.get('primary_emotion')}"
+            )
         return
 
-    # ── 5. Fetch videos ────────────────────────────────────────────────────
-    print(f"\n  📹 Fetching videos ({CLIP_DURATION}s per clip)...")
-
-    visual_keywords = ai_data.get("visual_keywords", [])
-    hook_keyword    = ai_data.get("hook_keyword", "")
-    total_duration  = script_data["estimated_seconds"]
-    n_clips         = max(1, int(total_duration / CLIP_DURATION))
-
-    print(f"  📊 Duration: {total_duration}s → {n_clips} clips")
-
-    clip_keywords: list[list[str]] = []
-    if hook_keyword:
-        clip_keywords.append([
-            hook_keyword, "dramatic close-up", "intense moment",
-        ])
-        remaining = n_clips - 1
-    else:
-        remaining = n_clips
-
-    flat_kw: list[str] = []
-    for kws in visual_keywords:
-        if isinstance(kws, list):
-            flat_kw.extend(kws)
-    if not flat_kw:
-        flat_kw = ["person thinking", "emotional moment", "deep thought"]
-
-    for i in range(remaining):
-        idx = i % len(flat_kw)
-        clip_keywords.append([
-            flat_kw[idx],
-            flat_kw[(idx + 1) % len(flat_kw)],
-            flat_kw[(idx + 2) % len(flat_kw)],
-        ])
-
-    vid_dir = str(Path(out_dir).resolve() / f"videos_{num}_{lang}")
-
-    try:
-        video_paths = fetch_videos_for_script(
-            keywords_per_sentence=clip_keywords,
-            clip_durations=[CLIP_DURATION] * n_clips,
-            output_dir=vid_dir,
-        )
-    except Exception as e:
-        print(f"  ❌ Video fetch failed: {e}")
-        return
-
-    # ── 6. Audio-only mode ─────────────────────────────────────────────────
+    # ── 5. Audio-only mode ─────────────────────────────────────────────────
     if args.no_video:
         print(f"\n  🎵 Audio only...")
         try:
@@ -761,45 +911,70 @@ def process_video(
 
     try:
         # ══════════════════════════════════════════════════════════════════
-        # PIPELINE — تزامن 100%
+        # PIPELINE الجديد
         # ══════════════════════════════════════════════════════════════════
 
         # A. إنتاج الصوت الكامل
-        print(f"\n  {'─'*55}")
+        print(f"\n  {'─' * 55}")
         print(f"  ✅ STEP A: Full audio (TTS + Music + SFX)")
         audio_path, clean_voice_path, real_dur = produce_full_audio(
             script_data=script_data,
             output_base=out_base,
         )
 
-        # B. فيديو خلفية بدون نص
-        print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP B: Background video")
-        bg_video = produce_bg_video(
-            video_paths = video_paths,
-            audio_path  = audio_path,
-            real_dur    = real_dur,
-            out_base    = out_base,
-            script_data = script_data,
-            has_hook    = bool(hook_keyword),
-        )
-
-        # C. WhisperX على الصوت النظيف (بدون موسيقى)
-        print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP C: WhisperX on clean voice")
+        # B. WhisperX أولاً للحصول على توقيتات الجمل الحقيقية
+        print(f"\n  {'─' * 55}")
+        print(f"  ✅ STEP B: WhisperX on clean voice")
         aligned, whisper_sentences = run_whisperx(
             clean_voice_path = clean_voice_path,
             out_base         = out_base,
             lang             = lang,
+            script_sentences = script_data["sentences"],
         )
 
-        # fallback للجمل إذا فشل WhisperX
         if not whisper_sentences:
             whisper_sentences = script_data["sentences"]
 
-        # D. Render الكلمات فوق الفيديو
-        print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP D: Render words overlay")
+        # C. بناء خطة الفيديوهات من التوقيتات الحقيقية
+        print(f"\n  {'─' * 55}")
+        print(f"  ✅ STEP C: Build sentence-based clip plan")
+
+        clip_keywords, clip_durations = _build_clip_plan(
+            script_data = script_data,
+            ai_data     = ai_data,
+            aligned     = aligned,
+            total_dur   = real_dur,
+        )
+
+        if not clip_keywords:
+            raise RuntimeError("Could not build clip plan")
+
+        print(f"\n  📹 Fetching {len(clip_keywords)} videos (1 per sentence)...")
+        vid_dir = str(Path(out_dir).resolve() / f"videos_{num}_{lang}")
+
+        video_paths = fetch_videos_for_script(
+            keywords_per_sentence = clip_keywords,
+            clip_durations        = clip_durations,
+            output_dir            = vid_dir,
+            aligned               = aligned,
+        )
+
+        # D. فيديو خلفية حسب مدة كل جملة
+        print(f"\n  {'─' * 55}")
+        print(f"  ✅ STEP D: Background video by sentence durations")
+        bg_video = produce_bg_video(
+            video_paths    = video_paths,
+            audio_path     = audio_path,
+            real_dur       = real_dur,
+            out_base       = out_base,
+            script_data    = script_data,
+            has_hook       = bool(script_data.get("hook_keyword")),
+            clip_durations = clip_durations,
+        )
+
+        # E. Render الكلمات فوق الفيديو
+        print(f"\n  {'─' * 55}")
+        print(f"  ✅ STEP E: Render words overlay")
         final_video = render_words_overlay(
             bg_video    = bg_video,
             audio_path  = audio_path,
@@ -809,13 +984,11 @@ def process_video(
             out_base    = out_base,
         )
 
-        # Export
         if export_formats:
             export_all(str(final_video), out_base, export_formats)
 
         mark_render_done(num, lang, str(final_video), real_dur)
 
-        # Publish
         if should_publish:
             _do_publish(str(final_video), record, ai_data, lang, num)
 
@@ -872,7 +1045,7 @@ def main() -> None:
     print(f"  Input    : {args.input_file}")
     print(f"  Language : {lang.upper()}")
     print(f"  Output   : {args.output_dir}")
-    print(f"  Pipeline : WhisperX on clean voice ✅")
+    print(f"  Pipeline : WhisperX → sentence-based clips ✅")
     print()
     print_db_summary()
 
@@ -943,9 +1116,10 @@ def main() -> None:
 
         try:
             process_video(
-                record=record, args=args,
-                out_dir=args.output_dir,
-                should_publish=will_publish,
+                record         = record,
+                args           = args,
+                out_dir        = args.output_dir,
+                should_publish = will_publish,
             )
             success += 1
         except KeyboardInterrupt:
@@ -956,7 +1130,6 @@ def main() -> None:
             traceback.print_exc()
             failed += 1
 
-    # Thumbnails
     thumbnail_queue: list[tuple[str, str]] = []
     for record in valid:
         out_base  = str(
@@ -968,11 +1141,11 @@ def main() -> None:
         if not Path(png_path).exists():
             try:
                 generate_thumbnail_html(
-                    title=record["title"],
-                    hook=record.get("title", ""),
-                    tone="energetic",
-                    lang=lang,
-                    output_path=html_path,
+                    title       = record["title"],
+                    hook        = record.get("title", ""),
+                    tone        = "energetic",
+                    lang        = lang,
+                    output_path = html_path,
                 )
                 thumbnail_queue.append((html_path, png_path))
             except Exception:
