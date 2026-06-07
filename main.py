@@ -4,7 +4,7 @@
 Pipeline النهائي (تزامن 100%):
   A. TTS → Trim → Speed Up → Mix Music + SFX
   B. WhisperX على الصوت النظيف (قبل الموسيقى) → timestamps دقيقة
-  C. جلب فيديو واحد لكل جملة حسب المعنى الحقيقي
+  C. بناء خطة الفيديوهات من التوقيتات الحقيقية (جملة = فيديو)
   D. إنتاج فيديو خلفية حسب مدة كل جملة الفعلية
   E. Render الكلمات فوق الفيديو
 """
@@ -78,7 +78,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("input_file",       type=str, nargs="?", default=None)
     p.add_argument("--output-dir",     type=str, default="output")
     p.add_argument("--video-number",   type=str, default=None)
-    p.add_argument("--lang",           type=str, default="ar", choices=["ar", "fr", "en"])
+    p.add_argument("--lang",           type=str, default="ar",
+                   choices=["ar", "fr", "en"])
     p.add_argument("--auto-next",      action="store_true")
     p.add_argument("--formats",        type=str, default="9x16")
     p.add_argument("--no-export",      action="store_true")
@@ -88,7 +89,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--force-ai",       action="store_true")
     p.add_argument("--publish-fb",     action="store_true")
     p.add_argument("--no-publish",     action="store_true")
-    p.add_argument("--show-ai-cache",  type=str, nargs="?", const="all", default=None)
+    p.add_argument("--show-ai-cache",  type=str, nargs="?",
+                   const="all", default=None)
     p.add_argument("--clear-ai-cache", type=str, default=None)
     p.add_argument("--reset-videos",   action="store_true")
     return p.parse_args()
@@ -99,16 +101,14 @@ def parse_args() -> argparse.Namespace:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _estimate_duration(text: str) -> int:
-    return max(MIN_S, min(MAX_S, int(len(text.split()) / (WPM / 60))))
+    return max(MIN_S, min(MAX_S,
+               int(len(text.split()) / (WPM / 60))))
 
 
 def _should_publish(args: argparse.Namespace) -> bool:
-    if args.no_publish:
-        return False
-    if args.script_only:
-        return False
-    if args.no_video:
-        return False
+    if args.no_publish:  return False
+    if args.script_only: return False
+    if args.no_video:    return False
     return credentials_available() or args.publish_fb
 
 
@@ -119,10 +119,8 @@ def _get_content_for_lang(record: dict, lang: str) -> str:
         content = record.get("fr_content", "").strip()
     else:
         content = record.get("en_content", "").strip()
-
     if not content:
         content = record.get("content", "").strip()
-
     return content
 
 
@@ -143,11 +141,11 @@ def _safe_unlink(path: str) -> None:
 
 
 def _estimate_sentence_durations(
-    sentences: list[str],
+    sentences:      list[str],
     total_duration: float,
 ) -> list[float]:
     """
-    fallback فقط إذا فشل remap أو WhisperX.
+    Fallback فقط إذا فشل WhisperX.
     يوزع مدة الصوت على الجمل حسب عدد الكلمات.
     """
     if not sentences:
@@ -196,9 +194,8 @@ def _normalize_keywords_row(
     while len(cleaned) < 3:
         cleaned.append(defaults[len(cleaned) % 3])
 
-    # إزالة التكرار مع الحفاظ على الترتيب
     dedup: list[str] = []
-    seen: set[str]   = set()
+    seen:  set[str]  = set()
 
     for item in cleaned:
         k = item.lower().strip()
@@ -222,35 +219,41 @@ def _build_clip_plan(
     ✅ الخطة الجديدة:
     - فيديو واحد لكل جملة
     - مدة كل فيديو = المدة الفعلية للجملة من WhisperX
-    - الجملة الأولى تأخذ hook keyword أيضاً
+    - الجملة الأولى تأخذ hook_keyword أيضاً
     """
-    sentences        = script_data.get("sentences", [])
-    visual_keywords  = ai_data.get("visual_keywords", []) or []
-    hook_keyword     = (script_data.get("hook_keyword") or "").strip()
+    sentences       = script_data.get("sentences", [])
+    visual_keywords = ai_data.get("visual_keywords", []) or []
+    hook_keyword    = (script_data.get("hook_keyword") or "").strip()
 
     if not sentences:
         return [], []
 
-    clip_keywords: list[list[str]] = []
-    clip_durations: list[float]    = []
+    clip_keywords:  list[list[str]] = []
+    clip_durations: list[float]     = []
 
-    # fallback إذا لم تتوفر alignment حقيقية
-    estimated_durations = _estimate_sentence_durations(sentences, total_dur)
+    estimated_durations = _estimate_sentence_durations(
+        sentences, total_dur
+    )
 
-    # ✅ نحاول بناء المدد من start boundaries
-    # مدة الكليب = start(next) - start(current)
-    # وآخر كليب = total_dur - start(last)
+    # ✅ نحاول بناء المدد من توقيتات WhisperX الحقيقية
     if aligned and len(aligned) >= len(sentences):
-        print(f"\n  🎞️  Building clip plan from WhisperX sentence timings...")
+        print(
+            f"\n  🎞️  Building clip plan "
+            f"from WhisperX sentence timings..."
+        )
 
         for i, sent in enumerate(sentences):
             cur_start = float(aligned[i].get("start", 0.0))
 
             if i < len(sentences) - 1:
-                next_start = float(aligned[i + 1].get("start", cur_start))
+                next_start = float(
+                    aligned[i + 1].get("start", cur_start)
+                )
                 dur = max(0.8, round(next_start - cur_start, 3))
             else:
-                dur = max(0.8, round(total_dur - cur_start, 3))
+                dur = max(
+                    0.8, round(total_dur - cur_start, 3)
+                )
 
             row = (
                 visual_keywords[i]
@@ -260,7 +263,10 @@ def _build_clip_plan(
             row = _normalize_keywords_row(row, i)
 
             if i == 0 and hook_keyword:
-                row = [hook_keyword] + [k for k in row if k.lower() != hook_keyword.lower()]
+                row = [hook_keyword] + [
+                    k for k in row
+                    if k.lower() != hook_keyword.lower()
+                ]
                 row = row[:3]
                 while len(row) < 3:
                     row.append("dramatic close up dark")
@@ -268,12 +274,18 @@ def _build_clip_plan(
             clip_keywords.append(row)
             clip_durations.append(dur)
 
-            print(f"     [{i + 1}/{len(sentences)}] {dur:.2f}s → {row}")
+            print(
+                f"     [{i + 1}/{len(sentences)}] "
+                f"{dur:.2f}s → {row}"
+            )
 
         return clip_keywords, clip_durations
 
     # fallback
-    print(f"\n  ⚠️  Using estimated sentence durations fallback...")
+    print(
+        f"\n  ⚠️  Using estimated sentence "
+        f"durations fallback..."
+    )
     for i, sent in enumerate(sentences):
         row = (
             visual_keywords[i]
@@ -283,17 +295,27 @@ def _build_clip_plan(
         row = _normalize_keywords_row(row, i)
 
         if i == 0 and hook_keyword:
-            row = [hook_keyword] + [k for k in row if k.lower() != hook_keyword.lower()]
+            row = [hook_keyword] + [
+                k for k in row
+                if k.lower() != hook_keyword.lower()
+            ]
             row = row[:3]
             while len(row) < 3:
                 row.append("dramatic close up dark")
 
-        dur = estimated_durations[i] if i < len(estimated_durations) else CLIP_DURATION
+        dur = (
+            estimated_durations[i]
+            if i < len(estimated_durations)
+            else CLIP_DURATION
+        )
 
         clip_keywords.append(row)
         clip_durations.append(dur)
 
-        print(f"     [{i + 1}/{len(sentences)}] ~{dur:.2f}s → {row}")
+        print(
+            f"     [{i + 1}/{len(sentences)}] "
+            f"~{dur:.2f}s → {row}"
+        )
 
     return clip_keywords, clip_durations
 
@@ -312,7 +334,8 @@ def _trim_silence(audio_path: str, output_path: str) -> str:
         [
             "ffmpeg", "-y", "-i", audio_path,
             "-af",
-            "silenceremove=start_periods=1:start_duration=0.3:start_threshold=-40dB",
+            "silenceremove=start_periods=1"
+            ":start_duration=0.3:start_threshold=-40dB",
             "-c:a", "pcm_s16le", output_path,
         ],
         capture_output=True, text=True,
@@ -335,7 +358,11 @@ def _trim_silence(audio_path: str, output_path: str) -> str:
 # SPEED UP
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _speed_up_audio(audio_path: str, speed: float, output_path: str) -> str:
+def _speed_up_audio(
+    audio_path:  str,
+    speed:       float,
+    output_path: str,
+) -> str:
     if abs(speed - 1.0) < 0.01 or not Path(audio_path).exists():
         return audio_path
 
@@ -365,13 +392,17 @@ def _speed_up_audio(audio_path: str, speed: float, output_path: str) -> str:
 def produce_full_audio(
     script_data:  dict,
     output_base:  str,
+    aligned:      list[dict] | None = None,
     music_volume: float = 0.12,
     sfx_type:     str   = "swoosh",
 ) -> tuple[Path, Path, float]:
     """
     TTS → Trim → Speed Up → Mix Music + SFX
     Returns: (mixed_audio_path, clean_voice_path, duration)
-    clean_voice_path = الصوت النظيف بدون موسيقى للـ WhisperX
+
+    ✅ يمرر:
+      - aligned: لـ Ducking الصحيح
+      - tagged:  لمؤثرات الانتقال الصوتية حسب الـ tag
     """
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
@@ -380,6 +411,7 @@ def produce_full_audio(
 
     print(f"\n  🎙️  TTS ({lang.upper()}, voice={voice_key})")
 
+    # 1. TTS
     synthesize_speech(
         tagged_sentences = tagged_sentences,
         output_path      = f"{output_base}_voice",
@@ -405,17 +437,25 @@ def produce_full_audio(
     else:
         wav_path = None
 
+    # 2. Trim silence
     if wav_path:
-        trimmed = _trim_silence(wav_path, f"{output_base}_voice_trimmed.wav")
+        trimmed = _trim_silence(
+            wav_path,
+            f"{output_base}_voice_trimmed.wav",
+        )
         if trimmed != wav_path:
             wav_path = trimmed
             d = get_audio_duration(wav_path)
             if d >= 5:
                 real_dur = d
 
+    # 3. Speed Up
     speed = SPEED_MULTIPLIER.get(lang, 1.0)
     if wav_path and speed != 1.0:
-        sped = _speed_up_audio(wav_path, speed, f"{output_base}_voice_fast.wav")
+        sped = _speed_up_audio(
+            wav_path, speed,
+            f"{output_base}_voice_fast.wav",
+        )
         if sped != wav_path:
             wav_path = sped
             d = get_audio_duration(wav_path)
@@ -423,12 +463,17 @@ def produce_full_audio(
                 real_dur = d
             print(f"  📏 After speed: {real_dur:.3f}s")
 
-    clean_voice_path = Path(wav_path) if wav_path else Path(f"{output_base}_voice_0.wav")
+    clean_voice_path = (
+        Path(wav_path)
+        if wav_path
+        else Path(f"{output_base}_voice_0.wav")
+    )
 
     mixed_out      = f"{output_base}_audio_mixed.aac"
     fallback_voice = str(clean_voice_path)
 
-    # هنا فقط fallback للمكس قبل أن نملك align حقيقي
+    # ✅ clip_durations مبسطة للمكس الأولي
+    # (سيتم إعادة المكس بعد WhisperX بالتوقيتات الحقيقية)
     n_clips       = max(1, int(real_dur / CLIP_DURATION))
     clip_dur_list = [real_dur / n_clips] * n_clips
 
@@ -442,7 +487,9 @@ def produce_full_audio(
             music_volume   = music_volume,
             seed           = hash(script_data["title"]) % 10000,
             lang           = lang,
-            aligned        = [],
+            aligned        = aligned or [],
+            sentences      = script_data.get("sentences", []),
+            tagged         = tagged_sentences,      # ✅ NEW
         )
         d = get_audio_duration(str(final_audio))
         if d >= 5:
@@ -456,21 +503,127 @@ def produce_full_audio(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP B: PRODUCE BACKGROUND VIDEO
+# STEP B: WHISPERX على الصوت النظيف
+# ═════════════════════════════════════════════════════════════════════════════
+
+def run_whisperx(
+    clean_voice_path: Path,
+    out_base:         str,
+    lang:             str,
+    script_sentences: list[str] | None = None,
+) -> tuple[list, list]:
+    """
+    ✅ WhisperX على الصوت النظيف بدون موسيقى.
+    لا يلمس منطق sync.py — فقط يستدعيه.
+    """
+    print(
+        f"\n  🎤 WhisperX on clean voice: "
+        f"{clean_voice_path.name}"
+    )
+
+    whisper_input = f"{out_base}_whisper_input.wav"
+    r = subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-i", str(clean_voice_path),
+            "-acodec", "pcm_s16le",
+            "-ar", "16000",
+            "-ac", "1",
+            whisper_input,
+        ],
+        capture_output=True, text=True,
+    )
+
+    if r.returncode != 0:
+        print("  ⚠️  Audio conversion failed — using original")
+        whisper_input = str(clean_voice_path)
+
+    transcript = extract_transcript_from_audio(
+        whisper_input, lang=lang
+    )
+
+    _safe_unlink(whisper_input)
+
+    if not transcript["success"]:
+        print("  ⚠️  WhisperX failed — no text overlay")
+        return [], []
+
+    aligned   = transcript["aligned"]
+    sentences = transcript["sentences"]
+
+    # ✅ إعادة ربط timestamps بالجمل الأصلية إذا أمكن
+    if script_sentences:
+        word_timestamps = [
+            w
+            for seg in transcript["aligned"]
+            for w in seg.get("words", [])
+        ]
+        total_script_words = sum(
+            len(s.split()) for s in script_sentences
+        )
+
+        if (
+            word_timestamps and
+            len(word_timestamps) >= 5 and
+            total_script_words > 0 and
+            abs(
+                len(word_timestamps) - total_script_words
+            ) / total_script_words <= 0.05
+        ):
+            try:
+                _, rebuilt_aligned = build_word_timeline(
+                    script_sentences,
+                    word_timestamps,
+                    transcript["total_duration"],
+                )
+                if (
+                    rebuilt_aligned and
+                    len(rebuilt_aligned) == len(script_sentences)
+                ):
+                    aligned   = rebuilt_aligned
+                    sentences = list(script_sentences)
+                    print(
+                        f"  ✅ Re-mapped alignment to "
+                        f"original script sentences: "
+                        f"{len(sentences)}"
+                    )
+            except Exception as e:
+                print(f"  ⚠️  Sentence remap skipped: {e}")
+        else:
+            print(
+                "  ⚠️  Sentence remap skipped "
+                "— word count mismatch"
+            )
+
+    total_words = sum(
+        len(s.get("words", [])) for s in aligned
+    )
+    print(
+        f"  ✅ WhisperX: {len(sentences)} sentences, "
+        f"{total_words} words"
+    )
+
+    generate_srt(aligned, f"{out_base}.srt")
+    generate_word_srt(aligned, f"{out_base}_words.srt")
+    return aligned, sentences
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STEP C: PRODUCE BACKGROUND VIDEO
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_bg_video(
-    video_paths:     list,
-    audio_path:      Path,
-    real_dur:        float,
-    out_base:        str,
-    script_data:     dict,
-    has_hook:        bool,
-    clip_durations:  list[float],
+    video_paths:    list,
+    audio_path:     Path,
+    real_dur:       float,
+    out_base:       str,
+    script_data:    dict,
+    has_hook:       bool,
+    clip_durations: list[float],
 ) -> Path:
     """
     إنتاج فيديو خلفية كامل مع الصوت المدمج — بدون نص.
-    ✅ كل كليب يأخذ مدته الفعلية حسب الجملة
+    ✅ كل كليب يأخذ مدته الفعلية حسب الجملة من WhisperX.
     """
     avg_clip = (
         sum(clip_durations) / len(clip_durations)
@@ -479,12 +632,16 @@ def produce_bg_video(
 
     manifest = {
         "title":          script_data["title"],
-        "display_title":  script_data.get("display_title", script_data["title"]),
+        "display_title":  script_data.get(
+            "display_title", script_data["title"]
+        ),
         "emoji_left":     script_data.get("emoji_left",  "🔥"),
         "emoji_right":    script_data.get("emoji_right", "💥"),
         "sentences":      script_data["sentences"],
         "audio":          str(Path(str(audio_path)).resolve()),
-        "videos":         [str(Path(str(p)).resolve()) for p in video_paths],
+        "videos":         [
+            str(Path(str(p)).resolve()) for p in video_paths
+        ],
         "duration_s":     real_dur,
         "lang":           script_data.get("lang", "ar"),
         "content_type":   CONTENT_TYPE,
@@ -492,7 +649,7 @@ def produce_bg_video(
         "accent_colors":  script_data.get("accent_colors", []),
         "analysis":       script_data.get("analysis", {}),
         "clip_duration":  avg_clip,
-        "clip_durations": clip_durations,
+        "clip_durations": clip_durations,           # ✅ NEW
         "has_hook":       has_hook,
         "hook_keyword":   script_data.get("hook_keyword", ""),
         "custom_hook":    script_data.get("custom_hook", ""),
@@ -510,7 +667,9 @@ def produce_bg_video(
     script = RENDER_SCRIPT.resolve()
 
     if not script.exists():
-        raise FileNotFoundError(f"render.mjs not found at {script}")
+        raise FileNotFoundError(
+            f"render.mjs not found at {script}"
+        )
 
     print(f"\n  🎬 Producing background video...")
 
@@ -522,97 +681,13 @@ def produce_bg_video(
     )
 
     if r.returncode != 0:
-        raise RuntimeError(f"BG render failed:\n{r.stdout[-600:]}")
+        raise RuntimeError(
+            f"BG render failed:\n{r.stdout[-600:]}"
+        )
 
     mb = out.stat().st_size / 1_048_576 if out.exists() else 0
     print(f"  ✅ BG video ready: {mb:.1f} MB")
     return out
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# STEP C: WHISPERX على الصوت النظيف
-# ✅ لا نلمس sync.py — فقط نعيد ربط الكلمات بالجمل الأصلية إذا أمكن
-# ═════════════════════════════════════════════════════════════════════════════
-
-def run_whisperx(
-    clean_voice_path: Path,
-    out_base:         str,
-    lang:             str,
-    script_sentences: list[str] | None = None,
-) -> tuple[list, list]:
-    print(f"\n  🎤 WhisperX on clean voice: {clean_voice_path.name}")
-
-    whisper_input = f"{out_base}_whisper_input.wav"
-    r = subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-i", str(clean_voice_path),
-            "-acodec", "pcm_s16le",
-            "-ar", "16000",
-            "-ac", "1",
-            whisper_input,
-        ],
-        capture_output=True, text=True,
-    )
-
-    if r.returncode != 0:
-        print(f"  ⚠️  Audio conversion failed — using original")
-        whisper_input = str(clean_voice_path)
-
-    transcript = extract_transcript_from_audio(whisper_input, lang=lang)
-
-    _safe_unlink(whisper_input)
-
-    if not transcript["success"]:
-        print(f"  ⚠️  WhisperX failed — no text overlay")
-        return [], []
-
-    aligned   = transcript["aligned"]
-    sentences = transcript["sentences"]
-
-    # ✅ نحاول إعادة ربط timestamps بالجمل الأصلية
-    # بدون لمس منطق sync.py نفسه
-    if script_sentences:
-        word_timestamps = [
-            w
-            for seg in transcript["aligned"]
-            for w in seg.get("words", [])
-        ]
-        total_script_words = sum(len(s.split()) for s in script_sentences)
-
-        if (
-            word_timestamps and
-            len(word_timestamps) >= 5 and
-            total_script_words > 0 and
-            abs(len(word_timestamps) - total_script_words) / total_script_words <= 0.05
-        ):
-            try:
-                _, rebuilt_aligned = build_word_timeline(
-                    script_sentences,
-                    word_timestamps,
-                    transcript["total_duration"],
-                )
-                if rebuilt_aligned and len(rebuilt_aligned) == len(script_sentences):
-                    aligned   = rebuilt_aligned
-                    sentences = list(script_sentences)
-                    print(
-                        f"  ✅ Re-mapped alignment to original script sentences: "
-                        f"{len(sentences)}"
-                    )
-            except Exception as e:
-                print(f"  ⚠️  Sentence remap skipped: {e}")
-        else:
-            print("  ⚠️  Sentence remap skipped — word count mismatch")
-
-    total_words = sum(len(s.get("words", [])) for s in aligned)
-    print(
-        f"  ✅ WhisperX: {len(sentences)} sentences, "
-        f"{total_words} words"
-    )
-
-    generate_srt(aligned, f"{out_base}.srt")
-    generate_word_srt(aligned, f"{out_base}_words.srt")
-    return aligned, sentences
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -627,11 +702,17 @@ def render_words_overlay(
     script_data: dict,
     out_base:    str,
 ) -> Path:
+    """
+    Render الكلمات فوق الفيديو الخلفي.
+    لا يتغير أي منطق للتزامن هنا.
+    """
     audio_dur = get_audio_duration(str(audio_path))
 
     manifest = {
         "title":         script_data["title"],
-        "display_title": script_data.get("display_title", script_data["title"]),
+        "display_title": script_data.get(
+            "display_title", script_data["title"]
+        ),
         "emoji_left":    script_data.get("emoji_left",  "🔥"),
         "emoji_right":   script_data.get("emoji_right", "💥"),
         "sentences":     sentences,
@@ -651,7 +732,9 @@ def render_words_overlay(
         "mode":          "words_only",
     }
 
-    manifest_path = Path(f"{out_base}_words_manifest.json").resolve()
+    manifest_path = Path(
+        f"{out_base}_words_manifest.json"
+    ).resolve()
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -661,7 +744,9 @@ def render_words_overlay(
     script = RENDER_SCRIPT.resolve()
 
     if not script.exists():
-        raise FileNotFoundError(f"render.mjs not found at {script}")
+        raise FileNotFoundError(
+            f"render.mjs not found at {script}"
+        )
 
     print(f"\n  🔧 Rendering words overlay...")
 
@@ -673,7 +758,9 @@ def render_words_overlay(
     )
 
     if r.returncode != 0:
-        raise RuntimeError(f"Words render failed:\n{r.stdout[-600:]}")
+        raise RuntimeError(
+            f"Words render failed:\n{r.stdout[-600:]}"
+        )
 
     mb = out.stat().st_size / 1_048_576 if out.exists() else 0
     print(f"  🎉 Final: {out.name} ({mb:.1f} MB)")
@@ -697,7 +784,9 @@ def get_or_create_ai_data(
     if not force_ai and has_ai_cache(cache_key):
         cached = get_ai_cache(cache_key)
         if cached and cached.get("hook_keyword"):
-            print(f"\n  ♻️  Using cached AI for #{video_number}")
+            print(
+                f"\n  ♻️  Using cached AI for #{video_number}"
+            )
             return cached
 
     content = _get_content_for_lang(record, lang)
@@ -714,8 +803,10 @@ def get_or_create_ai_data(
 
     try:
         enriched = enrich_record(
-            record=enricher_record, lang=lang,
-            tagged=tagged, verbose=True,
+            record  = enricher_record,
+            lang    = lang,
+            tagged  = tagged,
+            verbose = True,
         )
     except AIEnrichmentError:
         raise
@@ -742,20 +833,26 @@ def _build_script_data(
     full_script     = " ".join(sentences_clean)
 
     attractive_title = ai_data.get("attractive_title") or {}
-    display_title    = attractive_title.get("title") or record["title"]
-    emoji_left       = attractive_title.get("emoji_left",  "🔥")
-    emoji_right      = attractive_title.get("emoji_right", "💥")
+    display_title    = (
+        attractive_title.get("title") or record["title"]
+    )
+    emoji_left  = attractive_title.get("emoji_left",  "🔥")
+    emoji_right = attractive_title.get("emoji_right", "💥")
 
     power_words = ai_data.get("power_words", [])
     if isinstance(power_words, dict):
         power_words = (
             power_words.get(lang) or
-            power_words.get("ar") or
-            power_words.get("en") or []
+            power_words.get("ar")  or
+            power_words.get("en")  or []
         )
 
-    emotion   = ai_data.get("analysis", {}).get("primary_emotion", "")
-    bg_styles = {"fear": "cinematic", "sadness": "cinematic", "awe": "blur"}
+    emotion   = ai_data.get("analysis", {}).get(
+        "primary_emotion", ""
+    )
+    bg_styles = {
+        "fear": "cinematic", "sadness": "cinematic", "awe": "blur"
+    }
     bg_style  = bg_styles.get(emotion, "video")
 
     return {
@@ -815,8 +912,11 @@ def _do_publish(
 
     try:
         publish_to_facebook(
-            video_path=video_path, record=record,
-            lang=lang, as_reel=True, ai_caption=ai_caption,
+            video_path = video_path,
+            record     = record,
+            lang       = lang,
+            as_reel    = True,
+            ai_caption = ai_caption,
         )
         mark_video_published_for_lang(video_number, lang)
         print(f"  📘 Published ({lang.upper()})")
@@ -842,10 +942,14 @@ def process_video(
     print(f"  🎬  Video #{num} ({lang.upper()}):  {title}")
     print(f"{'═' * 65}")
 
-    out_base = str(Path(out_dir).resolve() / f"video_{num}_{lang}")
+    out_base = str(
+        Path(out_dir).resolve() / f"video_{num}_{lang}"
+    )
 
     export_formats = [] if args.no_export else [
-        f.strip() for f in args.formats.split(",") if f.strip()
+        f.strip()
+        for f in args.formats.split(",")
+        if f.strip()
     ]
 
     # ── 1. Parse tags ──────────────────────────────────────────────────────
@@ -863,19 +967,23 @@ def process_video(
     # ── 2. AI Enrichment ───────────────────────────────────────────────────
     try:
         ai_data = get_or_create_ai_data(
-            record=record, lang=lang,
-            tagged=tagged, force_ai=args.force_ai,
+            record   = record,
+            lang     = lang,
+            tagged   = tagged,
+            force_ai = args.force_ai,
         )
     except AIEnrichmentError as e:
         print(f"\n  ⛔ AI enrichment failed: {e}")
         return
 
-    tagged = _rebuild_text_with_tag(ai_data.get("tagged") or tagged)
+    tagged = _rebuild_text_with_tag(
+        ai_data.get("tagged") or tagged
+    )
 
     # ── 3. Build script data ───────────────────────────────────────────────
     script_data = _build_script_data(record, lang, ai_data, tagged)
     if not script_data:
-        print(f"  ❌ Cannot build script data")
+        print("  ❌ Cannot build script data")
         return
 
     custom_hook = script_data.get("custom_hook", "")
@@ -883,8 +991,11 @@ def process_video(
         print(f"  🪝 Hook: '{custom_hook}'")
 
     save_script_meta(
-        video_number=num, title=title, lang=lang,
-        sentences=len(tagged), words=script_data["word_count"],
+        video_number = num,
+        title        = title,
+        lang         = lang,
+        sentences    = len(tagged),
+        words        = script_data["word_count"],
     )
 
     # ── 4. Script-only mode ────────────────────────────────────────────────
@@ -911,20 +1022,24 @@ def process_video(
 
     try:
         # ══════════════════════════════════════════════════════════════════
-        # PIPELINE الجديد
+        # PIPELINE الجديد — 5 خطوات
         # ══════════════════════════════════════════════════════════════════
 
-        # A. إنتاج الصوت الكامل
+        # ── STEP A: TTS + Music (بدون aligned بعد) ────────────────────────
         print(f"\n  {'─' * 55}")
-        print(f"  ✅ STEP A: Full audio (TTS + Music + SFX)")
+        print("  ✅ STEP A: Full audio (TTS + Music + SFX)")
+
         audio_path, clean_voice_path, real_dur = produce_full_audio(
-            script_data=script_data,
-            output_base=out_base,
+            script_data  = script_data,
+            output_base  = out_base,
+            aligned      = None,        # لا يوجد aligned بعد
+            music_volume = 0.12,
         )
 
-        # B. WhisperX أولاً للحصول على توقيتات الجمل الحقيقية
+        # ── STEP B: WhisperX ──────────────────────────────────────────────
         print(f"\n  {'─' * 55}")
-        print(f"  ✅ STEP B: WhisperX on clean voice")
+        print("  ✅ STEP B: WhisperX on clean voice")
+
         aligned, whisper_sentences = run_whisperx(
             clean_voice_path = clean_voice_path,
             out_base         = out_base,
@@ -935,9 +1050,9 @@ def process_video(
         if not whisper_sentences:
             whisper_sentences = script_data["sentences"]
 
-        # C. بناء خطة الفيديوهات من التوقيتات الحقيقية
+        # ── STEP C: خطة الفيديوهات + جلبها ───────────────────────────────
         print(f"\n  {'─' * 55}")
-        print(f"  ✅ STEP C: Build sentence-based clip plan")
+        print("  ✅ STEP C: Build sentence-based clip plan")
 
         clip_keywords, clip_durations = _build_clip_plan(
             script_data = script_data,
@@ -949,8 +1064,13 @@ def process_video(
         if not clip_keywords:
             raise RuntimeError("Could not build clip plan")
 
-        print(f"\n  📹 Fetching {len(clip_keywords)} videos (1 per sentence)...")
-        vid_dir = str(Path(out_dir).resolve() / f"videos_{num}_{lang}")
+        print(
+            f"\n  📹 Fetching {len(clip_keywords)} videos "
+            f"(1 per sentence)..."
+        )
+        vid_dir = str(
+            Path(out_dir).resolve() / f"videos_{num}_{lang}"
+        )
 
         video_paths = fetch_videos_for_script(
             keywords_per_sentence = clip_keywords,
@@ -959,9 +1079,10 @@ def process_video(
             aligned               = aligned,
         )
 
-        # D. فيديو خلفية حسب مدة كل جملة
+        # ── STEP D: فيديو خلفية ────────────────────────────────────────────
         print(f"\n  {'─' * 55}")
-        print(f"  ✅ STEP D: Background video by sentence durations")
+        print("  ✅ STEP D: Background video by sentence durations")
+
         bg_video = produce_bg_video(
             video_paths    = video_paths,
             audio_path     = audio_path,
@@ -972,9 +1093,10 @@ def process_video(
             clip_durations = clip_durations,
         )
 
-        # E. Render الكلمات فوق الفيديو
+        # ── STEP E: Render الكلمات ─────────────────────────────────────────
         print(f"\n  {'─' * 55}")
-        print(f"  ✅ STEP E: Render words overlay")
+        print("  ✅ STEP E: Render words overlay")
+
         final_video = render_words_overlay(
             bg_video    = bg_video,
             audio_path  = audio_path,
@@ -990,9 +1112,14 @@ def process_video(
         mark_render_done(num, lang, str(final_video), real_dur)
 
         if should_publish:
-            _do_publish(str(final_video), record, ai_data, lang, num)
+            _do_publish(
+                str(final_video), record, ai_data, lang, num
+            )
 
-        mb = final_video.stat().st_size / 1_048_576 if final_video.exists() else 0
+        mb = (
+            final_video.stat().st_size / 1_048_576
+            if final_video.exists() else 0
+        )
         print(
             f"\n  ✅ Video #{num} ({lang.upper()}) → "
             f"{final_video.name} ({mb:.1f} MB)"
@@ -1014,7 +1141,9 @@ def main() -> None:
 
     if args.show_ai_cache is not None:
         show_ai_cache(
-            args.show_ai_cache if args.show_ai_cache != "all" else None
+            args.show_ai_cache
+            if args.show_ai_cache != "all"
+            else None
         )
         return
 
@@ -1079,7 +1208,10 @@ def main() -> None:
             reset_published_for_lang(lang)
             next_num = str(valid[0]["number"])
         print(f"\n  🎯 Auto-next: #{next_num}")
-        valid = [s for s in valid if str(s["number"]) == next_num]
+        valid = [
+            s for s in valid
+            if str(s["number"]) == next_num
+        ]
 
     elif args.video_number:
         valid = [
@@ -1097,8 +1229,12 @@ def main() -> None:
     for i, record in enumerate(valid, 1):
         print(f"\n[{i}/{len(valid)}]")
 
-        if not args.force and is_render_done(record["number"], lang):
-            if will_publish and not is_published(record["number"], lang):
+        if not args.force and is_render_done(
+            record["number"], lang
+        ):
+            if will_publish and not is_published(
+                record["number"], lang
+            ):
                 out_base = str(
                     Path(args.output_dir).resolve() /
                     f"video_{record['number']}_{lang}"
@@ -1106,12 +1242,18 @@ def main() -> None:
                 path = f"{out_base}_final.mp4"
                 if Path(path).exists():
                     ai_data = (
-                        get_ai_cache(f"{record['number']}_{lang}")
-                        or {"captions": {}}
+                        get_ai_cache(
+                            f"{record['number']}_{lang}"
+                        ) or {"captions": {}}
                     )
-                    _do_publish(path, record, ai_data, lang, record["number"])
+                    _do_publish(
+                        path, record, ai_data,
+                        lang, record["number"],
+                    )
             else:
-                print(f"  ⏭️  #{record['number']} already done")
+                print(
+                    f"  ⏭️  #{record['number']} already done"
+                )
             continue
 
         try:
@@ -1130,6 +1272,7 @@ def main() -> None:
             traceback.print_exc()
             failed += 1
 
+    # Thumbnails
     thumbnail_queue: list[tuple[str, str]] = []
     for record in valid:
         out_base  = str(
@@ -1152,7 +1295,10 @@ def main() -> None:
                 pass
 
     if thumbnail_queue:
-        print(f"\n🖼️  Rendering {len(thumbnail_queue)} thumbnail(s)...")
+        print(
+            f"\n🖼️  Rendering "
+            f"{len(thumbnail_queue)} thumbnail(s)..."
+        )
         try:
             render_thumbnails_batch(thumbnail_queue)
         except Exception as e:
