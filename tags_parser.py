@@ -13,6 +13,9 @@ tags_parser.py — Smart Emotional Tags Parser
   [urgency]     - عاجل
   [calm]        - هدوء
   [emotional]   - عاطفي
+
+✅ NEW: يدعم inline tags في نفس السطر
+  مثال: [intrigue] جملة 1. [desire] جملة 2. [shock] جملة 3.
 """
 
 from __future__ import annotations
@@ -130,15 +133,94 @@ VALID_TAGS: dict[str, dict] = {
 
 VALID_TAG_NAMES: list[str] = list(VALID_TAGS.keys())
 
-# Tag default إذا فشل كل شيء
 DEFAULT_TAG = "information"
 
-# Regex لاكتشاف الـ tags
+# ✅ Regex لاكتشاف الـ tags في أي مكان من النص (inline أو أول سطر)
 TAG_PATTERN        = re.compile(
     r'^\s*\[([a-zA-Z_]+)\]\s*',
     re.IGNORECASE | re.MULTILINE,
 )
 TAG_INLINE_PATTERN = re.compile(r'\[([a-zA-Z_]+)\]')
+
+# ✅ NEW: Regex لتقسيم النص على الـ inline tags
+# يبحث عن [tag] في أي مكان ويستخدمه كـ delimiter
+_INLINE_SPLIT_RE = re.compile(
+    r'\[([a-zA-Z_]+)\]',
+    re.IGNORECASE,
+)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✅ NEW: INLINE TAGS SPLITTER
+# الدالة الأساسية الجديدة التي تحل المشكلة
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _split_inline_tagged_content(content: str) -> list[dict]:
+    """
+    ✅ يقسم النص الذي يحتوي على inline tags إلى جمل منفصلة.
+
+    يعمل مع:
+      - [tag] نص. [tag] نص. [tag] نص.
+      - [tag] نص
+        [tag] نص
+      - [tag] نص\\n\\n[tag] نص
+
+    Input:
+      "[intrigue] جملة 1. [desire] جملة 2. [shock] جملة 3."
+
+    Output:
+      [
+        {"raw_tag": "intrigue", "text": "جملة 1.", "line": 1},
+        {"raw_tag": "desire",   "text": "جملة 2.", "line": 2},
+        {"raw_tag": "shock",    "text": "جملة 3.", "line": 3},
+      ]
+    """
+    if not content or not content.strip():
+        return []
+
+    content = content.strip()
+
+    # البحث عن كل الـ tags مع مواضعها في النص
+    matches = list(_INLINE_SPLIT_RE.finditer(content))
+
+    if not matches:
+        # لا يوجد أي tag → نرجع النص كما هو بدون tag
+        text = content.strip()
+        if text:
+            return [{
+                "raw_tag": None,
+                "text":    text,
+                "line":    1,
+            }]
+        return []
+
+    result: list[dict] = []
+
+    for i, match in enumerate(matches):
+        raw_tag = match.group(1)
+
+        # النص يبدأ بعد نهاية الـ tag
+        text_start = match.end()
+
+        # النص ينتهي عند بداية الـ tag التالي (أو نهاية النص)
+        text_end = (
+            matches[i + 1].start()
+            if i + 1 < len(matches)
+            else len(content)
+        )
+
+        text = content[text_start:text_end].strip()
+
+        if not text:
+            continue
+
+        result.append({
+            "raw_tag": raw_tag,
+            "text":    text,
+            "line":    i + 1,
+        })
+
+    return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -147,24 +229,43 @@ TAG_INLINE_PATTERN = re.compile(r'\[([a-zA-Z_]+)\]')
 
 def split_into_tagged_sentences(content: str) -> list[dict]:
     """
-    تقسيم المحتوى إلى جمل مع tags.
+    ✅ تقسيم المحتوى إلى جمل مع tags.
 
-    Input:
-      "[intrigue] الجملة الأولى.
-       [desire] جملة ثانية..."
+    يدعم الآن:
+      1. Inline tags: [tag] نص. [tag] نص. [tag] نص.
+      2. Paragraph tags: فقرة منفصلة لكل tag
+      3. Line tags: سطر منفصل لكل tag
 
     Output:
       [
-        {"raw_tag": "intrigue", "text": "الجملة الأولى.", "line": 1},
-        {"raw_tag": "desire",   "text": "جملة ثانية...", "line": 2},
+        {"raw_tag": "intrigue", "text": "النص", "line": 1},
+        {"raw_tag": "desire",   "text": "النص", "line": 2},
+        ...
       ]
     """
     if not content or not content.strip():
         return []
 
-    # تقسيم على الفقرات
-    paragraphs = re.split(r'\n\s*\n', content.strip())
+    content_stripped = content.strip()
 
+    # ✅ اكتشاف نوع المحتوى أولاً
+    inline_matches = list(_INLINE_SPLIT_RE.finditer(content_stripped))
+
+    if not inline_matches:
+        return []
+
+    # ── ✅ الحالة 1: inline tags (الجمل كلها في نفس السطر أو بدون فصل) ──
+    # نتحقق إذا كان النص يحتوي على أكثر من tag في نفس الفقرة
+    # بمعنى: لا يوجد سطر فارغ بين الـ tags
+    paragraphs = re.split(r'\n\s*\n', content_stripped)
+
+    if len(paragraphs) == 1:
+        # ✅ كل النص في فقرة واحدة → استخدم inline splitter
+        result = _split_inline_tagged_content(content_stripped)
+        if result:
+            return result
+
+    # ── الحالة 2: فقرات منفصلة (الشكل القديم) ──
     result:   list[dict] = []
     line_num: int        = 0
 
@@ -173,32 +274,41 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
         if not para:
             continue
 
-        line_num += 1
+        # ✅ كل فقرة قد تحتوي على inline tags أيضاً
+        # نتحقق كم tag يوجد فيها
+        para_matches = list(_INLINE_SPLIT_RE.finditer(para))
 
-        # البحث عن tag في بداية الفقرة
-        match = TAG_PATTERN.match(para)
-
-        if match:
-            raw_tag = match.group(1)
-            text    = para[match.end():].strip()
+        if len(para_matches) > 1:
+            # فقرة تحتوي على أكثر من tag → قسّمها inline
+            sub_results = _split_inline_tagged_content(para)
+            for sub in sub_results:
+                line_num += 1
+                sub["line"] = line_num
+                result.append(sub)
         else:
-            raw_tag = None
-            text    = para
+            # فقرة تحتوي على tag واحد أو بدون tag
+            line_num += 1
+            match = TAG_PATTERN.match(para)
 
-        if text:
-            result.append({
-                "raw_tag": raw_tag,
-                "text":    text,
-                "line":    line_num,
-            })
+            if match:
+                raw_tag = match.group(1)
+                text    = para[match.end():].strip()
+            else:
+                raw_tag = None
+                text    = para
+
+            if text:
+                result.append({
+                    "raw_tag": raw_tag,
+                    "text":    text,
+                    "line":    line_num,
+                })
 
     return result
 
 
 def is_valid_tag(tag: str) -> bool:
-    """
-    تحقق إذا كان الـ tag صحيح (case-sensitive).
-    """
+    """تحقق إذا كان الـ tag صحيح (case-sensitive)."""
     if not tag:
         return False
     return tag in VALID_TAGS
@@ -212,12 +322,6 @@ def auto_correct_tag(
 
     Returns:
         (corrected_tag, reason) أو (None, error_reason)
-
-    أمثلة:
-      "INTRIGUE"  → ("intrigue", "case_fixed")
-      "Intrigue"  → ("intrigue", "case_fixed")
-      "intriguee" → ("intrigue", "spelling_fixed")
-      "xyz"       → (None, "no_match")
     """
     if not raw_tag:
         return (None, "empty_tag")
@@ -257,10 +361,7 @@ def strip_tags_from_text(text: str) -> str:
     if not text:
         return ""
 
-    # إزالة tags في البداية
     cleaned = TAG_PATTERN.sub("", text).strip()
-
-    # إزالة أي tags داخلية
     cleaned = TAG_INLINE_PATTERN.sub("", cleaned).strip()
 
     return cleaned
@@ -290,8 +391,8 @@ def format_tags_summary(
     if not tagged_sentences:
         return "  ⚠️  No tagged sentences found"
 
-    tag_counts:  dict[str, int]  = {}
-    corrections: list[str]       = []
+    tag_counts:   dict[str, int] = {}
+    corrections:  list[str]      = []
     ai_suggested: list[str]      = []
 
     for sent in tagged_sentences:
@@ -320,10 +421,9 @@ def format_tags_summary(
         tag_counts.items(),
         key=lambda x: -x[1],
     ):
-        info     = VALID_TAGS.get(tag, {})
-        name     = get_tag_name(tag, lang)
-        desc     = info.get("description", "")
-        plural   = "sentences" if count > 1 else "sentence"
+        info   = VALID_TAGS.get(tag, {})
+        desc   = info.get("description", "")
+        plural = "sentences" if count > 1 else "sentence"
         lines.append(
             f"     ├── [{tag:12}] : {count} {plural}"
         )
