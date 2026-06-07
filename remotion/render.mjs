@@ -218,15 +218,19 @@ function buildFrameStateMap(words) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function stateKey(state, globalFrame) {
-  if (globalFrame < TITLE_SLIDE_FRAMES) {
-    return `title_slide_f${globalFrame}`;
-  }
+  // Title animation: أول ثانية + آخر ثانية
+  const INTRO_FRAMES = Math.floor(1.0 * FPS);
+  const OUTRO_FRAMES = Math.floor(1.0 * FPS);
+  const isIntro = globalFrame < INTRO_FRAMES;
+  const isOutro = globalFrame >= totalFrames - OUTRO_FRAMES;
+
+  // خلال الـ intro/outro كل فريم مختلف (animation)
+  if (isIntro) return `title_intro_f${globalFrame}`;
+  if (isOutro) return `title_outro_f${globalFrame}`;
 
   const hook = globalFrame < HOOK_FRAMES ? "h" : "n";
-
   if (!state) return `empty_${hook}`;
 
-  // 3 buckets: pop (0-15%) / hold (15-85%) / fade (85-100%)
   const p      = state.progress;
   const bucket = p < 0.15 ? "pop" : p > 0.85 ? "fade" : "hold";
 
@@ -245,75 +249,92 @@ function buildHTML({
   globalFrame = 0,
   progress    = 0.5,
 }) {
-  if (!word) {
-    return (
-      `<!DOCTYPE html><html><head><meta charset="UTF-8"/></head>` +
-      `<body style="width:${WIDTH}px;height:${HEIGHT}px;background:transparent;margin:0;padding:0;"></body></html>`
-    );
-  }
-
-  const ar       = isArabic(word);
-  const dir      = getDir(word);
-  const font     = getFontFamily(word);
-  const langAttr = getLang(word);
+  const ar       = word ? isArabic(word) : false;
+  const dir      = word ? getDir(word) : "ltr";
+  const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
+  const langAttr = word ? getLang(word) : "en";
 
   const titleAr   = isArabic(display_title);
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
-  // ── Word sizing ──────────────────────────────────────────────────────────
-  const wlen = word.length;
-  let baseFontSize;
-  if      (isPower)    baseFontSize = ar ? 190 : 180;
-  else if (wlen <= 2)  baseFontSize = ar ? 170 : 160;
-  else if (wlen <= 4)  baseFontSize = ar ? 150 : 140;
-  else if (wlen <= 6)  baseFontSize = ar ? 130 : 120;
-  else if (wlen <= 9)  baseFontSize = ar ? 110 : 102;
-  else if (wlen <= 12) baseFontSize = ar ? 92  : 86;
-  else                 baseFontSize = ar ? 76  : 72;
+  // ── Title animation ──────────────────────────────────────────────────────
+  const INTRO_FRAMES = Math.floor(1.0 * FPS);
+  const OUTRO_FRAMES = Math.floor(1.0 * FPS);
+  const isIntro = globalFrame < INTRO_FRAMES;
+  const isOutro = globalFrame >= totalFrames - OUTRO_FRAMES;
 
-  // ── Pop / Hold / Fade ────────────────────────────────────────────────────
-  let scale, opacity, translateY;
+  let titleOpacity, titleTranslateY;
 
-  if (progress < 0.15) {
-    const t    = progress / 0.15;
-    const ease = 1 - Math.pow(1 - t, 2);
-    scale      = 0.6 + ease * 0.48;
-    opacity    = Math.min(1, t * 3);
-    translateY = (1 - ease) * 30;
-  } else if (progress > 0.85) {
-    const t    = (progress - 0.85) / 0.15;
-    scale      = 1.0 - t * 0.05;
-    opacity    = 1 - t * 0.3;
-    translateY = 0;
+  if (isIntro) {
+    // Slide down + fade in
+    const t        = globalFrame / INTRO_FRAMES;
+    const ease     = 1 - Math.pow(1 - t, 3);  // ease out cubic
+    titleOpacity   = ease;
+    titleTranslateY = (1 - ease) * -80;         // يأتي من الأعلى
+  } else if (isOutro) {
+    // Slide up + fade out
+    const t        = (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
+    const ease     = Math.pow(t, 2);            // ease in quad
+    titleOpacity   = 1 - ease;
+    titleTranslateY = ease * -60;               // يخرج لأعلى
   } else {
-    scale      = isPower ? 1.06 : 1.0;
-    opacity    = 1.0;
-    translateY = 0;
+    titleOpacity   = 1.0;
+    titleTranslateY = 0;
+  }
+
+  // ── Word animation ───────────────────────────────────────────────────────
+  let wordScale, wordOpacity, wordTranslateY;
+
+  if (!word) {
+    wordScale      = 1.0;
+    wordOpacity    = 0;
+    wordTranslateY = 0;
+  } else if (progress < 0.15) {
+    const t        = progress / 0.15;
+    const ease     = 1 - Math.pow(1 - t, 2);
+    wordScale      = 0.6 + ease * 0.48;
+    wordOpacity    = Math.min(1, t * 3);
+    wordTranslateY = (1 - ease) * 30;
+  } else if (progress > 0.85) {
+    const t        = (progress - 0.85) / 0.15;
+    wordScale      = 1.0 - t * 0.05;
+    wordOpacity    = 1 - t * 0.3;
+    wordTranslateY = 0;
+  } else {
+    wordScale      = isPower ? 1.06 : 1.0;
+    wordOpacity    = 1.0;
+    wordTranslateY = 0;
+  }
+
+  // ── Word sizing ──────────────────────────────────────────────────────────
+  const wlen = word ? word.length : 0;
+  let baseFontSize = 100;
+  if (word) {
+    if      (isPower)    baseFontSize = ar ? 190 : 180;
+    else if (wlen <= 2)  baseFontSize = ar ? 170 : 160;
+    else if (wlen <= 4)  baseFontSize = ar ? 150 : 140;
+    else if (wlen <= 6)  baseFontSize = ar ? 130 : 120;
+    else if (wlen <= 9)  baseFontSize = ar ? 110 : 102;
+    else if (wlen <= 12) baseFontSize = ar ? 92  : 86;
+    else                 baseFontSize = ar ? 76  : 72;
   }
 
   const wordColor = isPower ? COLORS.power : COLORS.word;
   const glowColor = COLORS.glow;
 
-  // ── Title slide-in ───────────────────────────────────────────────────────
-  const slideP  = globalFrame < TITLE_SLIDE_FRAMES
-    ? globalFrame / TITLE_SLIDE_FRAMES
-    : 1.0;
-  const eased   = 1 - Math.pow(1 - slideP, 3);
-  const slideX  = (titleDir === "rtl" ? 120 : -120) * (1 - eased);
-  const titleOp = eased;
-  const titleSz = titleAr ? 38 : 34;
-
   // ── Hook ─────────────────────────────────────────────────────────────────
-  const defaults = {
-    ar: "🔴 لا تتجاوز هذا",
-    fr: "🔴 Ne ratez pas ça",
-    en: "🔴 Don't skip this",
-  };
+  const defaults = { ar: "🔴 لا تتجاوز هذا", fr: "🔴 Ne ratez pas ça", en: "🔴 Don't skip this" };
   const hookText = (custom_hook && custom_hook.trim()) || defaults[lang] || defaults.en;
   const hookAr   = isArabic(hookText);
   const hookDir  = hookAr ? "rtl" : "ltr";
   const hookFont = getFontFamily(hookText);
+
+  // ── Title sizing ─────────────────────────────────────────────────────────
+  // العنوان في الأعلى — نجعله أكبر وأكثر وضوحاً
+  const titleArabic    = isArabic(display_title);
+  const titleFontSize  = titleArabic ? 52 : 46;
+  const emojiSize      = titleArabic ? 56 : 50;
 
   // ── Power word container ─────────────────────────────────────────────────
   const powerContainerStyle = isPower ? `
@@ -321,16 +342,9 @@ function buildHTML({
     padding:24px 60px;
     border-radius:9999px;
     border:3px solid rgba(255,255,255,0.3);
-    box-shadow:
-      0 0 60px rgba(255,23,68,0.8),
-      0 0 120px rgba(255,23,68,0.4),
-      inset 0 1px 0 rgba(255,255,255,0.2);
-  ` : `
-    background:transparent;
-    padding:0;
-  `;
+    box-shadow:0 0 60px rgba(255,23,68,0.8),0 0 120px rgba(255,23,68,0.4),inset 0 1px 0 rgba(255,255,255,0.2);
+  ` : `background:transparent;padding:0;`;
 
-  // ── Word text style ───────────────────────────────────────────────────────
   const wordTextStyle = isPower ? `
     font-family:${font};
     font-size:${baseFontSize}px;
@@ -353,9 +367,7 @@ function buildHTML({
     word-break:break-word;
     -webkit-text-stroke:4px rgba(0,0,0,0.95);
     paint-order:stroke fill;
-    text-shadow:
-      0 0 40px ${glowColor},
-      0 0 80px ${glowColor};
+    text-shadow:0 0 40px ${glowColor},0 0 80px ${glowColor};
   `;
 
   return `<!DOCTYPE html>
@@ -368,11 +380,13 @@ function buildHTML({
       width:${WIDTH}px; height:${HEIGHT}px;
       overflow:hidden; background:transparent;
     }
+
+    /* Cinematic overlays */
     .ot {
-      position:absolute; top:0; left:0; right:0; height:35%;
+      position:absolute; top:0; left:0; right:0; height:40%;
       background:linear-gradient(to bottom,
-        rgba(0,0,0,0.78) 0%,
-        rgba(0,0,0,0.3) 65%,
+        rgba(0,0,0,0.85) 0%,
+        rgba(0,0,0,0.5) 50%,
         transparent 100%);
       pointer-events:none; z-index:1;
     }
@@ -384,15 +398,68 @@ function buildHTML({
         transparent 100%);
       pointer-events:none; z-index:1;
     }
+
+    /* ✅ العنوان في الأعلى — بارز وجذاب */
+    .tc {
+      position:absolute;
+      top:90px;
+      left:50%;
+      width:92%;
+      max-width:980px;
+      direction:${titleDir};
+      text-align:center;
+      z-index:30;
+      transform:translateX(-50%) translateY(${titleTranslateY.toFixed(2)}px);
+      opacity:${titleOpacity.toFixed(4)};
+    }
+
+    /* الخط الأحمر تحت العنوان */
+    .tc::after {
+      content:'';
+      display:block;
+      margin:16px auto 0;
+      width:120px;
+      height:4px;
+      border-radius:2px;
+      background:linear-gradient(90deg,transparent,#FF1744,transparent);
+      opacity:${titleOpacity.toFixed(4)};
+    }
+
+    .tt {
+      font-family:${titleFont};
+      font-size:${titleFontSize}px;
+      font-weight:900;
+      color:#FFFFFF;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:14px;
+      line-height:1.3;
+      text-align:center;
+      direction:${titleDir};
+      -webkit-text-stroke:2px rgba(0,0,0,0.8);
+      paint-order:stroke fill;
+      text-shadow:
+        0 0 30px rgba(255,23,68,0.6),
+        0 0 60px rgba(255,23,68,0.3),
+        0 4px 20px rgba(0,0,0,0.9),
+        2px 2px 0 rgba(0,0,0,0.8),
+        -2px -2px 0 rgba(0,0,0,0.8);
+    }
+    .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
+
+    /* Hook badge */
     .hb {
-      position:absolute; top:155px; left:50%;
+      position:absolute;
+      top:${titleArabic ? "290px" : "270px"};
+      left:50%;
       transform:translateX(-50%);
       background:linear-gradient(135deg,rgba(220,0,0,0.95),rgba(160,0,0,0.95));
       color:#fff;
       font-family:${hookFont};
-      font-size:${hookAr ? "34px" : "30px"};
+      font-size:${hookAr ? "32px" : "28px"};
       font-weight:900;
-      padding:14px 40px;
+      padding:12px 38px;
       border-radius:9999px;
       z-index:25;
       white-space:nowrap;
@@ -403,43 +470,14 @@ function buildHTML({
         0 0 100px rgba(220,0,0,0.3),
         0 8px 24px rgba(0,0,0,0.5);
     }
-    .tc {
-      position:absolute;
-      top:${isHook ? "278px" : "338px"};
-      left:50%;
-      width:90%; max-width:960px;
-      direction:${titleDir}; text-align:center;
-      z-index:20;
-      transform:translateX(calc(-50% + ${slideX.toFixed(2)}px));
-      opacity:${titleOp.toFixed(4)};
-    }
-    .tb {
-      display:inline-block;
-      background:linear-gradient(135deg,rgba(220,0,0,0.94),rgba(150,0,0,0.94));
-      padding:14px 34px;
-      border-radius:9999px;
-      border:1px solid rgba(255,120,120,0.3);
-      box-shadow:
-        0 0 40px rgba(220,0,0,0.5),
-        0 8px 24px rgba(0,0,0,0.4);
-    }
-    .tt {
-      font-family:${titleFont};
-      font-size:${titleSz}px;
-      font-weight:800;
-      color:#fff;
-      display:inline-flex;
-      align-items:center;
-      gap:10px;
-      white-space:nowrap;
-      text-shadow:0 2px 8px rgba(0,0,0,0.4);
-    }
-    .te { font-size:${titleAr ? "40px" : "36px"}; }
+
+    /* Word container */
     .wc {
       position:absolute;
-      left:50%; top:52%;
-      transform:translate(-50%, calc(-50% + ${translateY.toFixed(1)}px)) scale(${scale.toFixed(4)});
-      opacity:${opacity.toFixed(4)};
+      left:50%;
+      top:54%;
+      transform:translate(-50%, calc(-50% + ${wordTranslateY.toFixed(1)}px)) scale(${wordScale.toFixed(4)});
+      opacity:${wordOpacity.toFixed(4)};
       direction:${dir};
       text-align:center;
       z-index:10;
@@ -451,32 +489,31 @@ function buildHTML({
       display:inline-block;
       ${powerContainerStyle}
     }
-    .wt {
-      ${wordTextStyle}
-    }
+    .wt { ${wordTextStyle} }
   </style>
 </head>
 <body>
   <div class="ot"></div>
   <div class="ob"></div>
 
-  ${isHook ? `<div class="hb">${esc(hookText)}</div>` : ""}
-
+  <!-- ✅ العنوان دائماً في الأعلى مع animation -->
   <div class="tc">
-    <div class="tb">
-      <div class="tt">
-        <span class="te">${emoji_left}</span>
-        <span>${esc(display_title)}</span>
-        <span class="te">${emoji_right}</span>
-      </div>
+    <div class="tt">
+      <span class="te">${emoji_left}</span>
+      <span>${esc(display_title)}</span>
+      <span class="te">${emoji_right}</span>
     </div>
   </div>
 
+  ${isHook ? `<div class="hb">${esc(hookText)}</div>` : ""}
+
+  ${word ? `
   <div class="wc">
     <div class="wp">
       <span class="wt">${esc(word)}</span>
     </div>
-  </div>
+  </div>` : ""}
+
 </body>
 </html>`;
 }
