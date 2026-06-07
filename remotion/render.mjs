@@ -21,22 +21,22 @@ const props = JSON.parse(readFileSync(manifestPath, "utf-8"));
 
 const {
   title,
-  display_title = title,
-  emoji_left    = "🔥",
-  emoji_right   = "💥",
-  sentences     = [],
+  display_title  = title,
+  emoji_left     = "🔥",
+  emoji_right    = "💥",
+  sentences      = [],
   audio,
-  videos        = [],
-  duration_s    = 0,
-  power_words   = [],
-  aligned       = [],
-  lang          = "ar",
-  clip_duration = 3.0,
-  clip_durations = [],   // ✅ NEW: مدد الكليبات الفعلية لكل جملة
-  has_hook      = false,
-  custom_hook   = "",
-  analysis      = {},
-  mode          = "words_only",
+  videos         = [],
+  duration_s     = 0,
+  power_words    = [],
+  aligned        = [],
+  lang           = "ar",
+  clip_duration  = 3.0,
+  clip_durations = [],
+  has_hook       = false,
+  custom_hook    = "",
+  analysis       = {},
+  mode           = "words_only",
 } = props;
 
 const FPS                = 30;
@@ -78,6 +78,92 @@ const COLORS  = EMOTION_COLORS[emotion] || EMOTION_COLORS.default;
 
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TAG TRANSITION CONFIG
+// ═══════════════════════════════════════════════════════════════════════════
+
+const TAG_TRANSITION = {
+  shock: {
+    flashColor:   "rgba(255,255,255,1.0)",
+    flashFrames:  9,
+    shakeAmount:  18,
+    scaleBoost:   1.12,
+    label:        "SHOCK",
+  },
+  urgency: {
+    flashColor:   "rgba(220,0,0,0.85)",
+    flashFrames:  7,
+    shakeAmount:  12,
+    scaleBoost:   1.08,
+    label:        "URGENCY",
+  },
+  intrigue: {
+    flashColor:   "rgba(0,0,0,0.6)",
+    flashFrames:  10,
+    shakeAmount:  5,
+    scaleBoost:   1.04,
+    label:        "INTRIGUE",
+  },
+  emotional: {
+    flashColor:   "rgba(255,100,150,0.35)",
+    flashFrames:  12,
+    shakeAmount:  3,
+    scaleBoost:   1.02,
+    label:        "EMOTIONAL",
+  },
+  confident: {
+    flashColor:   "rgba(255,255,255,0.55)",
+    flashFrames:  6,
+    shakeAmount:  6,
+    scaleBoost:   1.06,
+    label:        "CONFIDENT",
+  },
+  inspiration: {
+    flashColor:   "rgba(255,215,0,0.6)",
+    flashFrames:  8,
+    shakeAmount:  4,
+    scaleBoost:   1.07,
+    label:        "INSPIRATION",
+  },
+  wisdom: {
+    flashColor:   "rgba(130,177,255,0.3)",
+    flashFrames:  14,
+    shakeAmount:  2,
+    scaleBoost:   1.01,
+    label:        "WISDOM",
+  },
+  desire: {
+    flashColor:   "rgba(255,100,180,0.4)",
+    flashFrames:  10,
+    shakeAmount:  4,
+    scaleBoost:   1.03,
+    label:        "DESIRE",
+  },
+  calm: {
+    flashColor:   "rgba(100,200,255,0.2)",
+    flashFrames:  16,
+    shakeAmount:  1,
+    scaleBoost:   1.0,
+    label:        "CALM",
+  },
+  information: {
+    flashColor:   "rgba(255,255,255,0.15)",
+    flashFrames:  6,
+    shakeAmount:  0,
+    scaleBoost:   1.0,
+    label:        "INFORMATION",
+  },
+};
+
+const DEFAULT_TRANSITION = {
+  flashColor:  "rgba(255,255,255,0.3)",
+  flashFrames: 7,
+  shakeAmount: 4,
+  scaleBoost:  1.02,
+  label:       "DEFAULT",
+};
+
+
+// ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -92,10 +178,15 @@ function probeDuration(filePath) {
 }
 
 const realAudioDuration = probeDuration(audio);
-const effectiveDuration = realAudioDuration > 1 ? realAudioDuration : duration_s;
-const totalFrames       = Math.ceil(effectiveDuration * FPS);
+const effectiveDuration = realAudioDuration > 1
+  ? realAudioDuration
+  : duration_s;
+const totalFrames = Math.ceil(effectiveDuration * FPS);
 
-console.log(`🎵 Audio: ${realAudioDuration.toFixed(3)}s | Frames: ${totalFrames}`);
+console.log(
+  `🎵 Audio: ${realAudioDuration.toFixed(3)}s | ` +
+  `Frames: ${totalFrames}`
+);
 
 const isArabic = (t) => /[\u0600-\u06FF]/.test(t);
 const isFrench = (t) => /[àâçéèêëîïôùûüÿœæ]/i.test(t);
@@ -115,9 +206,11 @@ function getLang(text) {
 
 const esc = (s) =>
   (s || "").toString()
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g,  "&lt;")
+    .replace(/>/g,  "&gt;")
+    .replace(/"/g,  "&quot;")
+    .replace(/'/g,  "&#039;");
 
 function normalizeWord(w) {
   return (w || "").toString()
@@ -131,17 +224,94 @@ function isPowerWord(w) {
   if (n.length < 2) return false;
   return power_words.some((pw) => {
     const p = normalizeWord(pw);
-    return p && (n === p || (p.length >= 3 && n.includes(p)) || (n.length >= 3 && p.includes(n)));
+    return p && (
+      n === p ||
+      (p.length >= 3 && n.includes(p)) ||
+      (n.length >= 3 && p.includes(n))
+    );
   });
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ NEW: بناء خطة الكليبات من clip_durations الفعلية
+// ✅ SENTENCE BOUNDARY MAP
+// يبني خريطة: frame → { tag, transitionProgress }
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildSentenceBoundaryMap() {
+  // نحتاج aligned من manifest
+  if (!aligned || aligned.length === 0) {
+    return new Array(totalFrames).fill(null);
+  }
+
+  // بناء قائمة نهايات الجمل مع tags
+  const boundaries = [];
+
+  for (let i = 0; i < aligned.length - 1; i++) {
+    const seg     = aligned[i];
+    const endTime = parseFloat(seg.end || 0);
+    if (endTime <= 0) continue;
+
+    // استخراج الـ tag من aligned إذا وجد
+    // أو من sentences إذا وجدت في props
+    const tag = seg.tag || "information";
+
+    const config = TAG_TRANSITION[tag] || DEFAULT_TRANSITION;
+
+    boundaries.push({
+      endTime,
+      endFrame:    Math.floor(endTime * FPS),
+      tag,
+      config,
+    });
+  }
+
+  // بناء الخريطة
+  const map = new Array(totalFrames).fill(null);
+
+  for (const boundary of boundaries) {
+    const { endFrame, tag, config } = boundary;
+    const totalFlashFrames = config.flashFrames;
+
+    for (let f = 0; f < totalFlashFrames; f++) {
+      const frame = endFrame + f;
+      if (frame < 0 || frame >= totalFrames) continue;
+
+      // progress: 0 = بداية التأثير، 1 = نهايته
+      const progress = f / Math.max(totalFlashFrames - 1, 1);
+
+      // نضع التأثير فقط إذا لم يكن هناك تأثير أقوى
+      if (
+        map[frame] === null ||
+        (config.flashFrames > (
+          TAG_TRANSITION[map[frame].tag] || DEFAULT_TRANSITION
+        ).flashFrames)
+      ) {
+        map[frame] = { tag, config, progress };
+      }
+    }
+  }
+
+  const activeBoundaries = boundaries.length;
+  console.log(
+    `\n🎬 Sentence boundaries: ${activeBoundaries} transitions mapped`
+  );
+  boundaries.forEach(b =>
+    console.log(
+      `   [${b.tag}] @ ${b.endTime.toFixed(3)}s ` +
+      `(frame ${b.endFrame}) — ${b.config.label}`
+    )
+  );
+
+  return map;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ✅ CLIP PLAN
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildClipPlan() {
-  // إذا توفرت clip_durations من main.py → نستخدمها
   if (clip_durations && clip_durations.length > 0) {
     let offset = 0;
     const plan = clip_durations.map((dur, i) => {
@@ -156,7 +326,10 @@ function buildClipPlan() {
       return entry;
     });
 
-    console.log(`\n📋 Clip plan from sentence durations (${plan.length} clips):`);
+    console.log(
+      `\n📋 Clip plan from sentence durations ` +
+      `(${plan.length} clips):`
+    );
     plan.forEach(c =>
       console.log(
         `   [${c.index + 1}] ${c.start.toFixed(2)}s → ` +
@@ -168,8 +341,9 @@ function buildClipPlan() {
     return plan;
   }
 
-  // fallback: clip_duration موحد
-  const totalClips    = Math.max(1, Math.floor(effectiveDuration / clip_duration));
+  const totalClips    = Math.max(
+    1, Math.floor(effectiveDuration / clip_duration)
+  );
   const actualClipDur = effectiveDuration / totalClips;
 
   console.log(
@@ -200,7 +374,8 @@ function buildWordList() {
       if (!w.word) continue;
       const start = parseFloat(w.start);
       const end   = parseFloat(w.end);
-      if (isNaN(start) || isNaN(end) || start < 0 || end <= start) continue;
+      if (isNaN(start) || isNaN(end) || start < 0 || end <= start)
+        continue;
       words.push({
         word:    w.word.trim(),
         start,
@@ -212,7 +387,8 @@ function buildWordList() {
 
   if (words.length === 0 && sentences.length > 0) {
     console.log("⚠️  No word alignment — equal split fallback");
-    const allText = sentences.join(" ").split(/\s+/).filter(Boolean);
+    const allText = sentences
+      .join(" ").split(/\s+/).filter(Boolean);
     const perWord = effectiveDuration / Math.max(allText.length, 1);
     for (let i = 0; i < allText.length; i++) {
       words.push({
@@ -228,8 +404,15 @@ function buildWordList() {
 
   console.log(`📊 Words: ${words.length}`);
   if (words.length > 0) {
-    console.log(`   [0]  ${words[0].start.toFixed(3)}s → ${words[0].end.toFixed(3)}s "${words[0].word}"`);
-    console.log(`   [-1] ${words[words.length-1].start.toFixed(3)}s → ${words[words.length-1].end.toFixed(3)}s "${words[words.length-1].word}"`);
+    console.log(
+      `   [0]  ${words[0].start.toFixed(3)}s → ` +
+      `${words[0].end.toFixed(3)}s "${words[0].word}"`
+    );
+    console.log(
+      `   [-1] ${words[words.length-1].start.toFixed(3)}s → ` +
+      `${words[words.length-1].end.toFixed(3)}s ` +
+      `"${words[words.length-1].word}"`
+    );
   }
 
   return words;
@@ -260,16 +443,19 @@ function buildFrameStateMap(words) {
   }
 
   const covered = map.filter(Boolean).length;
-  console.log(`Coverage: ${covered}/${totalFrames} (${((covered/totalFrames)*100).toFixed(1)}%)`);
+  console.log(
+    `Coverage: ${covered}/${totalFrames} ` +
+    `(${((covered/totalFrames)*100).toFixed(1)}%)`
+  );
   return map;
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// STATE KEY — لم يتغير
+// STATE KEY — ✅ يأخذ transitionState بعين الاعتبار
 // ═══════════════════════════════════════════════════════════════════════════
 
-function stateKey(state, globalFrame) {
+function stateKey(state, globalFrame, transitionState) {
   const INTRO_FRAMES = Math.floor(1.0 * FPS);
   const OUTRO_FRAMES = Math.floor(1.0 * FPS);
   const isIntro = globalFrame < INTRO_FRAMES;
@@ -277,6 +463,17 @@ function stateKey(state, globalFrame) {
 
   if (isIntro) return `title_intro_f${globalFrame}`;
   if (isOutro) return `title_outro_f${globalFrame}`;
+
+  // ✅ إذا كان هناك transition → نضيف bucket خاص
+  if (transitionState) {
+    const progBucket = transitionState.progress < 0.5
+      ? "in" : "out";
+    return (
+      `tr_${transitionState.tag}_${progBucket}_` +
+      `${state ? state.word : "empty"}_` +
+      `${state?.isPower ? 1 : 0}`
+    );
+  }
 
   const hook = globalFrame < HOOK_FRAMES ? "h" : "n";
   if (!state) return `empty_${hook}`;
@@ -289,48 +486,63 @@ function stateKey(state, globalFrame) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HTML BUILDER — لم يتغير
+// ✅ HOOK INTRO STATE KEY
+// ═══════════════════════════════════════════════════════════════════════════
+
+function hookIntroKey(globalFrame) {
+  const HOOK_INTRO_FRAMES = Math.floor(0.4 * FPS); // 12 frames
+  if (globalFrame >= HOOK_INTRO_FRAMES) return null;
+  return `hook_intro_f${globalFrame}`;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HTML BUILDER — ✅ يدعم transitionState + hookIntro
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTML({
   word,
-  isPower     = false,
-  isHook      = false,
-  globalFrame = 0,
-  progress    = 0.5,
+  isPower          = false,
+  isHook           = false,
+  globalFrame      = 0,
+  progress         = 0.5,
+  transitionState  = null,
+  isHookIntro      = false,
+  hookIntroProgress = 0,
 }) {
   const ar       = word ? isArabic(word) : false;
   const dir      = word ? getDir(word) : "ltr";
   const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
 
-  const titleAr   = isArabic(display_title);
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
+  // ── Title animation ──────────────────────────────────────────────────────
   const INTRO_FRAMES = Math.floor(1.0 * FPS);
   const OUTRO_FRAMES = Math.floor(1.0 * FPS);
   const isIntro = globalFrame < INTRO_FRAMES;
   const isOutro = globalFrame >= totalFrames - OUTRO_FRAMES;
 
   let titleOpacity, titleTranslateY;
-
   if (isIntro) {
     const t        = globalFrame / INTRO_FRAMES;
     const ease     = 1 - Math.pow(1 - t, 3);
-    titleOpacity   = ease;
+    titleOpacity    = ease;
     titleTranslateY = (1 - ease) * -80;
   } else if (isOutro) {
     const t        = (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
     const ease     = Math.pow(t, 2);
-    titleOpacity   = 1 - ease;
+    titleOpacity    = 1 - ease;
     titleTranslateY = ease * -60;
   } else {
-    titleOpacity   = 1.0;
+    titleOpacity    = 1.0;
     titleTranslateY = 0;
   }
 
-  let wordScale, wordOpacity, wordTranslateY;
+  // ── Word animation ───────────────────────────────────────────────────────
+  let wordScale, wordOpacity, wordTranslateY, wordRotate;
+  wordRotate = 0;
 
   if (!word) {
     wordScale      = 1.0;
@@ -353,6 +565,52 @@ function buildHTML({
     wordTranslateY = 0;
   }
 
+  // ── ✅ Hook Intro Effect (0.0s → 0.4s) ──────────────────────────────────
+  // في أول 12 frame: Zoom In سريع من 1.4 → 1.0
+  let hookIntroScale   = 1.0;
+  let hookIntroOpacity = 1.0;
+  if (isHookIntro) {
+    const t          = hookIntroProgress;
+    const ease       = 1 - Math.pow(1 - t, 3);
+    hookIntroScale   = 1.4 - ease * 0.4;   // 1.4 → 1.0
+    hookIntroOpacity = ease;                // 0 → 1
+  }
+
+  // ── ✅ Transition Effect ──────────────────────────────────────────────────
+  let flashOpacity  = 0;
+  let flashColor    = "rgba(255,255,255,0)";
+  let shakeX        = 0;
+  let shakeY        = 0;
+  let transScale    = 1.0;
+
+  if (transitionState) {
+    const { config, progress: tp } = transitionState;
+
+    // Flash: يظهر بسرعة ثم يختفي (ease in-out)
+    const flashPeak = 0.3;
+    if (tp <= flashPeak) {
+      flashOpacity = (tp / flashPeak);
+    } else {
+      flashOpacity = 1 - ((tp - flashPeak) / (1 - flashPeak));
+    }
+    flashOpacity = Math.max(0, Math.min(1, flashOpacity));
+    flashColor   = config.flashColor;
+
+    // Camera Shake
+    if (config.shakeAmount > 0) {
+      const shake = config.shakeAmount * (1 - tp);
+      const seed  = globalFrame * 7 + 13;
+      shakeX = Math.sin(seed * 2.3) * shake;
+      shakeY = Math.cos(seed * 1.7) * shake;
+    }
+
+    // Scale boost ثم يرجع
+    if (config.scaleBoost > 1.0 && tp < 0.5) {
+      transScale = 1.0 + (config.scaleBoost - 1.0) * (1 - tp * 2);
+    }
+  }
+
+  // ── Word sizing ──────────────────────────────────────────────────────────
   const wlen = word ? word.length : 0;
   let baseFontSize = 100;
   if (word) {
@@ -368,22 +626,34 @@ function buildHTML({
   const wordColor = isPower ? COLORS.power : COLORS.word;
   const glowColor = COLORS.glow;
 
-  const defaults = { ar: "🔴 لا تتجاوز هذا", fr: "🔴 Ne ratez pas ça", en: "🔴 Don't skip this" };
-  const hookText = (custom_hook && custom_hook.trim()) || defaults[lang] || defaults.en;
+  // ── Hook text ─────────────────────────────────────────────────────────────
+  const defaults  = {
+    ar: "🔴 لا تتجاوز هذا",
+    fr: "🔴 Ne ratez pas ça",
+    en: "🔴 Don't skip this",
+  };
+  const hookText = (custom_hook && custom_hook.trim())
+    || defaults[lang]
+    || defaults.en;
   const hookAr   = isArabic(hookText);
   const hookDir  = hookAr ? "rtl" : "ltr";
   const hookFont = getFontFamily(hookText);
 
-  const titleArabic    = isArabic(display_title);
-  const titleFontSize  = titleArabic ? 52 : 46;
-  const emojiSize      = titleArabic ? 56 : 50;
+  // ── Title sizing ──────────────────────────────────────────────────────────
+  const titleArabic   = isArabic(display_title);
+  const titleFontSize = titleArabic ? 52 : 46;
+  const emojiSize     = titleArabic ? 56 : 50;
 
+  // ── Power word container ──────────────────────────────────────────────────
   const powerContainerStyle = isPower ? `
     background:linear-gradient(135deg,#FF1744 0%,#D50000 100%);
     padding:24px 60px;
     border-radius:9999px;
     border:3px solid rgba(255,255,255,0.3);
-    box-shadow:0 0 60px rgba(255,23,68,0.8),0 0 120px rgba(255,23,68,0.4),inset 0 1px 0 rgba(255,255,255,0.2);
+    box-shadow:
+      0 0 60px rgba(255,23,68,0.8),
+      0 0 120px rgba(255,23,68,0.4),
+      inset 0 1px 0 rgba(255,255,255,0.2);
   ` : `background:transparent;padding:0;`;
 
   const wordTextStyle = isPower ? `
@@ -408,8 +678,25 @@ function buildHTML({
     word-break:break-word;
     -webkit-text-stroke:4px rgba(0,0,0,0.95);
     paint-order:stroke fill;
-    text-shadow:0 0 40px ${glowColor},0 0 80px ${glowColor};
+    text-shadow:
+      0 0 40px ${glowColor},
+      0 0 80px ${glowColor};
   `;
+
+  // ── Combined transforms ───────────────────────────────────────────────────
+  const finalScale = wordScale * transScale * (
+    isHookIntro ? hookIntroScale : 1.0
+  );
+  const finalOpacity = word
+    ? wordOpacity * (isHookIntro ? hookIntroOpacity : 1.0)
+    : 0;
+
+  const wordTransform = (
+    `translate(-50%, calc(-50% + ${wordTranslateY.toFixed(1)}px)) ` +
+    `translate(${shakeX.toFixed(2)}px, ${shakeY.toFixed(2)}px) ` +
+    `scale(${finalScale.toFixed(4)}) ` +
+    `rotate(${wordRotate.toFixed(2)}deg)`
+  );
 
   return `<!DOCTYPE html>
 <html lang="${langAttr}">
@@ -421,6 +708,8 @@ function buildHTML({
       width:${WIDTH}px; height:${HEIGHT}px;
       overflow:hidden; background:transparent;
     }
+
+    /* Cinematic overlays */
     .ot {
       position:absolute; top:0; left:0; right:0; height:40%;
       background:linear-gradient(to bottom,
@@ -437,13 +726,22 @@ function buildHTML({
         transparent 100%);
       pointer-events:none; z-index:1;
     }
+
+    /* ✅ Flash overlay للانتقالات */
+    .flash {
+      position:absolute; inset:0;
+      background:${flashColor};
+      opacity:${flashOpacity.toFixed(4)};
+      pointer-events:none;
+      z-index:50;
+    }
+
+    /* العنوان */
     .tc {
       position:absolute;
-      top:410px;
-      left:50%;
-      width:92%;
-      max-width:980px;
-      direction:${titleDir};
+      top:410px; left:50%;
+      width:92%; max-width:980px;
+      direction:${getDir(display_title)};
       text-align:center;
       z-index:30;
       transform:translateX(-50%) translateY(${titleTranslateY.toFixed(2)}px);
@@ -453,8 +751,7 @@ function buildHTML({
       content:'';
       display:block;
       margin:16px auto 0;
-      width:120px;
-      height:4px;
+      width:120px; height:4px;
       border-radius:2px;
       background:linear-gradient(90deg,transparent,#FF1744,transparent);
       opacity:${titleOpacity.toFixed(4)};
@@ -470,7 +767,7 @@ function buildHTML({
       gap:14px;
       line-height:1.3;
       text-align:center;
-      direction:${titleDir};
+      direction:${getDir(display_title)};
       -webkit-text-stroke:2px rgba(0,0,0,0.8);
       paint-order:stroke fill;
       text-shadow:
@@ -481,12 +778,18 @@ function buildHTML({
         -2px -2px 0 rgba(0,0,0,0.8);
     }
     .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
+
+    /* Hook badge */
     .hb {
       position:absolute;
       top:${titleArabic ? "290px" : "270px"};
       left:50%;
       transform:translateX(-50%);
-      background:linear-gradient(135deg,rgba(220,0,0,0.95),rgba(160,0,0,0.95));
+      background:linear-gradient(
+        135deg,
+        rgba(220,0,0,0.95),
+        rgba(160,0,0,0.95)
+      );
       color:#fff;
       font-family:${hookFont};
       font-size:${hookAr ? "32px" : "28px"};
@@ -502,17 +805,17 @@ function buildHTML({
         0 0 100px rgba(220,0,0,0.3),
         0 8px 24px rgba(0,0,0,0.5);
     }
+
+    /* Word container */
     .wc {
       position:absolute;
-      left:50%;
-      top:54%;
-      transform:translate(-50%, calc(-50% + ${wordTranslateY.toFixed(1)}px)) scale(${wordScale.toFixed(4)});
-      opacity:${wordOpacity.toFixed(4)};
+      left:50%; top:54%;
+      transform:${wordTransform};
+      opacity:${finalOpacity.toFixed(4)};
       direction:${dir};
       text-align:center;
       z-index:10;
-      width:95%;
-      max-width:1020px;
+      width:95%; max-width:1020px;
       transform-origin:center center;
     }
     .wp {
@@ -525,6 +828,11 @@ function buildHTML({
 <body>
   <div class="ot"></div>
   <div class="ob"></div>
+
+  <!-- Flash overlay للانتقالات -->
+  <div class="flash"></div>
+
+  <!-- العنوان -->
   <div class="tc">
     <div class="tt">
       <span class="te">${emoji_left}</span>
@@ -532,44 +840,67 @@ function buildHTML({
       <span class="te">${emoji_right}</span>
     </div>
   </div>
+
   ${isHook ? `<div class="hb">${esc(hookText)}</div>` : ""}
+
   ${word ? `
   <div class="wc">
     <div class="wp">
       <span class="wt">${esc(word)}</span>
     </div>
   </div>` : ""}
+
 </body>
 </html>`;
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RENDER PNGs — لم يتغير
+// RENDER PNGs — ✅ يمرر transitionState و hookIntro
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function renderAllPNGs(page, frameStateMap) {
+async function renderAllPNGs(page, frameStateMap, boundaryMap) {
   const unique = new Map();
 
+  // ✅ حساب hook intro frames
+  const HOOK_INTRO_FRAMES = Math.floor(0.4 * FPS);
+
   for (let f = 0; f < frameStateMap.length; f++) {
-    const key = stateKey(frameStateMap[f], f);
+    const transitionState = boundaryMap[f] || null;
+
+    // hook intro
+    const isHookIntro      = f < HOOK_INTRO_FRAMES;
+    const hookIntroProgress = isHookIntro
+      ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1)
+      : 0;
+
+    const key = isHookIntro
+      ? hookIntroKey(f)
+      : stateKey(frameStateMap[f], f, transitionState);
+
     if (!unique.has(key)) {
       unique.set(key, {
-        word:        frameStateMap[f]?.word     ?? null,
-        isPower:     frameStateMap[f]?.isPower  ?? false,
-        isHook:      f < HOOK_FRAMES,
-        globalFrame: f,
-        progress:    frameStateMap[f]?.progress ?? 0.5,
+        word:              frameStateMap[f]?.word     ?? null,
+        isPower:           frameStateMap[f]?.isPower  ?? false,
+        isHook:            f < HOOK_FRAMES,
+        globalFrame:       f,
+        progress:          frameStateMap[f]?.progress ?? 0.5,
+        transitionState,
+        isHookIntro,
+        hookIntroProgress,
       });
     }
   }
 
   console.log(`\n📸 ${unique.size} unique states to render`);
 
+  // Font warmup
   for (const [w, l] of [["مرحبا", "ar"], ["Hello", "en"]]) {
     const html = buildHTML({
       word: w, isPower: false, isHook: false,
       globalFrame: TITLE_SLIDE_FRAMES, progress: 0.5,
+      transitionState: null, isHookIntro: false,
+      hookIntroProgress: 0,
     });
     const p = `${TMP}/init_${l}.html`;
     writeFileSync(p, html, "utf-8");
@@ -583,11 +914,14 @@ async function renderAllPNGs(page, frameStateMap) {
 
   for (const [key, s] of unique) {
     const html = buildHTML({
-      word:        s.word,
-      isPower:     s.isPower,
-      isHook:      s.isHook,
-      globalFrame: s.globalFrame,
-      progress:    s.progress,
+      word:              s.word,
+      isPower:           s.isPower,
+      isHook:            s.isHook,
+      globalFrame:       s.globalFrame,
+      progress:          s.progress,
+      transitionState:   s.transitionState,
+      isHookIntro:       s.isHookIntro,
+      hookIntroProgress: s.hookIntroProgress,
     });
 
     const hp = `${TMP}/${key}.html`;
@@ -596,7 +930,9 @@ async function renderAllPNGs(page, frameStateMap) {
     await page.waitForTimeout(35);
 
     const pp = `${TMP}/${key}.png`;
-    await page.screenshot({ path: pp, type: "png", omitBackground: true });
+    await page.screenshot({
+      path: pp, type: "png", omitBackground: true,
+    });
 
     cache.set(key, pp);
     done++;
@@ -613,17 +949,21 @@ async function renderAllPNGs(page, frameStateMap) {
 // BACKGROUND PROCESSING — لم يتغير
 // ═══════════════════════════════════════════════════════════════════════════
 
-function processBackground(videoPath, duration, outPath, idx, isHook = false) {
+function processBackground(
+  videoPath, duration, outPath, idx, isHook = false
+) {
   const srcDur = parseFloat(
     spawnSync("ffprobe", [
       "-v", "error",
       "-show_entries", "format=duration",
       "-of", "default=noprint_wrappers=1:nokey=1",
       videoPath,
-    ], { stdio: ["ignore", "pipe", "pipe"] }).stdout.toString().trim()
+    ], { stdio: ["ignore", "pipe", "pipe"] })
+    .stdout.toString().trim()
   ) || 0;
 
-  const loop   = srcDur < duration + 0.5 ? ["-stream_loop", "-1"] : [];
+  const loop   = srcDur < duration + 0.5
+    ? ["-stream_loop", "-1"] : [];
   const frames = Math.ceil(duration * FPS);
   const mtype  = idx % 4;
 
@@ -633,9 +973,11 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
     `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',zoompan=z='1.1':x='if(gte(x,iw/10),x-0.5,iw/10)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
     `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',zoompan=z='1.1':x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
   ];
+
   const hookZoom =
-    `scale=w='trunc((iw*1.5)/2)*2':h='trunc((ih*1.5)/2)*2',zoompan=` +
-    `z='min(zoom+0.0015,1.5)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
+    `scale=w='trunc((iw*1.5)/2)*2':h='trunc((ih*1.5)/2)*2',` +
+    `zoompan=z='min(zoom+0.0015,1.5)':` +
+    `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
     `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
 
   const zf = isHook ? hookZoom : zooms[mtype];
@@ -644,7 +986,9 @@ function processBackground(videoPath, duration, outPath, idx, isHook = false) {
   const fo = Math.min(0.4, d * 0.1);
 
   const cin = [
-    "curves=r='0/0 0.3/0.28 0.7/0.76 1/0.92':g='0/0 0.3/0.28 0.7/0.78 1/0.94':b='0/0.02 0.3/0.30 0.7/0.82 1/0.98'",
+    "curves=r='0/0 0.3/0.28 0.7/0.76 1/0.92':" +
+    "g='0/0 0.3/0.28 0.7/0.78 1/0.94':" +
+    "b='0/0.02 0.3/0.30 0.7/0.82 1/0.98'",
     "hue=s=0.9",
     isHook
       ? "eq=contrast=1.15:brightness=0.02:saturation=1.1"
@@ -721,7 +1065,8 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     "-i", bgMp4,
     "-i", capMov,
     "-filter_complex",
-    "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
+    "[1:v]format=rgba[cap];" +
+    "[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
     "-map", "[out]",
     "-map", "0:a:0",
     "-c:v", "libx264", "-preset", "fast", "-crf", "19",
@@ -738,7 +1083,8 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
       "-i", capMov,
       "-i", audioPth,
       "-filter_complex",
-      "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
+      "[1:v]format=rgba[cap];" +
+      "[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]",
       "-map", "[out]",
       "-map", "2:a:0",
       "-c:v", "libx264", "-preset", "fast", "-crf", "19",
@@ -749,7 +1095,10 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
   }
 
   if (r.status !== 0) {
-    console.error("❌ overlayOnBg failed:", r.stderr?.toString().slice(-300));
+    console.error(
+      "❌ overlayOnBg failed:",
+      r.stderr?.toString().slice(-300)
+    );
   }
 
   return outPath;
@@ -759,8 +1108,11 @@ function xfadeConcat(clips, durs) {
   if (clips.length === 0) return "";
   if (clips.length === 1) return clips[0];
 
-  const TRANS = ["fade","fadeblack","fadegrays","smoothleft","smoothright","circlecrop"];
-  const XFADE = 0.5;
+  const TRANS = [
+    "fade","fadeblack","fadegrays",
+    "smoothleft","smoothright","circlecrop",
+  ];
+  const XFADE   = 0.5;
   const filters = [];
   let offset = 0, last = "[0:v]";
 
@@ -770,7 +1122,8 @@ function xfadeConcat(clips, durs) {
     const out   = i === clips.length - 1 ? "[vout]" : `[v${i}]`;
     const trans = TRANS[(i - 1) % TRANS.length];
     filters.push(
-      `${last}[${i}:v]xfade=transition=${trans}:duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
+      `${last}[${i}:v]xfade=transition=${trans}:` +
+      `duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
     );
     last = out;
   }
@@ -801,7 +1154,9 @@ function xfadeConcat(clips, durs) {
 function mergeAudio(videoPath, audioPath, outPath) {
   const aDur = probeDuration(audioPath);
   const vDur = probeDuration(videoPath);
-  console.log(`🎵 Audio: ${aDur.toFixed(3)}s | Video: ${vDur.toFixed(3)}s`);
+  console.log(
+    `🎵 Audio: ${aDur.toFixed(3)}s | Video: ${vDur.toFixed(3)}s`
+  );
 
   let vid = videoPath;
   if (vDur < aDur - 0.3) {
@@ -834,14 +1189,10 @@ async function main() {
   console.log(`\n🚀 Mode: ${mode}\n`);
 
   // ════════════════════════════════════════════════════════════════════
-  // MODE: bg_only
-  // ✅ التعديل الوحيد هنا: يقرأ clip_durations الفعلية لكل جملة
+  // MODE: bg_only — لم يتغير شيء هنا
   // ════════════════════════════════════════════════════════════════════
   if (mode === "bg_only") {
-
-    // ✅ بناء خطة الكليبات من clip_durations أو fallback
     const clipPlan = buildClipPlan();
-
     console.log(`📊 ${clipPlan.length} clips total`);
 
     const finalClips = [];
@@ -855,7 +1206,7 @@ async function main() {
         `${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
       );
 
-      const bgMp4 = `${TMP}/bg_${String(index).padStart(3, "0")}.mp4`;
+      const bgMp4 = `${TMP}/bg_${String(index).padStart(3,"0")}.mp4`;
       processBackground(videoPath, duration, bgMp4, index, isHook);
       finalClips.push(bgMp4);
       clipDurs.push(duration);
@@ -872,17 +1223,24 @@ async function main() {
   }
 
   // ════════════════════════════════════════════════════════════════════
-  // MODE: words_only — لم يتغير شيء هنا إطلاقاً
+  // MODE: words_only
+  // ✅ أضفنا: boundaryMap للتأثيرات البصرية عند نهاية كل جملة
+  //           hookIntro في أول 0.4 ثانية
   // ════════════════════════════════════════════════════════════════════
   if (mode === "words_only") {
     const bgVideoPath = videos[0];
     if (!bgVideoPath) {
-      console.error("❌ words_only mode requires videos[0] as background video path");
+      console.error(
+        "❌ words_only mode requires videos[0] as background"
+      );
       process.exit(1);
     }
 
     const words         = buildWordList();
     const frameStateMap = buildFrameStateMap(words);
+
+    // ✅ بناء خريطة التأثيرات البصرية عند حدود الجمل
+    const boundaryMap   = buildSentenceBoundaryMap();
 
     const browser = await chromium.launch({
       headless: true,
@@ -905,20 +1263,35 @@ async function main() {
     const page = await context.newPage();
 
     console.log("🖼️  Rendering PNGs...");
-    const pngCache = await renderAllPNGs(page, frameStateMap);
+
+    // ✅ نمرر boundaryMap
+    const pngCache = await renderAllPNGs(
+      page, frameStateMap, boundaryMap
+    );
     await browser.close();
     console.log(`✅ ${pngCache.size} PNGs\n`);
 
+    // Build frame directory
     const frameDir = `${TMP}/frames_words`;
     mkdirSync(frameDir, { recursive: true });
 
     const emptyKey = `empty_n`;
     const emptyPng = pngCache.get(emptyKey);
 
+    const HOOK_INTRO_FRAMES = Math.floor(0.4 * FPS);
+
     for (let f = 0; f < totalFrames; f++) {
-      const key  = stateKey(frameStateMap[f], f);
+      const transitionState   = boundaryMap[f] || null;
+      const isHookIntroFrame  = f < HOOK_INTRO_FRAMES;
+      const hookIntroProgress = isHookIntroFrame
+        ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1) : 0;
+
+      const key = isHookIntroFrame
+        ? hookIntroKey(f)
+        : stateKey(frameStateMap[f], f, transitionState);
+
       const src  = pngCache.get(key) || emptyPng;
-      const dest = `${frameDir}/frame_${String(f).padStart(6, "0")}.png`;
+      const dest = `${frameDir}/frame_${String(f).padStart(6,"0")}.png`;
       if (!src) continue;
       try { symlinkSync(src, dest); }
       catch { copyFileSync(src, dest); }
