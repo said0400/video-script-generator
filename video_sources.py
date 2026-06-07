@@ -6,6 +6,9 @@ Sources (in priority order): Local → Pexels → Pixabay
 ✨ Motion detection لضمان فيديوهات متحركة
 ✨ مسارات مطلقة
 ✨ Thread-safe key rotation
+✨ NEW: search fallback
+   1) keyword + " dark cinematic"
+   2) keyword الأصلية
 """
 
 from __future__ import annotations
@@ -267,7 +270,6 @@ def _detect_motion_simple(path: Path) -> bool:
                 frame_sizes.append(tmp_path.stat().st_size)
                 tmp_path.unlink(missing_ok=True)
 
-        # تنظيف أي ملفات متبقية
         for i in range(3):
             Path(f"/tmp/_motion_{pid}_{i}.jpg").unlink(
                 missing_ok=True
@@ -381,6 +383,42 @@ def _safe_name(keyword: str, length: int = 20) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ✅ NEW: QUERY VARIANTS
+# أولاً dark cinematic ثم fallback إلى keyword الأصلية
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _build_query_variants(keyword: str) -> list[str]:
+    """
+    يبني نسختين للبحث:
+      1) keyword + dark cinematic
+      2) keyword الأصلية
+
+    مثال:
+      "man staring camera"
+      → ["man staring camera dark cinematic", "man staring camera"]
+    """
+    kw = " ".join(keyword.strip().split())
+    if not kw:
+        return []
+
+    variants = [
+        f"{kw} dark cinematic",
+        kw,
+    ]
+
+    # إزالة التكرار مع الحفاظ على الترتيب
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in variants:
+        k = v.lower().strip()
+        if k and k not in seen:
+            seen.add(k)
+            out.append(v)
+
+    return out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # LOCAL VIDEOS
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -434,51 +472,71 @@ def _search_pexels(
     session_used: set[str],
     retries:      int = 3,
 ) -> Path | None:
-    """البحث عن فيديو في Pexels."""
+    """البحث عن فيديو في Pexels مع fallback query."""
     api_key = _get_pexels_key()
     if not api_key:
         return None
 
-    videos: list[dict] = []
+    query_variants = _build_query_variants(keyword)
+    if not query_variants:
+        return None
 
-    for attempt in range(retries):
-        try:
-            r = requests.get(
-                PEXELS_API_URL,
-                headers = {"Authorization": api_key},
-                params  = {
-                    "query":       keyword,
-                    "per_page":    15,
-                    "orientation": "portrait",
-                    "size":        "medium",
-                },
-                timeout = API_TIMEOUT,
-            )
-            r.raise_for_status()
-            videos = r.json().get("videos", [])
-            break
+    tried_ids: set[str] = set()
 
-        except requests.exceptions.HTTPError as e:
-            status = (
-                e.response.status_code
-                if e.response
-                else 0
-            )
-            if status == 429:
-                print("    ⚠️  Pexels rate limit — rotating key")
-                _rotate_pexels_key()
-                api_key = _get_pexels_key()
-                time.sleep(2)
-            elif status in (401, 403):
-                print(
-                    f"    ❌ Pexels auth error ({status}) "
-                    f"— rotating key"
+    for query in query_variants:
+        print(f"    🔎 Pexels query: {query!r}")
+        videos: list[dict] = []
+
+        for attempt in range(retries):
+            try:
+                r = requests.get(
+                    PEXELS_API_URL,
+                    headers = {"Authorization": api_key},
+                    params  = {
+                        "query":       query,
+                        "per_page":    15,
+                        "orientation": "portrait",
+                        "size":        "medium",
+                    },
+                    timeout = API_TIMEOUT,
                 )
-                _rotate_pexels_key()
-                api_key = _get_pexels_key()
-                if not api_key:
-                    return None
-            else:
+                r.raise_for_status()
+                videos = r.json().get("videos", [])
+                break
+
+            except requests.exceptions.HTTPError as e:
+                status = (
+                    e.response.status_code
+                    if e.response
+                    else 0
+                )
+                if status == 429:
+                    print("    ⚠️  Pexels rate limit — rotating key")
+                    _rotate_pexels_key()
+                    api_key = _get_pexels_key()
+                    time.sleep(2)
+                elif status in (401, 403):
+                    print(
+                        f"    ❌ Pexels auth error ({status}) "
+                        f"— rotating key"
+                    )
+                    _rotate_pexels_key()
+                    api_key = _get_pexels_key()
+                    if not api_key:
+                        return None
+                else:
+                    if attempt < retries - 1:
+                        time.sleep(
+                            RETRY_DELAYS[
+                                min(attempt, len(RETRY_DELAYS) - 1)
+                            ]
+                        )
+
+            except Exception as e:
+                print(
+                    f"    ⚠️  Pexels "
+                    f"[{attempt + 1}/{retries}]: {e}"
+                )
                 if attempt < retries - 1:
                     time.sleep(
                         RETRY_DELAYS[
@@ -486,62 +544,58 @@ def _search_pexels(
                         ]
                     )
 
-        except Exception as e:
-            print(
-                f"    ⚠️  Pexels "
-                f"[{attempt + 1}/{retries}]: {e}"
-            )
-            if attempt < retries - 1:
-                time.sleep(
-                    RETRY_DELAYS[
-                        min(attempt, len(RETRY_DELAYS) - 1)
-                    ]
-                )
-
-    videos = [
-        v for v in videos
-        if v.get("duration", 0) >= MIN_DURATION
-    ]
-    videos = sorted(
-        videos,
-        key     = lambda v: v.get("duration", 0),
-        reverse = True,
-    )
-
-    for video in videos[:5]:
-        vid_id = str(video["id"])
-        sk     = f"px_{vid_id}"
-
-        if (
-            sk in session_used or
-            is_video_used(vid_id, "pexels")
-        ):
-            continue
-
-        files = sorted(
-            [
-                f for f in video.get("video_files", [])
-                if f.get("file_type") == "video/mp4"
-            ],
-            key     = lambda f: (
-                f.get("width", 0) * f.get("height", 0)
-            ),
+        videos = [
+            v for v in videos
+            if v.get("duration", 0) >= MIN_DURATION
+        ]
+        videos = sorted(
+            videos,
+            key     = lambda v: v.get("duration", 0),
             reverse = True,
         )
-        url = files[0].get("link") if files else None
-        if not url:
+
+        if not videos:
+            print("    ↩️  No Pexels results — trying fallback query...")
             continue
 
-        dest = Path(output_dir) / (
-            f"{index:02d}_{sub}_px_"
-            f"{_safe_name(keyword)}_raw.mp4"
-        )
+        for video in videos[:7]:
+            vid_id = str(video["id"])
+            sk     = f"px_{vid_id}"
 
-        if _download(url, dest, retries=2):
-            session_used.add(sk)
-            mark_video_used(vid_id, keyword, "pexels")
-            print(f"    🎬 Pexels: {dest.name}")
-            return dest
+            if vid_id in tried_ids:
+                continue
+            tried_ids.add(vid_id)
+
+            if (
+                sk in session_used or
+                is_video_used(vid_id, "pexels")
+            ):
+                continue
+
+            files = sorted(
+                [
+                    f for f in video.get("video_files", [])
+                    if f.get("file_type") == "video/mp4"
+                ],
+                key     = lambda f: (
+                    f.get("width", 0) * f.get("height", 0)
+                ),
+                reverse = True,
+            )
+            url = files[0].get("link") if files else None
+            if not url:
+                continue
+
+            dest = Path(output_dir) / (
+                f"{index:02d}_{sub}_px_"
+                f"{_safe_name(keyword)}_raw.mp4"
+            )
+
+            if _download(url, dest, retries=2):
+                session_used.add(sk)
+                mark_video_used(vid_id, keyword, "pexels")
+                print(f"    🎬 Pexels: {dest.name}")
+                return dest
 
     return None
 
@@ -558,52 +612,72 @@ def _search_pixabay(
     session_used: set[str],
     retries:      int = 3,
 ) -> Path | None:
-    """البحث عن فيديو في Pixabay."""
+    """البحث عن فيديو في Pixabay مع fallback query."""
     api_key = _get_pixabay_key()
     if not api_key:
         return None
 
-    hits: list[dict] = []
+    query_variants = _build_query_variants(keyword)
+    if not query_variants:
+        return None
 
-    for attempt in range(retries):
-        try:
-            r = requests.get(
-                PIXABAY_API_URL,
-                params  = {
-                    "key":        api_key,
-                    "q":          keyword,
-                    "video_type": "film",
-                    "per_page":   20,
-                    "safesearch": "true",
-                    "order":      "popular",
-                },
-                timeout = API_TIMEOUT,
-            )
-            r.raise_for_status()
-            hits = r.json().get("hits", [])
-            break
+    tried_ids: set[str] = set()
 
-        except requests.exceptions.HTTPError as e:
-            status = (
-                e.response.status_code
-                if e.response
-                else 0
-            )
-            if status == 429:
-                print("    ⚠️  Pixabay rate limit — rotating key")
-                _rotate_pixabay_key()
-                api_key = _get_pixabay_key()
-                time.sleep(2)
-            elif status in (400, 401):
-                print(
-                    f"    ❌ Pixabay auth error ({status}) "
-                    f"— rotating key"
+    for query in query_variants:
+        print(f"    🔎 Pixabay query: {query!r}")
+        hits: list[dict] = []
+
+        for attempt in range(retries):
+            try:
+                r = requests.get(
+                    PIXABAY_API_URL,
+                    params  = {
+                        "key":        api_key,
+                        "q":          query,
+                        "video_type": "film",
+                        "per_page":   20,
+                        "safesearch": "true",
+                        "order":      "popular",
+                    },
+                    timeout = API_TIMEOUT,
                 )
-                _rotate_pixabay_key()
-                api_key = _get_pixabay_key()
-                if not api_key:
-                    return None
-            else:
+                r.raise_for_status()
+                hits = r.json().get("hits", [])
+                break
+
+            except requests.exceptions.HTTPError as e:
+                status = (
+                    e.response.status_code
+                    if e.response
+                    else 0
+                )
+                if status == 429:
+                    print("    ⚠️  Pixabay rate limit — rotating key")
+                    _rotate_pixabay_key()
+                    api_key = _get_pixabay_key()
+                    time.sleep(2)
+                elif status in (400, 401):
+                    print(
+                        f"    ❌ Pixabay auth error ({status}) "
+                        f"— rotating key"
+                    )
+                    _rotate_pixabay_key()
+                    api_key = _get_pixabay_key()
+                    if not api_key:
+                        return None
+                else:
+                    if attempt < retries - 1:
+                        time.sleep(
+                            RETRY_DELAYS[
+                                min(attempt, len(RETRY_DELAYS) - 1)
+                            ]
+                        )
+
+            except Exception as e:
+                print(
+                    f"    ⚠️  Pixabay "
+                    f"[{attempt + 1}/{retries}]: {e}"
+                )
                 if attempt < retries - 1:
                     time.sleep(
                         RETRY_DELAYS[
@@ -611,59 +685,55 @@ def _search_pixabay(
                         ]
                     )
 
-        except Exception as e:
-            print(
-                f"    ⚠️  Pixabay "
-                f"[{attempt + 1}/{retries}]: {e}"
+        hits = [
+            h for h in hits
+            if h.get("duration", 0) >= MIN_DURATION
+        ]
+        hits = sorted(
+            hits,
+            key     = lambda h: h.get("duration", 0),
+            reverse = True,
+        )
+
+        if not hits:
+            print("    ↩️  No Pixabay results — trying fallback query...")
+            continue
+
+        for hit in hits[:7]:
+            vid_id = str(hit["id"])
+            sk     = f"pb_{vid_id}"
+
+            if vid_id in tried_ids:
+                continue
+            tried_ids.add(vid_id)
+
+            if (
+                sk in session_used or
+                is_video_used(vid_id, "pixabay")
+            ):
+                continue
+
+            vids = hit.get("videos", {})
+            url  = (
+                vids.get("large",  {}).get("url") or
+                vids.get("medium", {}).get("url") or
+                vids.get("small",  {}).get("url") or
+                vids.get("tiny",   {}).get("url")
             )
-            if attempt < retries - 1:
-                time.sleep(
-                    RETRY_DELAYS[
-                        min(attempt, len(RETRY_DELAYS) - 1)
-                    ]
-                )
 
-    hits = [
-        h for h in hits
-        if h.get("duration", 0) >= MIN_DURATION
-    ]
-    hits = sorted(
-        hits,
-        key     = lambda h: h.get("duration", 0),
-        reverse = True,
-    )
+            if not url or ".mp4" not in url.lower():
+                continue
 
-    for hit in hits[:5]:
-        vid_id = str(hit["id"])
-        sk     = f"pb_{vid_id}"
+            dest = Path(output_dir) / (
+                f"{index:02d}_{sub}_pb_"
+                f"{_safe_name(keyword)}_raw.mp4"
+            )
 
-        if (
-            sk in session_used or
-            is_video_used(vid_id, "pixabay")
-        ):
-            continue
-
-        vids = hit.get("videos", {})
-        url  = (
-            vids.get("large",  {}).get("url") or
-            vids.get("medium", {}).get("url") or
-            vids.get("small",  {}).get("url") or
-            vids.get("tiny",   {}).get("url")
-        )
-
-        if not url or ".mp4" not in url.lower():
-            continue
-
-        dest = Path(output_dir) / (
-            f"{index:02d}_{sub}_pb_"
-            f"{_safe_name(keyword)}_raw.mp4"
-        )
-
-        if _download(url, dest, retries=2):
-            session_used.add(sk)
-            mark_video_used(vid_id, keyword, "pixabay")
-            print(f"    🎬 Pixabay: {dest.name}")
-            return dest
+            if _download(url, dest, retries=2):
+                session_used.add(sk)
+                mark_video_used(vid_id, keyword, "pixabay")
+                print(f"    🎬 Pixabay: {dest.name}")
+                return dest
 
     return None
 
@@ -713,8 +783,8 @@ def _fill_gaps(
             "Check PEXELS_API_KEY and PIXABAY_API_KEY."
         )
 
-    rng:       random.Random  = random.Random()
-    last_used: Path | None    = None
+    rng:       random.Random = random.Random()
+    last_used: Path | None   = None
 
     for i in range(n):
         if results[i] is None:
@@ -761,9 +831,9 @@ def fetch_videos_for_script(
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    n              = len(keywords_per_sentence)
-    session_used   : set[str]          = set()
-    results        : list[Path | None] = [None] * n
+    n            = len(keywords_per_sentence)
+    session_used: set[str]          = set()
+    results:      list[Path | None] = [None] * n
 
     pexels_keys  = _load_keys_for("PEXELS_API_KEY")
     pixabay_keys = _load_keys_for("PIXABAY_API_KEY")
@@ -776,6 +846,16 @@ def fetch_videos_for_script(
 
     for i, kws in enumerate(keywords_per_sentence):
         found = False
+        clip_dur = (
+            clip_durations[i]
+            if i < len(clip_durations)
+            else 0.0
+        )
+
+        print(
+            f"  🎞️  Clip #{i + 1}/{n} "
+            f"({clip_dur:.2f}s target)"
+        )
 
         for sub, kw in enumerate(kws):
             kw = kw.strip()
