@@ -5,6 +5,7 @@ thumb_gen.py — Generate professional thumbnail for Reels.
 ✨ Fallback: frame من أول فيديو خام
 ✨ Fallback أخير: خلفية سوداء
 ✨ فلتر أسود غامض
+✨ العنوان في سطرين
 ✨ يدعم AR, FR, EN
 """
 
@@ -28,6 +29,47 @@ HEIGHT            = 1920
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# TITLE SPLIT — سطرين متوازنين
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _split_title_two_lines(title: str) -> str:
+    """
+    تقسيم العنوان إلى سطرين بشكل متوازن قدر الإمكان.
+
+    مثال:
+      "كيف تكشف نوايا الناس الحقيقية"
+      → "كيف تكشف نوايا\nالناس الحقيقية"
+    """
+    words = title.strip().split()
+
+    if len(words) <= 1:
+        return title.strip()
+
+    if len(words) == 2:
+        return f"{words[0]}\n{words[1]}"
+
+    mid      = len(words) // 2
+    best_i   = mid
+    best_diff = 10 ** 9
+
+    for i in range(max(1, mid - 2), min(len(words), mid + 3)):
+        left  = " ".join(words[:i])
+        right = " ".join(words[i:])
+        diff  = abs(len(left) - len(right))
+        if diff < best_diff:
+            best_diff = diff
+            best_i    = i
+
+    line1 = " ".join(words[:best_i]).strip()
+    line2 = " ".join(words[best_i:]).strip()
+
+    if not line2:
+        return line1
+
+    return f"{line1}\n{line2}"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # FETCH BACKGROUND IMAGE
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -35,10 +77,7 @@ def _fetch_pexels_photo(
     keyword:     str,
     output_path: str,
 ) -> bool:
-    """
-    جلب صورة من Pexels Photos API.
-    Returns True إذا نجح.
-    """
+    """جلب صورة من Pexels Photos API."""
     api_key = os.environ.get("PEXELS_API_KEY", "").strip()
     if not api_key:
         api_key = os.environ.get("PEXELS_API_KEY_1", "").strip()
@@ -62,11 +101,10 @@ def _fetch_pexels_photo(
         if not photos:
             return False
 
-        # اختر أوضح صورة
-        photo = photos[0]
+        photo   = photos[0]
         img_url = (
             photo.get("src", {}).get("portrait") or
-            photo.get("src", {}).get("large2x") or
+            photo.get("src", {}).get("large2x")  or
             photo.get("src", {}).get("large")
         )
 
@@ -77,7 +115,10 @@ def _fetch_pexels_photo(
         img_r.raise_for_status()
 
         Path(output_path).write_bytes(img_r.content)
-        print(f"  🖼️  Pexels photo: {keyword!r} → {Path(output_path).name}")
+        print(
+            f"  🖼️  Pexels photo: "
+            f"{keyword!r} → {Path(output_path).name}"
+        )
         return True
 
     except Exception as e:
@@ -86,13 +127,10 @@ def _fetch_pexels_photo(
 
 
 def _extract_frame_from_video(
-    video_path: str,
+    video_path:  str,
     output_path: str,
 ) -> bool:
-    """
-    استخراج frame من فيديو خام بـ ffmpeg.
-    Returns True إذا نجح.
-    """
+    """استخراج frame من فيديو خام بـ ffmpeg."""
     try:
         if not Path(video_path).exists():
             return False
@@ -103,7 +141,10 @@ def _extract_frame_from_video(
                 "-ss", "2",
                 "-i", video_path,
                 "-vframes", "1",
-                "-vf", f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT}",
+                "-vf",
+                f"scale={WIDTH}:{HEIGHT}:"
+                f"force_original_aspect_ratio=increase,"
+                f"crop={WIDTH}:{HEIGHT}",
                 "-q:v", "2",
                 output_path,
             ],
@@ -137,14 +178,14 @@ def _get_background_image(
     يجلب صورة الخلفية بالأولوية:
     1. Pexels Photos API
     2. Frame من أول فيديو خام
-    3. None (سيتم استخدام خلفية سوداء في HTML)
+    3. None (خلفية سوداء في HTML)
     """
     # 1. Pexels Photos
     pexels_img = str(Path(tmp_dir) / "thumb_bg.jpg")
     if _fetch_pexels_photo(keyword, pexels_img):
         return pexels_img
 
-    # 2. Frame من أول فيديو خام
+    # 2. Frame من أول فيديو متاح
     if video_paths:
         for vp in video_paths:
             if vp and Path(str(vp)).exists():
@@ -186,24 +227,31 @@ def _get_lang_config(lang: str) -> dict:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# FONT SIZE
+# FONT SIZE — مناسب لسطرين
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_font_size(title: str, lang: str) -> str:
-    """حجم الخط حسب طول العنوان."""
-    length = len(title)
+    """
+    حجم الخط حسب طول العنوان.
+    أكبر قليلاً بعد التقسيم إلى سطرين.
+    """
+    # نحسب الحجم على أطول سطر (بعد التقسيم)
+    lines  = title.split("\n")
+    length = max(len(line) for line in lines)
     is_ar  = lang == "ar"
 
-    if length <= 15:
-        return "110px" if is_ar else "100px"
-    elif length <= 25:
-        return "90px"  if is_ar else "82px"
-    elif length <= 40:
-        return "74px"  if is_ar else "68px"
-    elif length <= 55:
-        return "62px"  if is_ar else "56px"
+    if length <= 10:
+        return "138px" if is_ar else "126px"
+    elif length <= 15:
+        return "120px" if is_ar else "110px"
+    elif length <= 22:
+        return "104px" if is_ar else "94px"
+    elif length <= 30:
+        return "88px"  if is_ar else "80px"
+    elif length <= 38:
+        return "76px"  if is_ar else "68px"
     else:
-        return "52px"  if is_ar else "48px"
+        return "64px"  if is_ar else "58px"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -217,8 +265,11 @@ def _generate_html(
     output_path:    str,
 ) -> Path:
     """توليد ملف HTML للـ thumbnail."""
-    config    = _get_lang_config(lang)
-    font_size = _get_font_size(title, lang)
+
+    # ✅ تقسيم العنوان إلى سطرين
+    title_two_lines = _split_title_two_lines(title)
+    config          = _get_lang_config(lang)
+    font_size       = _get_font_size(title_two_lines, lang)
 
     def esc(s: str) -> str:
         return (
@@ -229,10 +280,17 @@ def _generate_html(
              .replace("'", "&#039;")
         )
 
+    # HTML للعنوان — نحوّل \n إلى <br>
+    title_html = esc(title_two_lines).replace("\n", "<br>")
+
     # الخلفية
     if bg_image_path and Path(bg_image_path).exists():
         bg_image_abs = Path(bg_image_path).resolve()
-        bg_style = f"background-image: url('file://{bg_image_abs}'); background-size: cover; background-position: center;"
+        bg_style = (
+            f"background-image: url('file://{bg_image_abs}'); "
+            f"background-size: cover; "
+            f"background-position: center;"
+        )
     else:
         bg_style = "background: #000000;"
 
@@ -255,8 +313,8 @@ def _generate_html(
 
     /* الخلفية */
     .bg {{
-      position:            absolute;
-      inset:               0;
+      position: absolute;
+      inset:    0;
       {bg_style}
     }}
 
@@ -264,17 +322,17 @@ def _generate_html(
     .overlay {{
       position:   absolute;
       inset:      0;
-      background: rgba(0, 0, 0, 0.78);
+      background: rgba(0, 0, 0, 0.80);
     }}
 
-    /* gradient إضافي للحواف */
+    /* vignette للحواف */
     .vignette {{
       position:   absolute;
       inset:      0;
       background: radial-gradient(
         ellipse at center,
-        transparent 30%,
-        rgba(0, 0, 0, 0.55) 100%
+        transparent 25%,
+        rgba(0, 0, 0, 0.65) 100%
       );
     }}
 
@@ -286,43 +344,45 @@ def _generate_html(
       flex-direction:  column;
       align-items:     center;
       justify-content: center;
-      padding:         80px 60px;
+      padding:         80px 70px;
       direction:       {config['dir']};
       text-align:      {config['align']};
+      gap:             0;
     }}
 
-    /* العنوان */
+    /* العنوان — سطرين */
     .title {{
-      font-family:  {config['font']};
-      font-size:    {font_size};
-      font-weight:  900;
-      color:        #FFFFFF;
-      line-height:  1.3;
-      word-break:   break-word;
-      direction:    {config['dir']};
-      text-align:   {config['align']};
+      font-family:    {config['font']};
+      font-size:      {font_size};
+      font-weight:    900;
+      color:          #FFFFFF;
+      line-height:    1.22;
+      word-break:     break-word;
+      direction:      {config['dir']};
+      text-align:     {config['align']};
       text-shadow:
-        0 0 40px rgba(255, 255, 255, 0.15),
-        0 4px 30px rgba(0, 0, 0, 0.9),
-        2px 2px 0 rgba(0, 0, 0, 0.8),
-        -2px -2px 0 rgba(0, 0, 0, 0.8);
-      -webkit-text-stroke: 1px rgba(0, 0, 0, 0.5);
-      paint-order: stroke fill;
-      max-width: 960px;
+        0 0 50px rgba(255, 255, 255, 0.12),
+        0 4px 30px rgba(0, 0, 0, 0.95),
+        2px 2px 0 rgba(0, 0, 0, 0.85),
+        -2px -2px 0 rgba(0, 0, 0, 0.85);
+      -webkit-text-stroke: 1.5px rgba(0, 0, 0, 0.6);
+      paint-order:    stroke fill;
+      max-width:      920px;
     }}
 
-    /* الخط الأحمر */
+    /* الخط الأحمر تحت العنوان */
     .line {{
-      width:         160px;
+      width:         180px;
       height:        5px;
       background:    linear-gradient(
         90deg,
         transparent,
-        #FF1744,
+        #FF1744 30%,
+        #FF1744 70%,
         transparent
       );
       border-radius: 3px;
-      margin-top:    40px;
+      margin-top:    44px;
       flex-shrink:   0;
     }}
 
@@ -335,7 +395,7 @@ def _generate_html(
   <div class="vignette"></div>
 
   <div class="content">
-    <div class="title">{esc(title)}</div>
+    <div class="title">{title_html}</div>
     <div class="line"></div>
   </div>
 
@@ -353,11 +413,11 @@ def _generate_html(
 
 def generate_thumbnail_html(
     title:       str,
-    lang:        str        = "ar",
-    output_path: str        = "thumbnail.html",
-    hook:        str        = "",
-    tone:        str        = "energetic",
-    keyword:     str        = "",
+    lang:        str         = "ar",
+    output_path: str         = "thumbnail.html",
+    hook:        str         = "",
+    tone:        str         = "energetic",
+    keyword:     str         = "",
     video_paths: list | None = None,
 ) -> Path:
     """
@@ -384,7 +444,10 @@ def generate_thumbnail_html(
     # جلب الصورة
     bg_image = _get_background_image(
         keyword     = search_kw,
-        video_paths = [str(p) for p in video_paths] if video_paths else None,
+        video_paths = (
+            [str(p) for p in video_paths]
+            if video_paths else None
+        ),
         tmp_dir     = tmp_dir,
     )
 
