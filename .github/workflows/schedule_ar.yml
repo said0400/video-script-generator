@@ -39,7 +39,6 @@ on:
         default: "9x16"
         type: string
 
-# ✅ concurrency موحد حسب اللغة فقط
 concurrency:
   group: video-ar
   cancel-in-progress: false
@@ -54,6 +53,15 @@ jobs:
 
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
+
+      - name: 🧹 Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h
 
       - name: 🐍 Setup Python 3.11
         uses: actions/setup-python@v5
@@ -87,29 +95,43 @@ jobs:
             ~/.cache/whisperx
             ~/.cache/huggingface
             ~/.cache/torch
-          key: whisperx-models-v5
+          key: whisperx-models-v6
           restore-keys: whisperx-models-
 
       - name: 💾 Cache PyTorch
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pytorch-cpu-${{ runner.os }}-py3.11
-          restore-keys: pytorch-cpu-
+          key: pytorch-cpu-v2-${{ runner.os }}-py3.11
+          restore-keys: pytorch-cpu-v2-
 
-      - name: 🔥 Install PyTorch (CPU)
+      - name: 🔥 Install PyTorch (CPU only)
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install torch torchaudio \
+          pip install \
+            torch==2.1.2 \
+            torchaudio==2.1.2 \
             --index-url https://download.pytorch.org/whl/cpu
 
-      - name: 📦 Install WhisperX
+      - name: 📦 Install WhisperX (no deps)
+        run: |
+          pip install git+https://github.com/m-bain/whisperX.git \
+            --no-deps
+          pip install \
+            faster-whisper==1.0.3 \
+            ctranslate2==4.4.0 \
+            pyannote.audio==3.3.2 \
+            pyannote.core==5.0.0 \
+            pyannote.pipeline==3.0.1 \
+            transformers==4.44.2 \
+            omegaconf==2.3.0 \
+            nltk==3.8.1 \
+            pandas==2.2.3
 
       - name: 📦 Install Python deps
         run: |
           pip install -r requirements.txt
 
-      # ✅ Node.js فقط إذا لم يكن script_only أو no_video
       - name: 🟢 Setup Node.js 20
         if: >-
           ${{
