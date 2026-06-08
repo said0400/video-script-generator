@@ -3,8 +3,9 @@ db.py — SQLite database for VSG
 ✨ يدعم:
   - تتبع الفيديوهات المستخدمة
   - Resume system
-  - AI cache
+  - AI cache (مع street_description)
   - تتبع النشر لكل لغة (AR, FR, EN)
+  - تتبع النشر على YouTube
   - Auto-next
   - Loop
 """
@@ -94,6 +95,7 @@ def init_db() -> None:
                     engagement_questions TEXT,
                     hashtags             TEXT,
                     captions             TEXT,
+                    street_description   TEXT,
                     accent_colors        TEXT,
                     hook_keyword         TEXT,
                     attractive_title     TEXT,
@@ -106,8 +108,9 @@ def init_db() -> None:
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_number TEXT NOT NULL,
                     lang         TEXT NOT NULL,
+                    platform     TEXT NOT NULL DEFAULT 'facebook',
                     published_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(video_number, lang)
+                    UNIQUE(video_number, lang, platform)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_used_videos
@@ -119,50 +122,45 @@ def init_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_ai_cache
                     ON ai_cache(cache_key);
                 CREATE INDEX IF NOT EXISTS idx_publish
-                    ON publish_tracker(video_number, lang);
+                    ON publish_tracker(video_number, lang, platform);
                 CREATE INDEX IF NOT EXISTS idx_publish_lang
-                    ON publish_tracker(lang);
+                    ON publish_tracker(lang, platform);
             """)
 
-            # ✅ migrations مع إعادة بناء جدول scripts
             _run_migrations(c)
 
 
 def _run_migrations(c: sqlite3.Connection) -> None:
-    """
-    تطبيق migrations بأمان.
-    ✅ يُعيد بناء جدول scripts إذا كان بـ PRIMARY KEY قديم.
-    """
+    """تطبيق migrations بأمان."""
 
-    # ── migrations بسيطة ──────────────────────────────────────────────────────
     simple_migrations = [
         "ALTER TABLE renders ADD COLUMN published INTEGER DEFAULT 0",
         "ALTER TABLE ai_cache ADD COLUMN lang TEXT DEFAULT 'ar'",
         "ALTER TABLE ai_cache ADD COLUMN tagged TEXT",
+        # ✅ إضافة street_description
+        "ALTER TABLE ai_cache ADD COLUMN street_description TEXT",
+        # ✅ إضافة platform لـ publish_tracker
+        "ALTER TABLE publish_tracker ADD COLUMN platform TEXT DEFAULT 'facebook'",
     ]
+
     for sql in simple_migrations:
         try:
             c.execute(sql)
         except sqlite3.OperationalError:
             pass
 
-    # ── ✅ إعادة بناء جدول scripts إذا كان بـ PRIMARY KEY قديم ───────────────
     _migrate_scripts_table(c)
+    _migrate_publish_tracker(c)
 
 
 def _migrate_scripts_table(c: sqlite3.Connection) -> None:
-    """
-    يتحقق من هيكل جدول scripts.
-    إذا كان PRIMARY KEY قديماً (video_number فقط) يُعيد بناءه.
-    """
-    # تحقق من وجود الجدول أولاً
+    """يتحقق من هيكل جدول scripts."""
     table_exists = c.execute(
         "SELECT name FROM sqlite_master "
         "WHERE type='table' AND name='scripts'"
     ).fetchone()
 
     if not table_exists:
-        # أنشئ الجدول الجديد مباشرة
         c.execute("""
             CREATE TABLE scripts (
                 video_number TEXT NOT NULL,
@@ -176,7 +174,6 @@ def _migrate_scripts_table(c: sqlite3.Connection) -> None:
         """)
         return
 
-    # تحقق من الـ PRIMARY KEY الحالي
     table_info = c.execute(
         "SELECT sql FROM sqlite_master "
         "WHERE type='table' AND name='scripts'"
@@ -187,22 +184,15 @@ def _migrate_scripts_table(c: sqlite3.Connection) -> None:
 
     table_sql = table_info["sql"] or ""
 
-    # إذا كان الجدول يحتوي PRIMARY KEY مركّب بالفعل → لا حاجة لشيء
     if "PRIMARY KEY (video_number, lang)" in table_sql:
         return
 
-    # إذا كان الجدول قديماً → أعد بناءه
-    print("  🔄 Migrating scripts table to composite PRIMARY KEY...")
+    print("  🔄 Migrating scripts table...")
 
     c.executescript("""
-        -- حفظ البيانات القديمة
         CREATE TABLE IF NOT EXISTS scripts_backup AS
             SELECT * FROM scripts;
-
-        -- حذف الجدول القديم
         DROP TABLE scripts;
-
-        -- إنشاء الجدول الجديد
         CREATE TABLE scripts (
             video_number TEXT NOT NULL,
             lang         TEXT NOT NULL DEFAULT 'ar',
@@ -212,8 +202,6 @@ def _migrate_scripts_table(c: sqlite3.Connection) -> None:
             saved_at     TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (video_number, lang)
         );
-
-        -- استرداد البيانات القديمة
         INSERT OR IGNORE INTO scripts
             (video_number, lang, title, sentences, words, saved_at)
         SELECT
@@ -224,12 +212,60 @@ def _migrate_scripts_table(c: sqlite3.Connection) -> None:
             COALESCE(words, 0),
             COALESCE(saved_at, CURRENT_TIMESTAMP)
         FROM scripts_backup;
-
-        -- حذف النسخة الاحتياطية
         DROP TABLE IF EXISTS scripts_backup;
     """)
 
-    print("  ✅ scripts table migrated successfully")
+    print("  ✅ scripts table migrated")
+
+
+def _migrate_publish_tracker(c: sqlite3.Connection) -> None:
+    """
+    ✅ يتحقق من هيكل publish_tracker.
+    إذا كان بدون عمود platform → يُعيد بناءه.
+    """
+    table_info = c.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type='table' AND name='publish_tracker'"
+    ).fetchone()
+
+    if table_info is None:
+        return
+
+    table_sql = table_info["sql"] or ""
+
+    if "platform" in table_sql:
+        return
+
+    print("  🔄 Migrating publish_tracker table...")
+
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS publish_tracker_backup AS
+            SELECT * FROM publish_tracker;
+
+        DROP TABLE publish_tracker;
+
+        CREATE TABLE publish_tracker (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_number TEXT NOT NULL,
+            lang         TEXT NOT NULL,
+            platform     TEXT NOT NULL DEFAULT 'facebook',
+            published_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(video_number, lang, platform)
+        );
+
+        INSERT OR IGNORE INTO publish_tracker
+            (video_number, lang, platform, published_at)
+        SELECT
+            video_number,
+            lang,
+            'facebook',
+            COALESCE(published_at, CURRENT_TIMESTAMP)
+        FROM publish_tracker_backup;
+
+        DROP TABLE IF EXISTS publish_tracker_backup;
+    """)
+
+    print("  ✅ publish_tracker migrated")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -363,46 +399,61 @@ def mark_render_failed(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PUBLISHING TRACKER
+# PUBLISHING TRACKER — يدعم Facebook و YouTube
 # ═════════════════════════════════════════════════════════════════════════════
 
 def is_published(
     video_number: str,
     lang:         str,
+    platform:     str = "facebook",
 ) -> bool:
     row = _conn().execute(
         """SELECT 1 FROM publish_tracker
-           WHERE video_number=? AND lang=?""",
-        (str(video_number), lang),
+           WHERE video_number=? AND lang=? AND platform=?""",
+        (str(video_number), lang, platform),
     ).fetchone()
     return row is not None
+
+
+def is_published_facebook(video_number: str, lang: str) -> bool:
+    return is_published(video_number, lang, "facebook")
+
+
+def is_published_youtube(video_number: str, lang: str) -> bool:
+    return is_published(video_number, lang, "youtube")
 
 
 def mark_published(
     video_number: str,
     lang:         str,
+    platform:     str = "facebook",
 ) -> None:
     with _write_lock:
         with _conn() as c:
             c.execute(
                 """INSERT OR IGNORE INTO publish_tracker
-                   (video_number, lang)
-                   VALUES (?, ?)""",
-                (str(video_number), lang),
+                   (video_number, lang, platform)
+                   VALUES (?, ?, ?)""",
+                (str(video_number), lang, platform),
             )
 
 
 def mark_video_published_for_lang(
     video_number: str,
     lang:         str,
+    platform:     str = "facebook",
 ) -> None:
-    mark_published(video_number, lang)
+    mark_published(video_number, lang, platform)
 
 
-def get_published_count(lang: str) -> int:
+def get_published_count(
+    lang:     str,
+    platform: str = "facebook",
+) -> int:
     row = _conn().execute(
-        "SELECT COUNT(*) FROM publish_tracker WHERE lang=?",
-        (lang,),
+        """SELECT COUNT(*) FROM publish_tracker
+           WHERE lang=? AND platform=?""",
+        (lang, platform),
     ).fetchone()
     return row[0] if row else 0
 
@@ -414,13 +465,15 @@ def get_published_count(lang: str) -> int:
 def get_next_video_number(
     lang:              str,
     available_numbers: list[str],
+    platform:          str = "facebook",
 ) -> str | None:
     if not available_numbers:
         return None
 
     rows = _conn().execute(
-        "SELECT video_number FROM publish_tracker WHERE lang=?",
-        (lang,),
+        """SELECT video_number FROM publish_tracker
+           WHERE lang=? AND platform=?""",
+        (lang, platform),
     ).fetchall()
 
     published = {str(row["video_number"]) for row in rows}
@@ -436,17 +489,21 @@ def get_next_video_number(
 # LOOP
 # ═════════════════════════════════════════════════════════════════════════════
 
-def reset_published_for_lang(lang: str) -> int:
+def reset_published_for_lang(
+    lang:     str,
+    platform: str = "facebook",
+) -> int:
     with _write_lock:
         with _conn() as c:
             cursor = c.execute(
-                "DELETE FROM publish_tracker WHERE lang=?",
-                (lang,),
+                """DELETE FROM publish_tracker
+                   WHERE lang=? AND platform=?""",
+                (lang, platform),
             )
             count = cursor.rowcount
 
     print(
-        f"  🔄 Reset {lang.upper()} publish tracker "
+        f"  🔄 Reset {lang.upper()} {platform} publish tracker "
         f"— ready to loop!"
     )
     return count
@@ -457,7 +514,8 @@ def reset_published_for_lang(lang: str) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_pending_publish(
-    lang: str | None = None,
+    lang:     str | None = None,
+    platform: str        = "facebook",
 ) -> list[dict]:
     if lang:
         rows = _conn().execute(
@@ -470,8 +528,9 @@ def get_pending_publish(
                      SELECT 1 FROM publish_tracker p
                      WHERE p.video_number = r.video_number
                        AND p.lang         = r.lang
+                       AND p.platform     = ?
                  )""",
-            (lang,),
+            (lang, platform),
         ).fetchall()
     else:
         rows = _conn().execute(
@@ -483,7 +542,9 @@ def get_pending_publish(
                      SELECT 1 FROM publish_tracker p
                      WHERE p.video_number = r.video_number
                        AND p.lang         = r.lang
+                       AND p.platform     = ?
                  )""",
+            (platform,),
         ).fetchall()
 
     return [
@@ -508,10 +569,6 @@ def save_script_meta(
     sentences:    int,
     words:        int,
 ) -> None:
-    """
-    حفظ metadata السكريبت.
-    PRIMARY KEY مركّب (video_number, lang) — لا تعارض بين اللغات.
-    """
     with _write_lock:
         with _conn() as c:
             c.execute(
@@ -527,7 +584,7 @@ def save_script_meta(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AI CACHE
+# AI CACHE — مع street_description
 # ═════════════════════════════════════════════════════════════════════════════
 
 def has_ai_cache(cache_key: str) -> bool:
@@ -570,6 +627,7 @@ def get_ai_cache(cache_key: str) -> dict | None:
         "engagement_questions": safe_json(safe_col("engagement_questions")),
         "hashtags":             safe_json(safe_col("hashtags")),
         "captions":             safe_json(safe_col("captions")),
+        "street_description":   safe_col("street_description", ""),  # ✅
         "accent_colors":        safe_json(safe_col("accent_colors")),
         "hook_keyword":         safe_col("hook_keyword", ""),
         "attractive_title":     safe_json(safe_col("attractive_title")),
@@ -599,9 +657,10 @@ def save_ai_cache(
                        cache_key, lang, title,
                        analysis, power_words, visual_keywords,
                        pattern_interrupts, engagement_questions,
-                       hashtags, captions, accent_colors,
-                       hook_keyword, attractive_title, tagged
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       hashtags, captions, street_description,
+                       accent_colors, hook_keyword,
+                       attractive_title, tagged
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(cache_key) DO UPDATE SET
                        lang                 = excluded.lang,
                        title                = excluded.title,
@@ -612,6 +671,7 @@ def save_ai_cache(
                        engagement_questions = excluded.engagement_questions,
                        hashtags             = excluded.hashtags,
                        captions             = excluded.captions,
+                       street_description   = excluded.street_description,
                        accent_colors        = excluded.accent_colors,
                        hook_keyword         = excluded.hook_keyword,
                        attractive_title     = excluded.attractive_title,
@@ -626,6 +686,7 @@ def save_ai_cache(
                     to_json(enriched.get("engagement_questions")),
                     to_json(enriched.get("hashtags")),
                     to_json(enriched.get("captions")),
+                    enriched.get("street_description", ""),   # ✅
                     to_json(enriched.get("accent_colors")),
                     enriched.get("hook_keyword", ""),
                     to_json(enriched.get("attractive_title")),
@@ -670,6 +731,9 @@ def show_ai_cache(
             )
         if cache.get("hook_keyword"):
             print(f"  🔥 Hook: '{cache['hook_keyword']}'")
+        if cache.get("street_description"):
+            desc = cache["street_description"]
+            print(f"  📝 Street Desc: {len(desc)} chars")
         print(f"  🌐 Lang: {cache.get('lang', 'ar').upper()}")
         print(f"  {'═' * 60}\n")
 
@@ -692,7 +756,9 @@ def show_ai_cache(
             lang  = str(r["lang"] or "ar").upper()[:3]
             title = (r["title"] or "")[:32]
             date  = (r["created_at"] or "")[:19]
-            print(f"  {key:<20} {lang:<4} {title:<32} {date}")
+            print(
+                f"  {key:<20} {lang:<4} {title:<32} {date}"
+            )
 
         print(f"  {'═' * 75}\n")
 
@@ -716,14 +782,17 @@ def print_db_summary() -> None:
         "SELECT COUNT(*) FROM ai_cache"
     ).fetchone()[0]
 
-    pub_ar = get_published_count("ar")
-    pub_fr = get_published_count("fr")
-    pub_en = get_published_count("en")
+    pub_ar_fb = get_published_count("ar", "facebook")
+    pub_fr_fb = get_published_count("fr", "facebook")
+    pub_en_fb = get_published_count("en", "facebook")
+    pub_ar_yt = get_published_count("ar", "youtube")
+    pub_fr_yt = get_published_count("fr", "youtube")
+    pub_en_yt = get_published_count("en", "youtube")
 
     print(
         f"  📊 DB: {used} videos used | "
         f"{done} renders ✅ | {failed} failed ❌ | "
         f"AI cached: {cached}\n"
-        f"  📘 Published: "
-        f"AR:{pub_ar} | FR:{pub_fr} | EN:{pub_en}"
+        f"  📘 Facebook: AR:{pub_ar_fb} | FR:{pub_fr_fb} | EN:{pub_en_fb}\n"
+        f"  📺 YouTube:  AR:{pub_ar_yt} | FR:{pub_fr_yt} | EN:{pub_en_yt}"
     )
