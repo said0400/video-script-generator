@@ -1,21 +1,9 @@
 """
 tags_parser.py — Smart Emotional Tags Parser
 ✨ يستخرج ويُصحح ويُحلل الـ tags في النصوص
-
-الـ Tags المدعومة (أحرف صغيرة فقط):
-  [intrigue]    - إثارة الفضول
-  [desire]      - رغبة وطموح
-  [information] - معلومة محايدة
-  [inspiration] - إلهام
-  [confident]   - ثقة
-  [shock]       - صدمة
-  [wisdom]      - حكمة
-  [urgency]     - عاجل
-  [calm]        - هدوء
-  [emotional]   - عاطفي
-
-✅ NEW: يدعم inline tags في نفس السطر
-  مثال: [intrigue] جملة 1. [desire] جملة 2. [shock] جملة 3.
+✅ يدعم inline tags في نفس السطر
+✅ يدعم tags في أسطر منفصلة
+✅ auto-correction للأخطاء الإملائية
 """
 
 from __future__ import annotations
@@ -132,38 +120,35 @@ VALID_TAGS: dict[str, dict] = {
 }
 
 VALID_TAG_NAMES: list[str] = list(VALID_TAGS.keys())
-
 DEFAULT_TAG = "information"
 
-# ✅ Regex لاكتشاف الـ tags في أي مكان من النص (inline أو أول سطر)
+# ✅ Regex يجد [tag] في أي مكان من النص
+_TAG_RE = re.compile(r"\[([a-zA-Z_]+)\]")
+
+# للتوافق مع الكود القديم
 TAG_PATTERN        = re.compile(
-    r'^\s*\[([a-zA-Z_]+)\]\s*',
+    r"^\s*\[([a-zA-Z_]+)\]\s*",
     re.IGNORECASE | re.MULTILINE,
 )
-TAG_INLINE_PATTERN = re.compile(r'\[([a-zA-Z_]+)\]')
-
-# ✅ NEW: Regex لتقسيم النص على الـ inline tags
-# يبحث عن [tag] في أي مكان ويستخدمه كـ delimiter
-_INLINE_SPLIT_RE = re.compile(
-    r'\[([a-zA-Z_]+)\]',
-    re.IGNORECASE,
-)
+TAG_INLINE_PATTERN = _TAG_RE
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ NEW: INLINE TAGS SPLITTER
-# الدالة الأساسية الجديدة التي تحل المشكلة
+# ✅ CORE: SPLIT INTO TAGGED SENTENCES
+# يحل مشكلة inline tags نهائياً
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _split_inline_tagged_content(content: str) -> list[dict]:
+def split_into_tagged_sentences(content: str) -> list[dict]:
     """
-    ✅ يقسم النص الذي يحتوي على inline tags إلى جمل منفصلة.
+    ✅ تقسيم المحتوى إلى جمل مع tags.
 
-    يعمل مع:
-      - [tag] نص. [tag] نص. [tag] نص.
-      - [tag] نص
-        [tag] نص
-      - [tag] نص\\n\\n[tag] نص
+    يعمل مع كل الأشكال:
+      1. [tag] نص. [tag] نص. [tag] نص.   ← inline في نفس السطر
+      2. [tag] نص                          ← كل tag في سطر
+         [tag] نص
+      3. [tag] نص                          ← فقرات منفصلة
+         
+         [tag] نص
 
     Input:
       "[intrigue] جملة 1. [desire] جملة 2. [shock] جملة 3."
@@ -178,137 +163,53 @@ def _split_inline_tagged_content(content: str) -> list[dict]:
     if not content or not content.strip():
         return []
 
-    content = content.strip()
+    text    = content.strip()
+    matches = list(_TAG_RE.finditer(text))
 
-    # البحث عن كل الـ tags مع مواضعها في النص
-    matches = list(_INLINE_SPLIT_RE.finditer(content))
-
+    # لا يوجد أي tag → نرجع النص كله بدون tag
     if not matches:
-        # لا يوجد أي tag → نرجع النص كما هو بدون tag
-        text = content.strip()
-        if text:
-            return [{
-                "raw_tag": None,
-                "text":    text,
-                "line":    1,
-            }]
-        return []
+        return [{
+            "raw_tag": None,
+            "text":    text,
+            "line":    1,
+        }]
 
     result: list[dict] = []
 
     for i, match in enumerate(matches):
-        raw_tag = match.group(1)
+        raw_tag = match.group(1).strip()
 
         # النص يبدأ بعد نهاية الـ tag
         text_start = match.end()
 
-        # النص ينتهي عند بداية الـ tag التالي (أو نهاية النص)
+        # النص ينتهي عند بداية الـ tag التالي أو نهاية المحتوى
         text_end = (
             matches[i + 1].start()
             if i + 1 < len(matches)
-            else len(content)
+            else len(text)
         )
 
-        text = content[text_start:text_end].strip()
+        segment = text[text_start:text_end].strip()
 
-        if not text:
+        # تجاهل الجمل الفارغة
+        if not segment:
             continue
 
         result.append({
             "raw_tag": raw_tag,
-            "text":    text,
-            "line":    i + 1,
+            "text":    segment,
+            "line":    len(result) + 1,
         })
 
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PARSING
+# TAG VALIDATION & CORRECTION
 # ═════════════════════════════════════════════════════════════════════════════
 
-def split_into_tagged_sentences(content: str) -> list[dict]:
-    """
-    ✅ تقسيم المحتوى إلى جمل مع tags.
-
-    يدعم الآن:
-      1. Inline tags: [tag] نص. [tag] نص. [tag] نص.
-      2. Paragraph tags: فقرة منفصلة لكل tag
-      3. Line tags: سطر منفصل لكل tag
-
-    Output:
-      [
-        {"raw_tag": "intrigue", "text": "النص", "line": 1},
-        {"raw_tag": "desire",   "text": "النص", "line": 2},
-        ...
-      ]
-    """
-    if not content or not content.strip():
-        return []
-
-    content_stripped = content.strip()
-
-    # ✅ اكتشاف نوع المحتوى أولاً
-    inline_matches = list(_INLINE_SPLIT_RE.finditer(content_stripped))
-
-    if not inline_matches:
-        return []
-
-    # ── ✅ الحالة 1: inline tags (الجمل كلها في نفس السطر أو بدون فصل) ──
-    # نتحقق إذا كان النص يحتوي على أكثر من tag في نفس الفقرة
-    # بمعنى: لا يوجد سطر فارغ بين الـ tags
-    paragraphs = re.split(r'\n\s*\n', content_stripped)
-
-    if len(paragraphs) == 1:
-        # ✅ كل النص في فقرة واحدة → استخدم inline splitter
-        result = _split_inline_tagged_content(content_stripped)
-        if result:
-            return result
-
-    # ── الحالة 2: فقرات منفصلة (الشكل القديم) ──
-    result:   list[dict] = []
-    line_num: int        = 0
-
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
-
-        # ✅ كل فقرة قد تحتوي على inline tags أيضاً
-        # نتحقق كم tag يوجد فيها
-        para_matches = list(_INLINE_SPLIT_RE.finditer(para))
-
-        if len(para_matches) > 1:
-            # فقرة تحتوي على أكثر من tag → قسّمها inline
-            sub_results = _split_inline_tagged_content(para)
-            for sub in sub_results:
-                line_num += 1
-                sub["line"] = line_num
-                result.append(sub)
-        else:
-            # فقرة تحتوي على tag واحد أو بدون tag
-            line_num += 1
-            match = TAG_PATTERN.match(para)
-
-            if match:
-                raw_tag = match.group(1)
-                text    = para[match.end():].strip()
-            else:
-                raw_tag = None
-                text    = para
-
-            if text:
-                result.append({
-                    "raw_tag": raw_tag,
-                    "text":    text,
-                    "line":    line_num,
-                })
-
-    return result
-
-
 def is_valid_tag(tag: str) -> bool:
-    """تحقق إذا كان الـ tag صحيح (case-sensitive)."""
+    """تحقق إذا كان الـ tag صحيح."""
     if not tag:
         return False
     return tag in VALID_TAGS
@@ -328,7 +229,7 @@ def auto_correct_tag(
 
     cleaned = raw_tag.strip()
 
-    # 1. مطابقة كاملة (case-sensitive)
+    # 1. مطابقة كاملة
     if cleaned in VALID_TAGS:
         return (cleaned, "exact_match")
 
@@ -337,14 +238,13 @@ def auto_correct_tag(
     if lower in VALID_TAGS:
         return (lower, "case_fixed")
 
-    # 3. fuzzy matching (للأخطاء الإملائية)
+    # 3. fuzzy matching
     matches = get_close_matches(
         lower,
         VALID_TAG_NAMES,
         n=1,
         cutoff=0.6,
     )
-
     if matches:
         return (matches[0], "spelling_fixed")
 
@@ -352,23 +252,16 @@ def auto_correct_tag(
 
 
 def strip_tags_from_text(text: str) -> str:
-    """
-    إزالة أي tags من النص.
-
-    Input:  "[intrigue] أنت لا تريد أن ترى الناس فقط..."
-    Output: "أنت لا تريد أن ترى الناس فقط..."
-    """
+    """إزالة أي tags من النص."""
     if not text:
         return ""
-
-    cleaned = TAG_PATTERN.sub("", text).strip()
-    cleaned = TAG_INLINE_PATTERN.sub("", cleaned).strip()
-
+    cleaned = _TAG_RE.sub("", text).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
 
 def get_tag_info(tag: str) -> dict | None:
-    """إرجاع معلومات الـ tag (voice settings, description, ...)."""
+    """إرجاع معلومات الـ tag."""
     return VALID_TAGS.get(tag)
 
 
