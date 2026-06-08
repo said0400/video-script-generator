@@ -4,16 +4,18 @@
 Pipeline النهائي (تزامن 100%):
   A. TTS → Trim → Speed Up → Mix Music + SFX
   B. WhisperX على الصوت النظيف → timestamps دقيقة
-  C. بناء خطة الفيديوهات من التوقيتات الحقيقية (جملة = فيديو)
+  C. بناء خطة الفيديوهات من التوقيتات الحقيقية
   D. إنتاج فيديو خلفية حسب مدة كل جملة الفعلية
   E. Render الكلمات فوق الفيديو
-  ✅ aligned يحتوي على tag لكل جملة لتأثيرات بصرية صحيحة
+  ✅ aligned يحتوي على tag لكل جملة
+  ✅ auto-invalidate cache إذا كان قديماً
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import traceback
@@ -142,8 +144,46 @@ def _safe_unlink(path: str) -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ✅ AUTO-INVALIDATE CACHE
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _count_tags_in_content(content: str) -> int:
+    """يعد عدد الـ tags في المحتوى."""
+    return len(re.findall(r'\[[a-zA-Z_]+\]', content))
+
+
+def _is_cache_stale(cached: dict, content: str) -> bool:
+    """
+    يكتشف إذا كان الـ cache قديماً:
+    - عدد الجمل في الـ cache أقل بكثير من عدد الـ tags
+    """
+    tags_in_content = _count_tags_in_content(content)
+
+    if tags_in_content <= 1:
+        return False
+
+    cached_tagged = cached.get("tagged") or []
+
+    if not cached_tagged:
+        print(
+            f"  🔄 Cache stale: no tagged sentences "
+            f"(content has {tags_in_content} tags)"
+        )
+        return True
+
+    if len(cached_tagged) < tags_in_content * 0.5:
+        print(
+            f"  🔄 Cache stale: "
+            f"{len(cached_tagged)} sentences cached "
+            f"but content has {tags_in_content} tags"
+        )
+        return True
+
+    return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # ✅ TAG INJECTION INTO ALIGNED
-# إضافة tag لكل segment في aligned حتى يستخدمه render.mjs
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _inject_tags_into_aligned(
@@ -151,13 +191,8 @@ def _inject_tags_into_aligned(
     tagged:  list[dict],
 ) -> list[dict]:
     """
-    ✅ يضيف حقل "tag" لكل segment في aligned
-    بحيث يستخدمه render.mjs لتحديد نوع التأثير البصري.
-
-    يعتمد على مطابقة الترتيب:
-      aligned[i] ↔ tagged[i]
-
-    إذا لم يتطابق العدد → يستخدم DEFAULT_TAG.
+    يضيف حقل "tag" لكل segment في aligned
+    حتى يستخدمه render.mjs لتغيير شكل الكلمة والتأثيرات.
     """
     if not aligned or not tagged:
         return aligned
@@ -173,10 +208,14 @@ def _inject_tags_into_aligned(
             seg_copy["tag"] = "information"
         result.append(seg_copy)
 
-    print(
-        f"  🏷️  Tags injected into aligned: "
-        f"{len(result)} segments"
-    )
+    print(f"  🏷️  Tags injected: {len(result)} segments")
+    for i, seg in enumerate(result):
+        print(
+            f"     [{i + 1}] [{seg.get('tag', 'information')}] "
+            f"{seg.get('start', 0):.2f}s → "
+            f"{seg.get('end', 0):.2f}s"
+        )
+
     return result
 
 
@@ -188,52 +227,38 @@ def _estimate_sentence_durations(
     sentences:      list[str],
     total_duration: float,
 ) -> list[float]:
-    """
-    Fallback فقط إذا فشل WhisperX.
-    يوزع مدة الصوت على الجمل حسب عدد الكلمات.
-    """
     if not sentences:
         return []
-
     if total_duration <= 0:
         return [CLIP_DURATION] * len(sentences)
 
     counts = [max(1, len(s.split())) for s in sentences]
     total  = sum(counts)
+    raw    = [max(0.8, total_duration * c / total) for c in counts]
+    s      = sum(raw)
 
-    raw = [
-        max(0.8, total_duration * c / total)
-        for c in counts
-    ]
-
-    s = sum(raw)
     if s <= 0:
         return [CLIP_DURATION] * len(sentences)
 
     scale = total_duration / s
     out   = [round(d * scale, 3) for d in raw]
+    diff  = round(total_duration - sum(out), 3)
 
-    diff = round(total_duration - sum(out), 3)
     if out:
         out[-1] = max(0.8, round(out[-1] + diff, 3))
 
     return out
 
 
-def _normalize_keywords_row(
-    row,
-    index: int,
-) -> list[str]:
+def _normalize_keywords_row(row, index: int) -> list[str]:
     defaults = [
         "dramatic close up face dark",
         "person staring camera shadow",
         "mysterious cinematic expression slow motion",
     ]
 
-    if isinstance(row, list):
-        cleaned = [str(x).strip() for x in row if str(x).strip()]
-    else:
-        cleaned = []
+    cleaned = [str(x).strip() for x in row if str(x).strip()] \
+        if isinstance(row, list) else []
 
     while len(cleaned) < 3:
         cleaned.append(defaults[len(cleaned) % 3])
@@ -259,12 +284,7 @@ def _build_clip_plan(
     aligned:     list[dict],
     total_dur:   float,
 ) -> tuple[list[list[str]], list[float]]:
-    """
-    ✅ الخطة الجديدة:
-    - فيديو واحد لكل جملة
-    - مدة كل فيديو = المدة الفعلية للجملة من WhisperX
-    - الجملة الأولى تأخذ hook_keyword أيضاً
-    """
+    """فيديو واحد لكل جملة بمدتها الحقيقية من WhisperX."""
     sentences       = script_data.get("sentences", [])
     visual_keywords = ai_data.get("visual_keywords", []) or []
     hook_keyword    = (script_data.get("hook_keyword") or "").strip()
@@ -274,92 +294,64 @@ def _build_clip_plan(
 
     clip_keywords:  list[list[str]] = []
     clip_durations: list[float]     = []
+    estimated       = _estimate_sentence_durations(sentences, total_dur)
 
-    estimated_durations = _estimate_sentence_durations(
-        sentences, total_dur
-    )
-
-    # ✅ نحاول بناء المدد من توقيتات WhisperX الحقيقية
+    # ✅ من WhisperX
     if aligned and len(aligned) >= len(sentences):
         print(
-            f"\n  🎞️  Building clip plan "
-            f"from WhisperX sentence timings..."
+            f"\n  🎞️  Clip plan from WhisperX timings "
+            f"({len(sentences)} sentences)..."
         )
 
-        for i, sent in enumerate(sentences):
-            cur_start = float(aligned[i].get("start", 0.0))
-
-            if i < len(sentences) - 1:
-                next_start = float(
-                    aligned[i + 1].get("start", cur_start)
-                )
-                dur = max(0.8, round(next_start - cur_start, 3))
-            else:
-                dur = max(
-                    0.8, round(total_dur - cur_start, 3)
-                )
-
-            row = (
-                visual_keywords[i]
-                if i < len(visual_keywords)
-                else []
+        for i in range(len(sentences)):
+            cur_start  = float(aligned[i].get("start", 0.0))
+            next_start = (
+                float(aligned[i + 1].get("start", cur_start))
+                if i < len(sentences) - 1
+                else total_dur
             )
-            row = _normalize_keywords_row(row, i)
+            dur = max(0.8, round(next_start - cur_start, 3))
+
+            row = _normalize_keywords_row(
+                visual_keywords[i] if i < len(visual_keywords) else [],
+                i,
+            )
 
             if i == 0 and hook_keyword:
                 row = [hook_keyword] + [
                     k for k in row
                     if k.lower() != hook_keyword.lower()
                 ]
-                row = row[:3]
-                while len(row) < 3:
-                    row.append("dramatic close up dark")
+                row = (row + ["dramatic close up dark"])[:3]
 
             clip_keywords.append(row)
             clip_durations.append(dur)
 
             print(
                 f"     [{i + 1}/{len(sentences)}] "
-                f"{dur:.2f}s → {row}"
+                f"[{aligned[i].get('tag', 'info')}] "
+                f"{dur:.2f}s → {row[0]}"
             )
 
         return clip_keywords, clip_durations
 
     # fallback
-    print(
-        f"\n  ⚠️  Using estimated sentence "
-        f"durations fallback..."
-    )
-    for i, sent in enumerate(sentences):
-        row = (
-            visual_keywords[i]
-            if i < len(visual_keywords)
-            else []
+    print(f"\n  ⚠️  Using estimated durations fallback...")
+    for i in range(len(sentences)):
+        row = _normalize_keywords_row(
+            visual_keywords[i] if i < len(visual_keywords) else [],
+            i,
         )
-        row = _normalize_keywords_row(row, i)
-
         if i == 0 and hook_keyword:
             row = [hook_keyword] + [
                 k for k in row
                 if k.lower() != hook_keyword.lower()
             ]
-            row = row[:3]
-            while len(row) < 3:
-                row.append("dramatic close up dark")
+            row = (row + ["dramatic close up dark"])[:3]
 
-        dur = (
-            estimated_durations[i]
-            if i < len(estimated_durations)
-            else CLIP_DURATION
-        )
-
+        dur = estimated[i] if i < len(estimated) else CLIP_DURATION
         clip_keywords.append(row)
         clip_durations.append(dur)
-
-        print(
-            f"     [{i + 1}/{len(sentences)}] "
-            f"~{dur:.2f}s → {row}"
-        )
 
     return clip_keywords, clip_durations
 
@@ -403,9 +395,7 @@ def _trim_silence(audio_path: str, output_path: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _speed_up_audio(
-    audio_path:  str,
-    speed:       float,
-    output_path: str,
+    audio_path: str, speed: float, output_path: str
 ) -> str:
     if abs(speed - 1.0) < 0.01 or not Path(audio_path).exists():
         return audio_path
@@ -440,14 +430,6 @@ def produce_full_audio(
     music_volume: float = 0.12,
     sfx_type:     str   = "swoosh",
 ) -> tuple[Path, Path, float]:
-    """
-    TTS → Trim → Speed Up → Mix Music + SFX
-    Returns: (mixed_audio_path, clean_voice_path, duration)
-
-    ✅ يمرر:
-      - aligned: لـ Ducking الصحيح
-      - tagged:  لمؤثرات الانتقال الصوتية حسب الـ tag
-    """
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
     voice_config     = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
@@ -455,7 +437,6 @@ def produce_full_audio(
 
     print(f"\n  🎙️  TTS ({lang.upper()}, voice={voice_key})")
 
-    # 1. TTS
     synthesize_speech(
         tagged_sentences = tagged_sentences,
         output_path      = f"{output_base}_voice",
@@ -481,11 +462,9 @@ def produce_full_audio(
     else:
         wav_path = None
 
-    # 2. Trim silence
     if wav_path:
         trimmed = _trim_silence(
-            wav_path,
-            f"{output_base}_voice_trimmed.wav",
+            wav_path, f"{output_base}_voice_trimmed.wav"
         )
         if trimmed != wav_path:
             wav_path = trimmed
@@ -493,12 +472,10 @@ def produce_full_audio(
             if d >= 5:
                 real_dur = d
 
-    # 3. Speed Up
     speed = SPEED_MULTIPLIER.get(lang, 1.0)
     if wav_path and speed != 1.0:
         sped = _speed_up_audio(
-            wav_path, speed,
-            f"{output_base}_voice_fast.wav",
+            wav_path, speed, f"{output_base}_voice_fast.wav"
         )
         if sped != wav_path:
             wav_path = sped
@@ -508,16 +485,14 @@ def produce_full_audio(
             print(f"  📏 After speed: {real_dur:.3f}s")
 
     clean_voice_path = (
-        Path(wav_path)
-        if wav_path
+        Path(wav_path) if wav_path
         else Path(f"{output_base}_voice_0.wav")
     )
 
     mixed_out      = f"{output_base}_audio_mixed.aac"
     fallback_voice = str(clean_voice_path)
-
-    n_clips       = max(1, int(real_dur / CLIP_DURATION))
-    clip_dur_list = [real_dur / n_clips] * n_clips
+    n_clips        = max(1, int(real_dur / CLIP_DURATION))
+    clip_dur_list  = [real_dur / n_clips] * n_clips
 
     try:
         final_audio = mix_voice_music_sfx(
@@ -531,7 +506,7 @@ def produce_full_audio(
             lang           = lang,
             aligned        = aligned or [],
             sentences      = script_data.get("sentences", []),
-            tagged         = tagged_sentences,       # ✅
+            tagged         = tagged_sentences,
         )
         d = get_audio_duration(str(final_audio))
         if d >= 5:
@@ -545,7 +520,7 @@ def produce_full_audio(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP B: WHISPERX على الصوت النظيف
+# STEP B: WHISPERX
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run_whisperx(
@@ -554,13 +529,8 @@ def run_whisperx(
     lang:             str,
     script_sentences: list[str] | None = None,
 ) -> tuple[list, list]:
-    """
-    ✅ WhisperX على الصوت النظيف بدون موسيقى.
-    لا يلمس منطق sync.py — فقط يستدعيه.
-    """
     print(
-        f"\n  🎤 WhisperX on clean voice: "
-        f"{clean_voice_path.name}"
+        f"\n  🎤 WhisperX: {clean_voice_path.name}"
     )
 
     whisper_input = f"{out_base}_whisper_input.wav"
@@ -577,23 +547,21 @@ def run_whisperx(
     )
 
     if r.returncode != 0:
-        print("  ⚠️  Audio conversion failed — using original")
         whisper_input = str(clean_voice_path)
 
     transcript = extract_transcript_from_audio(
         whisper_input, lang=lang
     )
-
     _safe_unlink(whisper_input)
 
     if not transcript["success"]:
-        print("  ⚠️  WhisperX failed — no text overlay")
+        print("  ⚠️  WhisperX failed")
         return [], []
 
     aligned   = transcript["aligned"]
     sentences = transcript["sentences"]
 
-    # ✅ إعادة ربط timestamps بالجمل الأصلية إذا أمكن
+    # ✅ إعادة ربط timestamps بالجمل الأصلية
     if script_sentences:
         word_timestamps = [
             w
@@ -610,36 +578,31 @@ def run_whisperx(
             total_script_words > 0 and
             abs(
                 len(word_timestamps) - total_script_words
-            ) / total_script_words <= 0.05
+            ) / total_script_words <= 0.10
         ):
             try:
-                _, rebuilt_aligned = build_word_timeline(
+                _, rebuilt = build_word_timeline(
                     script_sentences,
                     word_timestamps,
                     transcript["total_duration"],
                 )
-                if (
-                    rebuilt_aligned and
-                    len(rebuilt_aligned) == len(script_sentences)
-                ):
-                    aligned   = rebuilt_aligned
+                if rebuilt and len(rebuilt) == len(script_sentences):
+                    aligned   = rebuilt
                     sentences = list(script_sentences)
                     print(
-                        f"  ✅ Re-mapped alignment to "
-                        f"original script sentences: "
-                        f"{len(sentences)}"
+                        f"  ✅ Re-mapped: "
+                        f"{len(sentences)} sentences"
                     )
             except Exception as e:
-                print(f"  ⚠️  Sentence remap skipped: {e}")
+                print(f"  ⚠️  Remap skipped: {e}")
         else:
             print(
-                "  ⚠️  Sentence remap skipped "
-                "— word count mismatch"
+                f"  ⚠️  Remap skipped — "
+                f"words: {len(word_timestamps)} vs "
+                f"script: {total_script_words}"
             )
 
-    total_words = sum(
-        len(s.get("words", [])) for s in aligned
-    )
+    total_words = sum(len(s.get("words", [])) for s in aligned)
     print(
         f"  ✅ WhisperX: {len(sentences)} sentences, "
         f"{total_words} words"
@@ -663,10 +626,6 @@ def produce_bg_video(
     has_hook:       bool,
     clip_durations: list[float],
 ) -> Path:
-    """
-    إنتاج فيديو خلفية كامل مع الصوت المدمج — بدون نص.
-    ✅ كل كليب يأخذ مدته الفعلية حسب الجملة من WhisperX.
-    """
     avg_clip = (
         sum(clip_durations) / len(clip_durations)
         if clip_durations else CLIP_DURATION
@@ -691,7 +650,7 @@ def produce_bg_video(
         "accent_colors":  script_data.get("accent_colors", []),
         "analysis":       script_data.get("analysis", {}),
         "clip_duration":  avg_clip,
-        "clip_durations": clip_durations,           # ✅
+        "clip_durations": clip_durations,
         "has_hook":       has_hook,
         "hook_keyword":   script_data.get("hook_keyword", ""),
         "custom_hook":    script_data.get("custom_hook", ""),
@@ -699,9 +658,7 @@ def produce_bg_video(
         "mode":           "bg_only",
     }
 
-    manifest_path = Path(
-        f"{out_base}_bg_manifest.json"
-    ).resolve()
+    manifest_path = Path(f"{out_base}_bg_manifest.json").resolve()
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -711,9 +668,7 @@ def produce_bg_video(
     script = RENDER_SCRIPT.resolve()
 
     if not script.exists():
-        raise FileNotFoundError(
-            f"render.mjs not found at {script}"
-        )
+        raise FileNotFoundError(f"render.mjs not found: {script}")
 
     print(f"\n  🎬 Producing background video...")
 
@@ -725,12 +680,10 @@ def produce_bg_video(
     )
 
     if r.returncode != 0:
-        raise RuntimeError(
-            f"BG render failed:\n{r.stdout[-600:]}"
-        )
+        raise RuntimeError(f"BG render failed:\n{r.stdout[-600:]}")
 
     mb = out.stat().st_size / 1_048_576 if out.exists() else 0
-    print(f"  ✅ BG video ready: {mb:.1f} MB")
+    print(f"  ✅ BG video: {mb:.1f} MB")
     return out
 
 
@@ -746,11 +699,7 @@ def render_words_overlay(
     script_data: dict,
     out_base:    str,
 ) -> Path:
-    """
-    Render الكلمات فوق الفيديو الخلفي.
-    ✅ aligned يحتوي على tag لكل segment.
-    لا يتغير أي منطق للتزامن هنا.
-    """
+    """aligned يحتوي على tag لكل segment → render.mjs يستخدمه."""
     audio_dur = get_audio_duration(str(audio_path))
 
     manifest = {
@@ -773,7 +722,7 @@ def render_words_overlay(
         "has_hook":      bool(script_data.get("hook_keyword", "")),
         "hook_keyword":  script_data.get("hook_keyword", ""),
         "custom_hook":   script_data.get("custom_hook",  ""),
-        "aligned":       aligned,                   # ✅ يحتوي على tag
+        "aligned":       aligned,  # ✅ مع tags
         "mode":          "words_only",
     }
 
@@ -789,9 +738,7 @@ def render_words_overlay(
     script = RENDER_SCRIPT.resolve()
 
     if not script.exists():
-        raise FileNotFoundError(
-            f"render.mjs not found at {script}"
-        )
+        raise FileNotFoundError(f"render.mjs not found: {script}")
 
     print(f"\n  🔧 Rendering words overlay...")
 
@@ -813,7 +760,7 @@ def render_words_overlay(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AI ENRICHMENT
+# AI ENRICHMENT — مع auto-invalidate
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_or_create_ai_data(
@@ -821,6 +768,7 @@ def get_or_create_ai_data(
     lang:     str,
     tagged:   list[dict],
     force_ai: bool = False,
+    content:  str  = "",
 ) -> dict:
     video_number = str(record["number"])
     title        = record.get("title", "")
@@ -828,14 +776,21 @@ def get_or_create_ai_data(
 
     if not force_ai and has_ai_cache(cache_key):
         cached = get_ai_cache(cache_key)
-        if cached and cached.get("hook_keyword"):
-            print(
-                f"\n  ♻️  Using cached AI for #{video_number}"
-            )
-            return cached
 
-    content = _get_content_for_lang(record, lang)
-    if not content:
+        if cached and cached.get("hook_keyword"):
+            # ✅ auto-invalidate
+            if content and _is_cache_stale(cached, content):
+                print(
+                    f"\n  🔄 Auto-invalidating stale cache "
+                    f"for #{video_number}..."
+                )
+                clear_ai_cache(cache_key)
+            else:
+                print(f"\n  ♻️  Using cached AI for #{video_number}")
+                return cached
+
+    content_to_use = content or _get_content_for_lang(record, lang)
+    if not content_to_use:
         raise AIEnrichmentError(
             f"No content for #{video_number} ({lang.upper()})"
         )
@@ -843,7 +798,7 @@ def get_or_create_ai_data(
     enricher_record = {
         "number":  video_number,
         "title":   title,
-        "content": content,
+        "content": content_to_use,
     }
 
     try:
@@ -892,15 +847,9 @@ def _build_script_data(
             power_words.get("en")  or []
         )
 
-    emotion   = ai_data.get("analysis", {}).get(
-        "primary_emotion", ""
-    )
-    bg_styles = {
-        "fear":    "cinematic",
-        "sadness": "cinematic",
-        "awe":     "blur",
-    }
-    bg_style = bg_styles.get(emotion, "video")
+    emotion  = ai_data.get("analysis", {}).get("primary_emotion", "")
+    bg_style = {"fear": "cinematic", "sadness": "cinematic",
+                "awe": "blur"}.get(emotion, "video")
 
     return {
         "title":             record["title"],
@@ -994,9 +943,7 @@ def process_video(
     )
 
     export_formats = [] if args.no_export else [
-        f.strip()
-        for f in args.formats.split(",")
-        if f.strip()
+        f.strip() for f in args.formats.split(",") if f.strip()
     ]
 
     # ── 1. Parse tags ──────────────────────────────────────────────────────
@@ -1007,9 +954,15 @@ def process_video(
 
     print(f"\n  🏷️  Parsing {lang.upper()} tags...")
     tagged = process_tagged_content(content, lang=lang)
+
     if not tagged:
         print(f"  ❌ No tagged content for #{num}")
         return
+
+    print(
+        f"  ✅ Parsed: {len(tagged)} sentences | "
+        f"tags: {', '.join(s.get('raw_tag','?') for s in tagged)}"
+    )
 
     # ── 2. AI Enrichment ───────────────────────────────────────────────────
     try:
@@ -1018,6 +971,7 @@ def process_video(
             lang     = lang,
             tagged   = tagged,
             force_ai = args.force_ai,
+            content  = content,
         )
     except AIEnrichmentError as e:
         print(f"\n  ⛔ AI enrichment failed: {e}")
@@ -1033,9 +987,10 @@ def process_video(
         print("  ❌ Cannot build script data")
         return
 
-    custom_hook = script_data.get("custom_hook", "")
-    if custom_hook:
-        print(f"  🪝 Hook: '{custom_hook}'")
+    print(f"  📊 Final sentences: {len(script_data['sentences'])}")
+
+    if script_data.get("custom_hook"):
+        print(f"  🪝 Hook: '{script_data['custom_hook']}'")
 
     save_script_meta(
         video_number = num,
@@ -1045,18 +1000,12 @@ def process_video(
         words        = script_data["word_count"],
     )
 
-    # ── 4. Script-only mode ────────────────────────────────────────────────
+    # ── 4. Script-only ─────────────────────────────────────────────────────
     if args.script_only:
         print_tags_summary(tagged, lang=lang)
-        analysis = ai_data.get("analysis", {})
-        if analysis:
-            print(
-                f"  📊 {analysis.get('content_type')} | "
-                f"{analysis.get('primary_emotion')}"
-            )
         return
 
-    # ── 5. Audio-only mode ─────────────────────────────────────────────────
+    # ── 5. Audio-only ──────────────────────────────────────────────────────
     if args.no_video:
         print(f"\n  🎵 Audio only...")
         try:
@@ -1072,10 +1021,9 @@ def process_video(
         # PIPELINE — 5 خطوات
         # ══════════════════════════════════════════════════════════════════
 
-        # ── STEP A: TTS + Music ────────────────────────────────────────────
-        print(f"\n  {'─' * 55}")
-        print("  ✅ STEP A: Full audio (TTS + Music + SFX)")
-
+        # A. Audio
+        print(f"\n  {'─'*55}")
+        print("  ✅ STEP A: Full audio")
         audio_path, clean_voice_path, real_dur = produce_full_audio(
             script_data  = script_data,
             output_base  = out_base,
@@ -1083,10 +1031,9 @@ def process_video(
             music_volume = 0.12,
         )
 
-        # ── STEP B: WhisperX ──────────────────────────────────────────────
-        print(f"\n  {'─' * 55}")
-        print("  ✅ STEP B: WhisperX on clean voice")
-
+        # B. WhisperX
+        print(f"\n  {'─'*55}")
+        print("  ✅ STEP B: WhisperX")
         aligned, whisper_sentences = run_whisperx(
             clean_voice_path = clean_voice_path,
             out_base         = out_base,
@@ -1097,13 +1044,12 @@ def process_video(
         if not whisper_sentences:
             whisper_sentences = script_data["sentences"]
 
-        # ✅ إضافة tag لكل segment في aligned
+        # ✅ إضافة tag لكل segment
         aligned = _inject_tags_into_aligned(aligned, tagged)
 
-        # ── STEP C: خطة الفيديوهات + جلبها ───────────────────────────────
-        print(f"\n  {'─' * 55}")
-        print("  ✅ STEP C: Build sentence-based clip plan")
-
+        # C. Clip plan + videos
+        print(f"\n  {'─'*55}")
+        print("  ✅ STEP C: Clip plan + fetch videos")
         clip_keywords, clip_durations = _build_clip_plan(
             script_data = script_data,
             ai_data     = ai_data,
@@ -1114,14 +1060,9 @@ def process_video(
         if not clip_keywords:
             raise RuntimeError("Could not build clip plan")
 
-        print(
-            f"\n  📹 Fetching {len(clip_keywords)} videos "
-            f"(1 per sentence)..."
-        )
         vid_dir = str(
             Path(out_dir).resolve() / f"videos_{num}_{lang}"
         )
-
         video_paths = fetch_videos_for_script(
             keywords_per_sentence = clip_keywords,
             clip_durations        = clip_durations,
@@ -1129,10 +1070,9 @@ def process_video(
             aligned               = aligned,
         )
 
-        # ── STEP D: فيديو خلفية ────────────────────────────────────────────
-        print(f"\n  {'─' * 55}")
-        print("  ✅ STEP D: Background video by sentence durations")
-
+        # D. Background video
+        print(f"\n  {'─'*55}")
+        print("  ✅ STEP D: Background video")
         bg_video = produce_bg_video(
             video_paths    = video_paths,
             audio_path     = audio_path,
@@ -1143,14 +1083,13 @@ def process_video(
             clip_durations = clip_durations,
         )
 
-        # ── STEP E: Render الكلمات ─────────────────────────────────────────
-        print(f"\n  {'─' * 55}")
-        print("  ✅ STEP E: Render words overlay")
-
+        # E. Words overlay
+        print(f"\n  {'─'*55}")
+        print("  ✅ STEP E: Words overlay")
         final_video = render_words_overlay(
             bg_video    = bg_video,
             audio_path  = audio_path,
-            aligned     = aligned,        # ✅ يحتوي على tags
+            aligned     = aligned,
             sentences   = whisper_sentences,
             script_data = script_data,
             out_base    = out_base,
@@ -1162,9 +1101,7 @@ def process_video(
         mark_render_done(num, lang, str(final_video), real_dur)
 
         if should_publish:
-            _do_publish(
-                str(final_video), record, ai_data, lang, num
-            )
+            _do_publish(str(final_video), record, ai_data, lang, num)
 
         mb = (
             final_video.stat().st_size / 1_048_576
@@ -1192,8 +1129,7 @@ def main() -> None:
     if args.show_ai_cache is not None:
         show_ai_cache(
             args.show_ai_cache
-            if args.show_ai_cache != "all"
-            else None
+            if args.show_ai_cache != "all" else None
         )
         return
 
@@ -1224,7 +1160,7 @@ def main() -> None:
     print(f"  Input    : {args.input_file}")
     print(f"  Language : {lang.upper()}")
     print(f"  Output   : {args.output_dir}")
-    print(f"  Pipeline : WhisperX → sentence clips → visual FX ✅")
+    print(f"  Pipeline : WhisperX → tag-based clips → visual FX ✅")
     print()
     print_db_summary()
 
@@ -1279,9 +1215,7 @@ def main() -> None:
     for i, record in enumerate(valid, 1):
         print(f"\n[{i}/{len(valid)}]")
 
-        if not args.force and is_render_done(
-            record["number"], lang
-        ):
+        if not args.force and is_render_done(record["number"], lang):
             if will_publish and not is_published(
                 record["number"], lang
             ):
@@ -1301,9 +1235,7 @@ def main() -> None:
                         lang, record["number"],
                     )
             else:
-                print(
-                    f"  ⏭️  #{record['number']} already done"
-                )
+                print(f"  ⏭️  #{record['number']} already done")
             continue
 
         try:
@@ -1345,10 +1277,7 @@ def main() -> None:
                 pass
 
     if thumbnail_queue:
-        print(
-            f"\n🖼️  Rendering "
-            f"{len(thumbnail_queue)} thumbnail(s)..."
-        )
+        print(f"\n🖼️  Rendering {len(thumbnail_queue)} thumbnail(s)...")
         try:
             render_thumbnails_batch(thumbnail_queue)
         except Exception as e:
