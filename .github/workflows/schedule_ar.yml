@@ -1,13 +1,12 @@
-# .github/workflows/generate_ar.yml
 name: 🇸🇦 Arabic Videos (Auto + Manual)
 
 on:
-  # schedule:
-  #   - cron: "0 9 * * *"
-  #   - cron: "0 11 * * *"
-  #   - cron: "0 14 * * *"
-  #   - cron: "0 17 * * *"
-  #   - cron: "0 20 * * *"
+  schedule:
+    - cron: "0 9 * * *"
+    - cron: "0 11 * * *"
+    - cron: "0 14 * * *"
+    - cron: "0 17 * * *"
+    - cron: "0 20 * * *"
 
   workflow_dispatch:
     inputs:
@@ -205,20 +204,16 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET_AR }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_AR }}
         run: |
-          FLAGS="--lang ar"
+          FLAGS="--lang ar --publish-fb --publish-yt --auto-next"
 
           if [ -n "${{ github.event.inputs.video_number }}" ]; then
-            FLAGS="$FLAGS --video-number ${{ github.event.inputs.video_number }}"
-          else
-            FLAGS="$FLAGS --auto-next"
+            FLAGS="--lang ar --publish-fb --publish-yt --video-number ${{ github.event.inputs.video_number }}"
           fi
 
           [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
           [ "${{ github.event.inputs.force_ai }}"   = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && FLAGS="$FLAGS --publish-yt"
-          [ "${{ github.event.inputs.publish_fb }}" = "false" ] && \
-          [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="$FLAGS --no-publish"
+          [ "${{ github.event.inputs.publish_fb }}" = "false" ] && FLAGS="$FLAGS --no-publish"
+          [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="${FLAGS/--publish-yt/}"
 
           python main.py "scripts/videos_ar.xlsx" \
             --output-dir output \
