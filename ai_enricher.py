@@ -4,7 +4,8 @@ ai_enricher.py — Smart AI Assistant powered by Groq
 ✨ يدعم عدة مفاتيح Groq مع تدوير فوري عند rate limit
 ✨ يدعم 3 لغات (AR, FR, EN) بشكل صحيح
 ✨ Hook مخصص + Keywords محسّنة لكل جملة
-✨ B-Roll ذكي — keywords مرتبطة بمحتوى كل جملة (طلب منفصل لكل جملة)
+✨ B-Roll ذكي — keywords مرتبطة بمحتوى كل جملة
+✨ Street description لـ Facebook و YouTube
 """
 
 from __future__ import annotations
@@ -42,7 +43,6 @@ LANG_KEY: dict[str, str] = {
     "en": "en",
 }
 
-# ✅ TAG → Visual style للـ B-Roll
 TAG_VISUAL_STYLE: dict[str, str] = {
     "intrigue":    "dark mysterious close-up shadow whisper secret",
     "desire":      "longing gaze reaching hand beautiful dream soft light",
@@ -57,6 +57,48 @@ TAG_VISUAL_STYLE: dict[str, str] = {
 }
 
 DEFAULT_VISUAL_STYLE = "cinematic dark dramatic close-up face"
+
+# ✅ Street style instructions لكل لغة
+STREET_STYLE: dict[str, dict] = {
+    "ar": {
+        "style_name": "لغة شارع الإمارات العربية المتحدة",
+        "instructions": (
+            "اكتب بأسلوب شباب الإمارات العربية المتحدة — "
+            "استخدم كلمات مثل: والله، يبيلك، ما قصّر، خوش، "
+            "زين، شدة، ولا يهمك، هالشي، عادي، طبعاً. "
+            "الأسلوب يكون مباشر وحماسي وكأنك تتكلم مع صاحبك. "
+            "استخدم إيموجي بكثرة. "
+            "لا تكتب بالفصحى الرسمية."
+        ),
+        "hashtag_lang": "اكتب hashtags بالعربية والإنجليزية",
+    },
+    "fr": {
+        "style_name": "argot français — لغة شارع فرنسا",
+        "instructions": (
+            "Écris en argot français moderne — "
+            "utilise des mots comme: wesh, c'est ouf, trop stylé, "
+            "carrément, tranquille, grave, c'est chaud, t'as vu, "
+            "laisse tomber, c'est de la balle. "
+            "Style direct, énergique, comme si tu parles à un pote. "
+            "Utilise beaucoup d'emojis. "
+            "Pas de français formel."
+        ),
+        "hashtag_lang": "Écris les hashtags en français et en anglais",
+    },
+    "en": {
+        "style_name": "American street slang",
+        "instructions": (
+            "Write in authentic American street slang — "
+            "use words like: no cap, fr fr, lowkey, bussin, "
+            "it's giving, slay, periodt, facts, bet, that's wild, "
+            "deadass, finna, lowkey, hits different. "
+            "Keep it real, hype, like you're talking to your homie. "
+            "Use lots of emojis. "
+            "No formal English."
+        ),
+        "hashtag_lang": "Write hashtags in English only",
+    },
+}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -461,7 +503,7 @@ Example: ["word1","word2","word3",...]"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4️⃣ VISUAL KEYWORDS — طلب منفصل لكل جملة
+# 4️⃣ VISUAL KEYWORDS
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _generate_single_sentence_keywords(
@@ -471,7 +513,6 @@ def _generate_single_sentence_keywords(
     sentence_idx: int,
     total:        int,
 ) -> list[str]:
-    """طلب منفصل لكل جملة — يُنتج كلمات بحث حرفية 100%."""
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "neutral")
     visual_style = TAG_VISUAL_STYLE.get(tag, DEFAULT_VISUAL_STYLE)
@@ -547,10 +588,6 @@ def generate_visual_keywords(
     context:   dict,
     tags:      list[str] | None = None,
 ) -> list[list[str]]:
-    """
-    ✅ طلب منفصل لكل جملة — أعلى دقة في اختيار المشاهد.
-    كل جملة تأخذ keywords مرتبطة بمعناها + tag الخاص بها.
-    """
     if not sentences:
         raise AIEnrichmentError(
             "Cannot generate keywords for empty sentences"
@@ -766,7 +803,7 @@ Return ONLY JSON with exactly these two keys:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 8️⃣ CAPTIONS
+# 8️⃣ CAPTIONS (قصير — للتوافق مع الكود القديم)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_captions(
@@ -858,6 +895,104 @@ Return ONLY JSON with exactly these two keys:
         f"EN({len(result['en'])} chars)"
     )
     return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✅ NEW: STREET DESCRIPTION — لـ Facebook و YouTube
+# ═════════════════════════════════════════════════════════════════════════════
+
+def generate_street_description(
+    title:   str,
+    content: str,
+    context: dict,
+    lang:    str = "ar",
+) -> str:
+    """
+    ✅ يولّد وصفاً طويلاً بلغة الشارع حسب اللغة:
+    - AR: لغة شارع الإمارات العربية المتحدة
+    - FR: argot français
+    - EN: American street slang
+
+    يُستخدم على Facebook و YouTube معاً.
+
+    Returns:
+        str: الوصف الكامل مع الـ hashtags في النهاية
+    """
+    lang_key     = LANG_KEY.get(lang, lang)
+    style        = STREET_STYLE.get(lang, STREET_STYLE["en"])
+    content_type = context.get("content_type", "general")
+    emotion      = context.get("primary_emotion", "curiosity")
+    style_name   = style["style_name"]
+    instructions = style["instructions"]
+    hashtag_lang = style["hashtag_lang"]
+
+    prompt = f"""أنت خبير في كتابة محتوى فيروسي على وسائل التواصل الاجتماعي.
+
+اكتب وصفاً طويلاً لفيديو على Facebook و YouTube.
+
+العنوان: "{title}"
+نوع المحتوى: {content_type}
+العاطفة: {emotion}
+
+محتوى الفيديو:
+{content[:1500]}
+
+# أسلوب الكتابة المطلوب: {style_name}
+{instructions}
+
+# تعليمات الوصف:
+1. ابدأ بجملة صادمة أو مثيرة للاهتمام تجذب الانتباه فوراً
+2. اشرح محتوى الفيديو بتفصيل (8-12 سطر)
+3. أضف قصة أو مثال واقعي يتعلق بالموضوع
+4. اجعل القارئ يحس إنه لازم يشوف الفيديو
+5. أضف call-to-action قوي في النهاية (like، comment، subscribe)
+6. استخدم إيموجي بكثرة في كل الأجزاء
+7. الوصف يكون طويل (200-300 كلمة)
+
+# Hashtags:
+{hashtag_lang}
+أضف 20-25 hashtag في نهاية الوصف
+فصل بين الهاشتاج والوصف بـ:
+.
+.
+.
+
+# مهم جداً:
+- اكتب الوصف كاملاً بنفس اللغة ({style_name})
+- لا تخلط لغات مختلفة في الوصف (فقط الهاشتاج يمكن أن يكون مختلط)
+- اكتب النص مباشرة بدون JSON أو أي تنسيق آخر
+- فقط الوصف ثم الهاشتاج"""
+
+    try:
+        raw = _call_groq(
+            prompt,
+            max_tokens     = 1500,
+            temperature    = 0.85,
+            operation_name = f"Street Description ({lang.upper()})",
+        )
+
+        description = raw.strip()
+
+        if not description or len(description) < 100:
+            raise ValueError(
+                f"Description too short: {len(description)} chars"
+            )
+
+        print(
+            f"  ✅ Street Description ({lang.upper()}): "
+            f"{len(description)} chars"
+        )
+        return description
+
+    except Exception as e:
+        print(f"  ⚠️  Street Description failed: {e}")
+        # fallback بسيط
+        lang_name = LANG_NAMES.get(lang, "Arabic")
+        return (
+            f"{title}\n\n"
+            f"شاهد الفيديو كاملاً للاستفادة! 🔥\n\n"
+            f"#shorts #viral #{content_type}"
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1080,7 +1215,7 @@ def enrich_record(
     # 3. Power Words
     power_words = generate_power_words(content, analysis, lang)
 
-    # 4. Visual Keywords — طلب منفصل لكل جملة مع tag
+    # 4. Visual Keywords
     sentences_for_keywords = (
         [s["text"] for s in tagged]
         if tagged
@@ -1111,23 +1246,31 @@ def enrich_record(
     # 7. Hashtags
     hashtags = generate_hashtags(title, content, analysis, lang)
 
-    # 8. Captions
+    # 8. Captions (قصير — للتوافق)
     captions = generate_captions(
         title, content, analysis, hashtags, lang
     )
 
-    # 9. Accent Colors
+    # ✅ 9. Street Description — لـ Facebook و YouTube
+    street_description = generate_street_description(
+        title   = title,
+        content = content,
+        context = analysis,
+        lang    = lang,
+    )
+
+    # 10. Accent Colors
     accent_colors = suggest_accent_colors(analysis)
 
-    # 10. Hook Keyword
+    # 11. Hook Keyword
     hook_keyword = generate_hook_keyword(title, content, analysis)
 
-    # 11. Custom Hook
+    # 12. Custom Hook
     custom_hook = generate_custom_hook(
         title, content, analysis, lang
     )
 
-    # 12. Title + Emojis
+    # 13. Title + Emojis
     attractive_title = {
         "title":       title,
         "emoji_left":  DEFAULT_EMOJI_LEFT,
@@ -1136,13 +1279,17 @@ def enrich_record(
 
     if verbose:
         print(f"  {'─' * 50}")
-        print(f"  ✅ AI enrichment complete (11/11 operations)")
+        print(f"  ✅ AI enrichment complete (12/12 operations)")
         print(f"  🪝 Hook: '{custom_hook}'")
         print(
             f"  📌 Final: "
             f"{attractive_title['emoji_left']} "
             f"{attractive_title['title']} "
             f"{attractive_title['emoji_right']}"
+        )
+        print(
+            f"  📝 Street Description: "
+            f"{len(street_description)} chars"
         )
 
     return {
@@ -1153,6 +1300,7 @@ def enrich_record(
         "engagement_questions": questions,
         "hashtags":             hashtags,
         "captions":             captions,
+        "street_description":   street_description,  # ✅ جديد
         "accent_colors":        accent_colors,
         "hook_keyword":         hook_keyword,
         "custom_hook":          custom_hook,
