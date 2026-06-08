@@ -6,9 +6,7 @@ Sources (in priority order): Local → Pexels → Pixabay
 ✨ Motion detection لضمان فيديوهات متحركة
 ✨ مسارات مطلقة
 ✨ Thread-safe key rotation
-✨ NEW: search fallback
-   1) keyword + " dark cinematic"
-   2) keyword الأصلية
+✨ Search fallback: keyword + dark cinematic → keyword
 """
 
 from __future__ import annotations
@@ -56,7 +54,6 @@ _pixabay_key_idx = 0
 
 
 def _load_keys_for(prefix: str) -> list[str]:
-    """تحميل كل مفاتيح API لمنصة معينة."""
     keys: list[str] = []
     main = os.environ.get(prefix, "").strip()
     if main:
@@ -69,7 +66,6 @@ def _load_keys_for(prefix: str) -> list[str]:
 
 
 def _get_pexels_key() -> str:
-    """احصل على مفتاح Pexels الحالي."""
     keys = _load_keys_for("PEXELS_API_KEY")
     if not keys:
         return ""
@@ -79,21 +75,16 @@ def _get_pexels_key() -> str:
 
 
 def _rotate_pexels_key() -> None:
-    """تدوير مفتاح Pexels عند الفشل (thread-safe)."""
     global _pexels_key_idx
     keys = _load_keys_for("PEXELS_API_KEY")
     n    = len(keys)
     if n > 1:
         with _key_lock:
             _pexels_key_idx = (_pexels_key_idx + 1) % n
-        print(
-            f"  🔄 Pexels key rotated → "
-            f"#{_pexels_key_idx} (of {n})"
-        )
+        print(f"  🔄 Pexels key rotated → #{_pexels_key_idx}")
 
 
 def _get_pixabay_key() -> str:
-    """احصل على مفتاح Pixabay الحالي."""
     keys = _load_keys_for("PIXABAY_API_KEY")
     if not keys:
         return ""
@@ -103,17 +94,13 @@ def _get_pixabay_key() -> str:
 
 
 def _rotate_pixabay_key() -> None:
-    """تدوير مفتاح Pixabay عند الفشل (thread-safe)."""
     global _pixabay_key_idx
     keys = _load_keys_for("PIXABAY_API_KEY")
     n    = len(keys)
     if n > 1:
         with _key_lock:
             _pixabay_key_idx = (_pixabay_key_idx + 1) % n
-        print(
-            f"  🔄 Pixabay key rotated → "
-            f"#{_pixabay_key_idx} (of {n})"
-        )
+        print(f"  🔄 Pixabay key rotated → #{_pixabay_key_idx}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -121,7 +108,6 @@ def _rotate_pixabay_key() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _probe_video_info(path: Path) -> dict:
-    """تحليل بسيط وموثوق للفيديو."""
     try:
         r = subprocess.run(
             [
@@ -134,25 +120,18 @@ def _probe_video_info(path: Path) -> dict:
                 "-of", "default=noprint_wrappers=1",
                 str(path),
             ],
-            capture_output = True,
-            text           = True,
-            timeout        = 15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
 
         if r.returncode != 0:
             return {
-                "valid":    False,
-                "reason":   "ffprobe failed",
-                "duration": 0.0,
-                "frames":   0,
-                "fps":      0.0,
+                "valid": False, "reason": "ffprobe failed",
+                "duration": 0.0, "frames": 0, "fps": 0.0,
             }
 
-        info: dict = {
-            "duration": 0.0,
-            "frames":   0,
-            "fps":      0.0,
-        }
+        info: dict = {"duration": 0.0, "frames": 0, "fps": 0.0}
 
         for line in r.stdout.strip().split("\n"):
             line = line.strip()
@@ -184,8 +163,7 @@ def _probe_video_info(path: Path) -> dict:
                     if int(den) > 0:
                         fps = int(num) / int(den)
                         if fps > 0 and (
-                            info["fps"] == 0 or
-                            fps < info["fps"]
+                            info["fps"] == 0 or fps < info["fps"]
                         ):
                             info["fps"] = fps
                 except (ValueError, ZeroDivisionError):
@@ -196,28 +174,23 @@ def _probe_video_info(path: Path) -> dict:
             info["duration"] > 0 and
             info["fps"] > 0
         ):
-            info["frames"] = int(
-                info["duration"] * info["fps"]
-            )
+            info["frames"] = int(info["duration"] * info["fps"])
 
         if info["duration"] < MIN_DURATION:
             return {
-                **info,
-                "valid":  False,
+                **info, "valid": False,
                 "reason": f"too short ({info['duration']:.1f}s)",
             }
 
         if info["fps"] > 0 and info["fps"] < MIN_FPS:
             return {
-                **info,
-                "valid":  False,
+                **info, "valid": False,
                 "reason": f"low fps ({info['fps']:.1f})",
             }
 
         if info["frames"] > 0 and info["frames"] < MIN_FRAMES:
             return {
-                **info,
-                "valid":  False,
+                **info, "valid": False,
                 "reason": f"too few frames ({info['frames']})",
             }
 
@@ -225,16 +198,12 @@ def _probe_video_info(path: Path) -> dict:
 
     except (subprocess.TimeoutExpired, Exception):
         return {
-            "valid":    False,
-            "reason":   "probe error",
-            "duration": 0.0,
-            "frames":   0,
-            "fps":      0.0,
+            "valid": False, "reason": "probe error",
+            "duration": 0.0, "frames": 0, "fps": 0.0,
         }
 
 
 def _detect_motion_simple(path: Path) -> bool:
-    """كشف بسيط للحركة بمقارنة frame sizes."""
     try:
         info     = _probe_video_info(path)
         duration = info.get("duration", 0)
@@ -243,11 +212,7 @@ def _detect_motion_simple(path: Path) -> bool:
             return True
 
         frame_sizes: list[int] = []
-        sample_times           = [
-            0.5,
-            duration / 2,
-            duration - 0.5,
-        ]
+        sample_times = [0.5, duration / 2, duration - 0.5]
         pid = os.getpid()
 
         for i, t in enumerate(sample_times):
@@ -261,9 +226,9 @@ def _detect_motion_simple(path: Path) -> bool:
                     "-q:v", "5",
                     tmp_frame,
                 ],
-                capture_output = True,
-                text           = True,
-                timeout        = 10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             tmp_path = Path(tmp_frame)
             if r.returncode == 0 and tmp_path.exists():
@@ -295,7 +260,6 @@ def _detect_motion_simple(path: Path) -> bool:
 
 
 def _is_video_animated(path: Path) -> tuple[bool, str]:
-    """تحقق شامل: معلومات الفيديو + motion detection."""
     info = _probe_video_info(path)
 
     if not info["valid"]:
@@ -318,18 +282,11 @@ def _is_video_animated(path: Path) -> tuple[bool, str]:
 # DOWNLOAD
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _download(
-    url:     str,
-    dest:    Path,
-    retries: int = 3,
-) -> bool:
-    """تحميل فيديو + التحقق من الحركة."""
+def _download(url: str, dest: Path, retries: int = 3) -> bool:
     for attempt in range(retries):
         try:
             with requests.get(
-                url,
-                stream  = True,
-                timeout = DOWNLOAD_TIMEOUT,
+                url, stream=True, timeout=DOWNLOAD_TIMEOUT
             ) as r:
                 r.raise_for_status()
 
@@ -376,44 +333,33 @@ def _download(
 
 
 def _safe_name(keyword: str, length: int = 20) -> str:
-    """تحويل keyword إلى اسم ملف آمن."""
     return re.sub(
         r"[^a-z0-9_]", "_", keyword.lower()
     )[:length]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ NEW: QUERY VARIANTS
-# أولاً dark cinematic ثم fallback إلى keyword الأصلية
+# ✅ QUERY VARIANTS — dark cinematic fallback
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _build_query_variants(keyword: str) -> list[str]:
     """
     يبني نسختين للبحث:
       1) keyword + dark cinematic
-      2) keyword الأصلية
-
-    مثال:
-      "man staring camera"
-      → ["man staring camera dark cinematic", "man staring camera"]
+      2) keyword الأصلية (fallback)
     """
     kw = " ".join(keyword.strip().split())
     if not kw:
         return []
 
-    variants = [
-        f"{kw} dark cinematic",
-        kw,
-    ]
+    out:  list[str] = []
+    seen: set[str]  = set()
 
-    # إزالة التكرار مع الحفاظ على الترتيب
-    out: list[str] = []
-    seen: set[str] = set()
-    for v in variants:
-        k = v.lower().strip()
+    for variant in [f"{kw} dark cinematic", kw]:
+        k = variant.lower().strip()
         if k and k not in seen:
             seen.add(k)
-            out.append(v)
+            out.append(variant)
 
     return out
 
@@ -429,7 +375,6 @@ def _search_local(
     output_dir:   str,
     session_used: set[str],
 ) -> Path | None:
-    """البحث عن فيديو محلي مناسب."""
     if not LOCAL_VIDEO_DIR.exists():
         return None
 
@@ -446,10 +391,7 @@ def _search_local(
         if kw_clean in v.stem.lower()
     ]
     pool   = matches if matches else all_videos
-    unused = [
-        v for v in pool
-        if str(v) not in session_used
-    ]
+    unused = [v for v in pool if str(v) not in session_used]
 
     if not unused:
         unused = pool
@@ -472,7 +414,6 @@ def _search_pexels(
     session_used: set[str],
     retries:      int = 3,
 ) -> Path | None:
-    """البحث عن فيديو في Pexels مع fallback query."""
     api_key = _get_pexels_key()
     if not api_key:
         return None
@@ -484,7 +425,7 @@ def _search_pexels(
     tried_ids: set[str] = set()
 
     for query in query_variants:
-        print(f"    🔎 Pexels query: {query!r}")
+        print(f"    🔎 Pexels: {query!r}")
         videos: list[dict] = []
 
         for attempt in range(retries):
@@ -507,19 +448,14 @@ def _search_pexels(
             except requests.exceptions.HTTPError as e:
                 status = (
                     e.response.status_code
-                    if e.response
-                    else 0
+                    if e.response else 0
                 )
                 if status == 429:
-                    print("    ⚠️  Pexels rate limit — rotating key")
+                    print("    ⚠️  Pexels rate limit")
                     _rotate_pexels_key()
                     api_key = _get_pexels_key()
                     time.sleep(2)
                 elif status in (401, 403):
-                    print(
-                        f"    ❌ Pexels auth error ({status}) "
-                        f"— rotating key"
-                    )
                     _rotate_pexels_key()
                     api_key = _get_pexels_key()
                     if not api_key:
@@ -533,10 +469,6 @@ def _search_pexels(
                         )
 
             except Exception as e:
-                print(
-                    f"    ⚠️  Pexels "
-                    f"[{attempt + 1}/{retries}]: {e}"
-                )
                 if attempt < retries - 1:
                     time.sleep(
                         RETRY_DELAYS[
@@ -550,12 +482,12 @@ def _search_pexels(
         ]
         videos = sorted(
             videos,
-            key     = lambda v: v.get("duration", 0),
-            reverse = True,
+            key=lambda v: v.get("duration", 0),
+            reverse=True,
         )
 
         if not videos:
-            print("    ↩️  No Pexels results — trying fallback query...")
+            print("    ↩️  No results — trying fallback query...")
             continue
 
         for video in videos[:7]:
@@ -577,10 +509,10 @@ def _search_pexels(
                     f for f in video.get("video_files", [])
                     if f.get("file_type") == "video/mp4"
                 ],
-                key     = lambda f: (
+                key=lambda f: (
                     f.get("width", 0) * f.get("height", 0)
                 ),
-                reverse = True,
+                reverse=True,
             )
             url = files[0].get("link") if files else None
             if not url:
@@ -612,7 +544,6 @@ def _search_pixabay(
     session_used: set[str],
     retries:      int = 3,
 ) -> Path | None:
-    """البحث عن فيديو في Pixabay مع fallback query."""
     api_key = _get_pixabay_key()
     if not api_key:
         return None
@@ -624,7 +555,7 @@ def _search_pixabay(
     tried_ids: set[str] = set()
 
     for query in query_variants:
-        print(f"    🔎 Pixabay query: {query!r}")
+        print(f"    🔎 Pixabay: {query!r}")
         hits: list[dict] = []
 
         for attempt in range(retries):
@@ -648,19 +579,14 @@ def _search_pixabay(
             except requests.exceptions.HTTPError as e:
                 status = (
                     e.response.status_code
-                    if e.response
-                    else 0
+                    if e.response else 0
                 )
                 if status == 429:
-                    print("    ⚠️  Pixabay rate limit — rotating key")
+                    print("    ⚠️  Pixabay rate limit")
                     _rotate_pixabay_key()
                     api_key = _get_pixabay_key()
                     time.sleep(2)
                 elif status in (400, 401):
-                    print(
-                        f"    ❌ Pixabay auth error ({status}) "
-                        f"— rotating key"
-                    )
                     _rotate_pixabay_key()
                     api_key = _get_pixabay_key()
                     if not api_key:
@@ -673,11 +599,7 @@ def _search_pixabay(
                             ]
                         )
 
-            except Exception as e:
-                print(
-                    f"    ⚠️  Pixabay "
-                    f"[{attempt + 1}/{retries}]: {e}"
-                )
+            except Exception:
                 if attempt < retries - 1:
                     time.sleep(
                         RETRY_DELAYS[
@@ -691,12 +613,12 @@ def _search_pixabay(
         ]
         hits = sorted(
             hits,
-            key     = lambda h: h.get("duration", 0),
-            reverse = True,
+            key=lambda h: h.get("duration", 0),
+            reverse=True,
         )
 
         if not hits:
-            print("    ↩️  No Pixabay results — trying fallback query...")
+            print("    ↩️  No results — trying fallback query...")
             continue
 
         for hit in hits[:7]:
@@ -746,7 +668,6 @@ def _get_fallback_video(
     output_dir: str,
     index:      int,
 ) -> Path | None:
-    """استخدام فيديو موجود كـ fallback."""
     out      = Path(output_dir)
     existing = sorted(out.glob("*_raw.mp4"))
 
@@ -773,7 +694,6 @@ def _get_fallback_video(
 def _fill_gaps(
     results: list[Path | None],
 ) -> list[Path]:
-    """ملء الفجوات بفيديوهات متنوعة."""
     n         = len(results)
     available = [r for r in results if r is not None]
 
@@ -815,37 +735,25 @@ def fetch_videos_for_script(
     aligned:               list[dict] | None = None,
 ) -> list[Path]:
     """
-    جلب فيديوهات لكل جملة في السكريبت.
-
-    Args:
-        keywords_per_sentence: قائمة keywords لكل جملة
-        clip_durations:        مدة كل مقطع
-        output_dir:            مجلد الحفظ
-        aligned:               بيانات التزامن (اختياري)
-
-    Returns:
-        list من مسارات الفيديوهات
-
-    Raises:
-        RuntimeError: إذا لم يُوجد أي فيديو
+    جلب فيديو واحد لكل جملة.
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    n            = len(keywords_per_sentence)
+    n             = len(keywords_per_sentence)
     session_used: set[str]          = set()
     results:      list[Path | None] = [None] * n
 
     pexels_keys  = _load_keys_for("PEXELS_API_KEY")
     pixabay_keys = _load_keys_for("PIXABAY_API_KEY")
 
-    print(f"\n  📹 Fetching {n} videos...")
+    print(f"\n  📹 Fetching {n} videos (1 per sentence)...")
     print(
         f"     Pexels keys : {len(pexels_keys)} | "
         f"Pixabay keys: {len(pixabay_keys)}"
     )
 
     for i, kws in enumerate(keywords_per_sentence):
-        found = False
+        found    = False
         clip_dur = (
             clip_durations[i]
             if i < len(clip_durations)
@@ -853,7 +761,7 @@ def fetch_videos_for_script(
         )
 
         print(
-            f"  🎞️  Clip #{i + 1}/{n} "
+            f"  🎞️  [{i + 1}/{n}] "
             f"({clip_dur:.2f}s target)"
         )
 
