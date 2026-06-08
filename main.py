@@ -9,6 +9,7 @@ Pipeline النهائي (تزامن 100%):
   E. Render الكلمات فوق الفيديو
   ✅ aligned يحتوي على tag لكل جملة
   ✅ auto-invalidate cache إذا كان قديماً
+  ✅ thumbnail من Pexels Photos
 """
 
 from __future__ import annotations
@@ -144,21 +145,15 @@ def _safe_unlink(path: str) -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ AUTO-INVALIDATE CACHE
+# AUTO-INVALIDATE CACHE
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _count_tags_in_content(content: str) -> int:
-    """يعد عدد الـ tags في المحتوى."""
     return len(re.findall(r'\[[a-zA-Z_]+\]', content))
 
 
 def _is_cache_stale(cached: dict, content: str) -> bool:
-    """
-    يكتشف إذا كان الـ cache قديماً:
-    - عدد الجمل في الـ cache أقل بكثير من عدد الـ tags
-    """
     tags_in_content = _count_tags_in_content(content)
-
     if tags_in_content <= 1:
         return False
 
@@ -183,17 +178,13 @@ def _is_cache_stale(cached: dict, content: str) -> bool:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ TAG INJECTION INTO ALIGNED
+# TAG INJECTION INTO ALIGNED
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _inject_tags_into_aligned(
     aligned: list[dict],
     tagged:  list[dict],
 ) -> list[dict]:
-    """
-    يضيف حقل "tag" لكل segment في aligned
-    حتى يستخدمه render.mjs لتغيير شكل الكلمة والتأثيرات.
-    """
     if not aligned or not tagged:
         return aligned
 
@@ -284,7 +275,6 @@ def _build_clip_plan(
     aligned:     list[dict],
     total_dur:   float,
 ) -> tuple[list[list[str]], list[float]]:
-    """فيديو واحد لكل جملة بمدتها الحقيقية من WhisperX."""
     sentences       = script_data.get("sentences", [])
     visual_keywords = ai_data.get("visual_keywords", []) or []
     hook_keyword    = (script_data.get("hook_keyword") or "").strip()
@@ -296,7 +286,6 @@ def _build_clip_plan(
     clip_durations: list[float]     = []
     estimated       = _estimate_sentence_durations(sentences, total_dur)
 
-    # ✅ من WhisperX
     if aligned and len(aligned) >= len(sentences):
         print(
             f"\n  🎞️  Clip plan from WhisperX timings "
@@ -335,7 +324,6 @@ def _build_clip_plan(
 
         return clip_keywords, clip_durations
 
-    # fallback
     print(f"\n  ⚠️  Using estimated durations fallback...")
     for i in range(len(sentences)):
         row = _normalize_keywords_row(
@@ -529,9 +517,7 @@ def run_whisperx(
     lang:             str,
     script_sentences: list[str] | None = None,
 ) -> tuple[list, list]:
-    print(
-        f"\n  🎤 WhisperX: {clean_voice_path.name}"
-    )
+    print(f"\n  🎤 WhisperX: {clean_voice_path.name}")
 
     whisper_input = f"{out_base}_whisper_input.wav"
     r = subprocess.run(
@@ -561,7 +547,6 @@ def run_whisperx(
     aligned   = transcript["aligned"]
     sentences = transcript["sentences"]
 
-    # ✅ إعادة ربط timestamps بالجمل الأصلية
     if script_sentences:
         word_timestamps = [
             w
@@ -589,10 +574,7 @@ def run_whisperx(
                 if rebuilt and len(rebuilt) == len(script_sentences):
                     aligned   = rebuilt
                     sentences = list(script_sentences)
-                    print(
-                        f"  ✅ Re-mapped: "
-                        f"{len(sentences)} sentences"
-                    )
+                    print(f"  ✅ Re-mapped: {len(sentences)} sentences")
             except Exception as e:
                 print(f"  ⚠️  Remap skipped: {e}")
         else:
@@ -699,7 +681,6 @@ def render_words_overlay(
     script_data: dict,
     out_base:    str,
 ) -> Path:
-    """aligned يحتوي على tag لكل segment → render.mjs يستخدمه."""
     audio_dur = get_audio_duration(str(audio_path))
 
     manifest = {
@@ -722,7 +703,7 @@ def render_words_overlay(
         "has_hook":      bool(script_data.get("hook_keyword", "")),
         "hook_keyword":  script_data.get("hook_keyword", ""),
         "custom_hook":   script_data.get("custom_hook",  ""),
-        "aligned":       aligned,  # ✅ مع tags
+        "aligned":       aligned,
         "mode":          "words_only",
     }
 
@@ -760,7 +741,7 @@ def render_words_overlay(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AI ENRICHMENT — مع auto-invalidate
+# AI ENRICHMENT
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_or_create_ai_data(
@@ -778,7 +759,6 @@ def get_or_create_ai_data(
         cached = get_ai_cache(cache_key)
 
         if cached and cached.get("hook_keyword"):
-            # ✅ auto-invalidate
             if content and _is_cache_stale(cached, content):
                 print(
                     f"\n  🔄 Auto-invalidating stale cache "
@@ -929,10 +909,21 @@ def process_video(
     args:           argparse.Namespace,
     out_dir:        str,
     should_publish: bool,
-) -> None:
+) -> dict:
+    """
+    ✅ يُرجع dict يحتوي على:
+    - video_paths: الفيديوهات المحملة
+    - hook_keyword: كلمة البحث للـ thumbnail
+    """
     num   = str(record["number"])
     title = record["title"]
     lang  = args.lang
+
+    # ✅ نتيجة افتراضية للـ thumbnail
+    result = {
+        "video_paths":  [],
+        "hook_keyword": title,
+    }
 
     print(f"\n{'═' * 65}")
     print(f"  🎬  Video #{num} ({lang.upper()}):  {title}")
@@ -950,14 +941,14 @@ def process_video(
     content = _get_content_for_lang(record, lang)
     if not content:
         print(f"  ❌ No content for #{num}")
-        return
+        return result
 
     print(f"\n  🏷️  Parsing {lang.upper()} tags...")
     tagged = process_tagged_content(content, lang=lang)
 
     if not tagged:
         print(f"  ❌ No tagged content for #{num}")
-        return
+        return result
 
     print(
         f"  ✅ Parsed: {len(tagged)} sentences | "
@@ -975,17 +966,21 @@ def process_video(
         )
     except AIEnrichmentError as e:
         print(f"\n  ⛔ AI enrichment failed: {e}")
-        return
+        return result
 
     tagged = _rebuild_text_with_tag(
         ai_data.get("tagged") or tagged
     )
 
+    # ✅ حفظ hook_keyword للـ thumbnail
+    hook_keyword = ai_data.get("hook_keyword", "") or title
+    result["hook_keyword"] = hook_keyword
+
     # ── 3. Build script data ───────────────────────────────────────────────
     script_data = _build_script_data(record, lang, ai_data, tagged)
     if not script_data:
         print("  ❌ Cannot build script data")
-        return
+        return result
 
     print(f"  📊 Final sentences: {len(script_data['sentences'])}")
 
@@ -1003,7 +998,7 @@ def process_video(
     # ── 4. Script-only ─────────────────────────────────────────────────────
     if args.script_only:
         print_tags_summary(tagged, lang=lang)
-        return
+        return result
 
     # ── 5. Audio-only ──────────────────────────────────────────────────────
     if args.no_video:
@@ -1012,15 +1007,11 @@ def process_video(
             produce_full_audio(script_data, out_base)
         except Exception as e:
             print(f"  ❌ Audio error: {e}")
-        return
+        return result
 
     mark_render_start(num, lang)
 
     try:
-        # ══════════════════════════════════════════════════════════════════
-        # PIPELINE — 5 خطوات
-        # ══════════════════════════════════════════════════════════════════
-
         # A. Audio
         print(f"\n  {'─'*55}")
         print("  ✅ STEP A: Full audio")
@@ -1044,7 +1035,6 @@ def process_video(
         if not whisper_sentences:
             whisper_sentences = script_data["sentences"]
 
-        # ✅ إضافة tag لكل segment
         aligned = _inject_tags_into_aligned(aligned, tagged)
 
         # C. Clip plan + videos
@@ -1069,6 +1059,9 @@ def process_video(
             output_dir            = vid_dir,
             aligned               = aligned,
         )
+
+        # ✅ حفظ video_paths للـ thumbnail
+        result["video_paths"] = [str(p) for p in video_paths]
 
         # D. Background video
         print(f"\n  {'─'*55}")
@@ -1116,6 +1109,8 @@ def process_video(
         mark_render_failed(num, lang, str(e))
         print(f"\n  ❌ Failed: {e}")
         traceback.print_exc()
+
+    return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1212,6 +1207,9 @@ def main() -> None:
 
     success = failed = 0
 
+    # ✅ نحفظ نتائج كل فيديو للـ thumbnail
+    video_results: dict[str, dict] = {}
+
     for i, record in enumerate(valid, 1):
         print(f"\n[{i}/{len(valid)}]")
 
@@ -1239,12 +1237,14 @@ def main() -> None:
             continue
 
         try:
-            process_video(
+            result = process_video(
                 record         = record,
                 args           = args,
                 out_dir        = args.output_dir,
                 should_publish = will_publish,
             )
+            # ✅ حفظ النتيجة
+            video_results[str(record["number"])] = result
             success += 1
         except KeyboardInterrupt:
             print("\n⛔  Interrupted")
@@ -1254,8 +1254,9 @@ def main() -> None:
             traceback.print_exc()
             failed += 1
 
-    # Thumbnails
+    # ── Thumbnails ─────────────────────────────────────────────────────────
     thumbnail_queue: list[tuple[str, str]] = []
+
     for record in valid:
         out_base  = str(
             Path(args.output_dir).resolve() /
@@ -1263,25 +1264,31 @@ def main() -> None:
         )
         html_path = f"{out_base}_thumbnail.html"
         png_path  = f"{out_base}_thumbnail.png"
+
         if not Path(png_path).exists():
             try:
+                # ✅ جلب نتائج الفيديو للـ thumbnail
+                vr           = video_results.get(str(record["number"]), {})
+                hook_keyword = vr.get("hook_keyword", record["title"])
+                video_paths  = vr.get("video_paths", [])
+
                 generate_thumbnail_html(
                     title       = record["title"],
-                    hook        = record.get("title", ""),
-                    tone        = "energetic",
                     lang        = lang,
                     output_path = html_path,
+                    keyword     = hook_keyword,
+                    video_paths = video_paths,
                 )
                 thumbnail_queue.append((html_path, png_path))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  ⚠️  Thumbnail HTML error: {e}")
 
     if thumbnail_queue:
         print(f"\n🖼️  Rendering {len(thumbnail_queue)} thumbnail(s)...")
         try:
             render_thumbnails_batch(thumbnail_queue)
         except Exception as e:
-            print(f"  ⚠️  Thumbnail error: {e}")
+            print(f"  ⚠️  Thumbnail render error: {e}")
 
     print(f"\n{'═' * 62}")
     print(
