@@ -1,6 +1,6 @@
 """
 thumbnail.py — Render thumbnail HTML → PNG using Playwright.
-✨ Output: 2560x1440 (2x retina) PNG
+✨ Output: 1080x1920 (9:16 Reels/Shorts)
 ✨ Batch rendering — browser مفتوح مرة واحدة فقط
 ✨ مسارات مطلقة
 """
@@ -30,9 +30,9 @@ _LAUNCH_ARGS = [
     "--lang=ar,fr,en",
 ]
 
-_VIEWPORT     = {"width": 1280, "height": 720}
-_SCALE_FACTOR = 2        # → 2560×1440 sharp output
-_FONT_WAIT_MS = 1500     # انتظار تحميل الخطوط المحلية
+_VIEWPORT     = {"width": 1080, "height": 1920}  # ✅ 9:16 Reels
+_SCALE_FACTOR = 1                                  # ✅ بدون تضخيم
+_FONT_WAIT_MS = 1500
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -45,13 +45,6 @@ def render_thumbnail(
 ) -> Path:
     """
     Render ملف HTML واحد → PNG.
-
-    Args:
-        html_path:  مسار ملف HTML
-        output_png: مسار ملف PNG (اختياري — يُشتق من html_path)
-
-    Returns:
-        Path لملف PNG الناتج
     """
     results = render_thumbnails_batch([(html_path, output_png)])
     return results[0]
@@ -62,18 +55,6 @@ def render_thumbnails_batch(
 ) -> list[Path]:
     """
     Render عدة thumbnails بـ browser مفتوح مرة واحدة فقط.
-
-    Args:
-        items: list of (html_path, output_png | None)
-
-    Returns:
-        list of Path to PNG files (بنفس الترتيب)
-
-    مثال:
-        paths = render_thumbnails_batch([
-            ("out/video_1_thumbnail.html", None),
-            ("out/video_2_thumbnail.html", None),
-        ])
     """
     if not items:
         return []
@@ -86,9 +67,9 @@ def render_thumbnails_batch(
             args     = _LAUNCH_ARGS,
         )
         context: BrowserContext = browser.new_context(
-            viewport          = _VIEWPORT,
+            viewport            = _VIEWPORT,
             device_scale_factor = _SCALE_FACTOR,
-            locale            = "ar-SA",
+            locale              = "ar-SA",
         )
         page: Page = context.new_page()
 
@@ -101,7 +82,6 @@ def render_thumbnails_batch(
                     f"  ⚠️  Thumbnail failed for "
                     f"{html_path}: {e}"
                 )
-                # أضف None-safe path للحفاظ على الترتيب
                 fallback = Path(
                     output_png or
                     str(html_path).replace(".html", ".png")
@@ -140,21 +120,22 @@ def _render_one(
     )
     page.wait_for_timeout(_FONT_WAIT_MS)
 
+    # ✅ 1080×1920 — مقاس Reels
     page.screenshot(
-        path           = str(output_png),
-        type           = "png",
-        full_page      = False,
-        clip           = {
+        path      = str(output_png),
+        type      = "png",
+        full_page = False,
+        clip      = {
             "x":      0,
             "y":      0,
-            "width":  1280,
-            "height": 720,
+            "width":  1080,
+            "height": 1920,
         },
     )
 
     size_kb = output_png.stat().st_size // 1024
     print(
         f"  🖼️  Thumbnail → {output_png.name} "
-        f"({size_kb} KB, 2560×1440)"
+        f"({size_kb} KB, 1080×1920)"
     )
     return output_png
