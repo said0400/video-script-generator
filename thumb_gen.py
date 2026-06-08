@@ -1,119 +1,225 @@
 """
-thumb_gen.py — Generate professional thumbnail HTML.
+thumb_gen.py — Generate professional thumbnail for Reels.
+✨ مقاس 1080×1920 (9:16 Reels)
+✨ صورة خلفية من Pexels Photos API
+✨ Fallback: frame من أول فيديو خام
+✨ Fallback أخير: خلفية سوداء
+✨ فلتر أسود غامض
 ✨ يدعم AR, FR, EN
-✨ خطوط محلية (بدون Google Fonts)
-✨ مسارات مطلقة
 """
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
+import requests
+
 # ═════════════════════════════════════════════════════════════════════════════
-# TONE STYLES
+# CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
-TONE_STYLES: dict[str, tuple[str, str]] = {
-    "energetic": (
-        "linear-gradient(135deg,#FF6B35 0%,#F7C59F 50%,#1a1a2e 100%)",
-        "#FF6B35",
-    ),
-    "inspirational": (
-        "linear-gradient(135deg,#667eea 0%,#764ba2 50%,#1a1a2e 100%)",
-        "#a78bfa",
-    ),
-    "emotional": (
-        "linear-gradient(135deg,#f093fb 0%,#f5576c 50%,#1a1a2e 100%)",
-        "#f093fb",
-    ),
-    "calm": (
-        "linear-gradient(135deg,#2193b0 0%,#6dd5ed 50%,#1a1a2e 100%)",
-        "#6dd5ed",
-    ),
-    "mysterious": (
-        "linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%)",
-        "#e94560",
-    ),
-    "urgent": (
-        "linear-gradient(135deg,#FF0000 0%,#FF6B35 50%,#1a1a2e 100%)",
-        "#FFD700",
-    ),
-}
+PEXELS_PHOTOS_URL = "https://api.pexels.com/v1/search"
+API_TIMEOUT       = 15
+WIDTH             = 1080
+HEIGHT            = 1920
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FETCH BACKGROUND IMAGE
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _fetch_pexels_photo(
+    keyword:     str,
+    output_path: str,
+) -> bool:
+    """
+    جلب صورة من Pexels Photos API.
+    Returns True إذا نجح.
+    """
+    api_key = os.environ.get("PEXELS_API_KEY", "").strip()
+    if not api_key:
+        api_key = os.environ.get("PEXELS_API_KEY_1", "").strip()
+    if not api_key:
+        return False
+
+    try:
+        r = requests.get(
+            PEXELS_PHOTOS_URL,
+            headers = {"Authorization": api_key},
+            params  = {
+                "query":       keyword,
+                "per_page":    5,
+                "orientation": "portrait",
+            },
+            timeout = API_TIMEOUT,
+        )
+        r.raise_for_status()
+        photos = r.json().get("photos", [])
+
+        if not photos:
+            return False
+
+        # اختر أوضح صورة
+        photo = photos[0]
+        img_url = (
+            photo.get("src", {}).get("portrait") or
+            photo.get("src", {}).get("large2x") or
+            photo.get("src", {}).get("large")
+        )
+
+        if not img_url:
+            return False
+
+        img_r = requests.get(img_url, timeout=30)
+        img_r.raise_for_status()
+
+        Path(output_path).write_bytes(img_r.content)
+        print(f"  🖼️  Pexels photo: {keyword!r} → {Path(output_path).name}")
+        return True
+
+    except Exception as e:
+        print(f"  ⚠️  Pexels photo failed: {e}")
+        return False
+
+
+def _extract_frame_from_video(
+    video_path: str,
+    output_path: str,
+) -> bool:
+    """
+    استخراج frame من فيديو خام بـ ffmpeg.
+    Returns True إذا نجح.
+    """
+    try:
+        if not Path(video_path).exists():
+            return False
+
+        r = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-ss", "2",
+                "-i", video_path,
+                "-vframes", "1",
+                "-vf", f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT}",
+                "-q:v", "2",
+                output_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+
+        if r.returncode == 0 and Path(output_path).exists():
+            size = Path(output_path).stat().st_size
+            if size > 1000:
+                print(
+                    f"  🖼️  Frame extracted: "
+                    f"{Path(video_path).name}"
+                )
+                return True
+
+        return False
+
+    except Exception as e:
+        print(f"  ⚠️  Frame extraction failed: {e}")
+        return False
+
+
+def _get_background_image(
+    keyword:     str,
+    video_paths: list[str] | None,
+    tmp_dir:     str,
+) -> str | None:
+    """
+    يجلب صورة الخلفية بالأولوية:
+    1. Pexels Photos API
+    2. Frame من أول فيديو خام
+    3. None (سيتم استخدام خلفية سوداء في HTML)
+    """
+    # 1. Pexels Photos
+    pexels_img = str(Path(tmp_dir) / "thumb_bg.jpg")
+    if _fetch_pexels_photo(keyword, pexels_img):
+        return pexels_img
+
+    # 2. Frame من أول فيديو خام
+    if video_paths:
+        for vp in video_paths:
+            if vp and Path(str(vp)).exists():
+                frame_img = str(Path(tmp_dir) / "thumb_frame.jpg")
+                if _extract_frame_from_video(str(vp), frame_img):
+                    return frame_img
+
+    print("  ⚠️  No background image — using black")
+    return None
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # LANGUAGE CONFIG
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _get_lang_config(text: str, lang: str = "ar") -> dict:
-    """احصل على إعدادات اللغة للـ thumbnail."""
-    is_ar = any("\u0600" <= c <= "\u06ff" for c in text)
-    is_fr = lang == "fr" and not is_ar
-
-    if is_ar:
+def _get_lang_config(lang: str) -> dict:
+    """إعدادات اللغة للـ thumbnail."""
+    if lang == "ar":
         return {
-            "dir":    "rtl",
-            "lang":   "ar",
-            "font":   "'Noto Naskh Arabic', 'Amiri', serif",
-            "t_fs":   "62px",
-            "h_fs":   "32px",
-            "label":  "فيديو جديد",
+            "dir":   "rtl",
+            "lang":  "ar",
+            "font":  "'Noto Naskh Arabic', 'Amiri', serif",
+            "align": "center",
         }
-    elif is_fr:
+    elif lang == "fr":
         return {
-            "dir":    "ltr",
-            "lang":   "fr",
-            "font":   "'Noto Sans', 'DejaVu Sans', sans-serif",
-            "t_fs":   "66px",
-            "h_fs":   "30px",
-            "label":  "NOUVELLE VIDÉO",
+            "dir":   "ltr",
+            "lang":  "fr",
+            "font":  "'Noto Sans', 'DejaVu Sans', sans-serif",
+            "align": "center",
         }
     else:
         return {
-            "dir":    "ltr",
-            "lang":   "en",
-            "font":   "'Noto Sans', 'DejaVu Sans', sans-serif",
-            "t_fs":   "70px",
-            "h_fs":   "30px",
-            "label":  "NEW VIDEO",
+            "dir":   "ltr",
+            "lang":  "en",
+            "font":  "'Noto Sans', 'DejaVu Sans', sans-serif",
+            "align": "center",
         }
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FONT SIZE
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _get_font_size(title: str, lang: str) -> str:
+    """حجم الخط حسب طول العنوان."""
+    length = len(title)
+    is_ar  = lang == "ar"
+
+    if length <= 15:
+        return "110px" if is_ar else "100px"
+    elif length <= 25:
+        return "90px"  if is_ar else "82px"
+    elif length <= 40:
+        return "74px"  if is_ar else "68px"
+    elif length <= 55:
+        return "62px"  if is_ar else "56px"
+    else:
+        return "52px"  if is_ar else "48px"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # HTML GENERATOR
 # ═════════════════════════════════════════════════════════════════════════════
 
-def generate_thumbnail_html(
-    title:       str,
-    hook:        str,
-    tone:        str  = "energetic",
-    lang:        str  = "ar",
-    output_path: str  = "thumbnail.html",
+def _generate_html(
+    title:          str,
+    lang:           str,
+    bg_image_path:  str | None,
+    output_path:    str,
 ) -> Path:
-    """
-    توليد ملف HTML للـ thumbnail.
+    """توليد ملف HTML للـ thumbnail."""
+    config    = _get_lang_config(lang)
+    font_size = _get_font_size(title, lang)
 
-    Args:
-        title:       عنوان الفيديو
-        hook:        الجملة الأولى (hook)
-        tone:        نمط التصميم
-        lang:        اللغة (ar, fr, en)
-        output_path: مسار الملف الناتج
-
-    Returns:
-        Path للملف الناتج
-    """
-    config    = _get_lang_config(title, lang)
-    gradient, accent = TONE_STYLES.get(
-        tone, TONE_STYLES["energetic"]
-    )
-
-    hook_short = (
-        (hook[:85] + "...")
-        if len(hook) > 85
-        else hook
-    )
-
-    # تنظيف النص من HTML
     def esc(s: str) -> str:
         return (
             s.replace("&", "&amp;")
@@ -122,6 +228,13 @@ def generate_thumbnail_html(
              .replace('"', "&quot;")
              .replace("'", "&#039;")
         )
+
+    # الخلفية
+    if bg_image_path and Path(bg_image_path).exists():
+        bg_image_abs = Path(bg_image_path).resolve()
+        bg_style = f"background-image: url('file://{bg_image_abs}'); background-size: cover; background-position: center;"
+    else:
+        bg_style = "background: #000000;"
 
     html = f"""<!DOCTYPE html>
 <html lang="{config['lang']}">
@@ -133,132 +246,155 @@ def generate_thumbnail_html(
       padding:    0;
       box-sizing: border-box;
     }}
+
     html, body {{
-      width:    1280px;
-      height:   720px;
+      width:    {WIDTH}px;
+      height:   {HEIGHT}px;
       overflow: hidden;
-      font-family: {config['font']};
     }}
 
+    /* الخلفية */
     .bg {{
-      position:   absolute;
-      inset:      0;
-      background: {gradient};
+      position:            absolute;
+      inset:               0;
+      {bg_style}
     }}
 
+    /* فلتر أسود غامض */
     .overlay {{
       position:   absolute;
-      bottom:     0;
-      left:       0;
-      right:      0;
-      height:     65%;
-      background: linear-gradient(
-        to top,
-        rgba(0,0,0,.9),
-        transparent
-      );
+      inset:      0;
+      background: rgba(0, 0, 0, 0.78);
     }}
 
-    .bar {{
+    /* gradient إضافي للحواف */
+    .vignette {{
       position:   absolute;
-      left:       0;
-      top:        0;
-      bottom:     0;
-      width:      12px;
-      background: {accent};
-      box-shadow: 0 0 40px {accent};
-    }}
-
-    .circle {{
-      position:      absolute;
-      top:           -130px;
-      right:         -130px;
-      width:         480px;
-      height:        480px;
-      border-radius: 50%;
-      background:    radial-gradient(
-        circle,
-        {accent}22,
-        transparent 70%
+      inset:      0;
+      background: radial-gradient(
+        ellipse at center,
+        transparent 30%,
+        rgba(0, 0, 0, 0.55) 100%
       );
     }}
 
+    /* حاوية النص */
     .content {{
       position:        absolute;
       inset:           0;
       display:         flex;
       flex-direction:  column;
-      justify-content: flex-end;
-      padding:         52px 80px;
-      direction:       {config['dir']};
-    }}
-
-    .tag {{
-      display:         inline-flex;
       align-items:     center;
-      gap:             12px;
-      background:      {accent}22;
-      border:          2px solid {accent}88;
-      border-radius:   50px;
-      padding:         10px 28px;
-      margin-bottom:   24px;
-      width:           fit-content;
+      justify-content: center;
+      padding:         80px 60px;
+      direction:       {config['dir']};
+      text-align:      {config['align']};
     }}
 
-    .dot {{
-      width:         12px;
-      height:        12px;
-      border-radius: 50%;
-      background:    {accent};
-      box-shadow:    0 0 12px {accent};
-    }}
-
-    .tag-text {{
-      font-size:      20px;
-      font-weight:    800;
-      color:          {accent};
-      letter-spacing: .1em;
-      text-transform: uppercase;
-    }}
-
+    /* العنوان */
     .title {{
-      font-size:   {config['t_fs']};
-      font-weight: 900;
-      color:       #fff;
-      line-height: 1.15;
-      text-shadow: 0 4px 30px rgba(0,0,0,.8);
-      margin-bottom: 20px;
-      max-width:   1060px;
+      font-family:  {config['font']};
+      font-size:    {font_size};
+      font-weight:  900;
+      color:        #FFFFFF;
+      line-height:  1.3;
+      word-break:   break-word;
+      direction:    {config['dir']};
+      text-align:   {config['align']};
+      text-shadow:
+        0 0 40px rgba(255, 255, 255, 0.15),
+        0 4px 30px rgba(0, 0, 0, 0.9),
+        2px 2px 0 rgba(0, 0, 0, 0.8),
+        -2px -2px 0 rgba(0, 0, 0, 0.8);
+      -webkit-text-stroke: 1px rgba(0, 0, 0, 0.5);
+      paint-order: stroke fill;
+      max-width: 960px;
     }}
 
-    .hook {{
-      font-size:   {config['h_fs']};
-      font-weight: 600;
-      color:       rgba(255,255,255,.68);
-      line-height: 1.45;
-      max-width:   900px;
-      text-shadow: 0 2px 10px rgba(0,0,0,.7);
+    /* الخط الأحمر */
+    .line {{
+      width:         160px;
+      height:        5px;
+      background:    linear-gradient(
+        90deg,
+        transparent,
+        #FF1744,
+        transparent
+      );
+      border-radius: 3px;
+      margin-top:    40px;
+      flex-shrink:   0;
     }}
+
   </style>
 </head>
 <body>
+
   <div class="bg"></div>
-  <div class="circle"></div>
   <div class="overlay"></div>
-  <div class="bar"></div>
+  <div class="vignette"></div>
 
   <div class="content">
-    <div class="tag">
-      <div class="dot"></div>
-      <span class="tag-text">{esc(config['label'])}</span>
-    </div>
     <div class="title">{esc(title)}</div>
-    <div class="hook">{esc(hook_short)}</div>
+    <div class="line"></div>
   </div>
+
 </body>
 </html>"""
 
     path = Path(output_path).resolve()
     path.write_text(html, encoding="utf-8")
-    print(f"  🖼️  Thumbnail HTML → {path.name}")
     return path
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# PUBLIC API
+# ═════════════════════════════════════════════════════════════════════════════
+
+def generate_thumbnail_html(
+    title:       str,
+    lang:        str        = "ar",
+    output_path: str        = "thumbnail.html",
+    hook:        str        = "",
+    tone:        str        = "energetic",
+    keyword:     str        = "",
+    video_paths: list | None = None,
+) -> Path:
+    """
+    توليد ملف HTML للـ thumbnail.
+
+    Args:
+        title:       عنوان الفيديو (الظاهر على الـ thumbnail)
+        lang:        اللغة (ar, fr, en)
+        output_path: مسار ملف HTML الناتج
+        hook:        غير مستخدم (للتوافق مع الكود القديم)
+        tone:        غير مستخدم (للتوافق مع الكود القديم)
+        keyword:     كلمة البحث للصورة (hook_keyword من AI)
+        video_paths: قائمة الفيديوهات المحملة (للـ fallback)
+
+    Returns:
+        Path للملف الناتج
+    """
+    out_path = Path(output_path).resolve()
+    tmp_dir  = str(out_path.parent)
+
+    # كلمة البحث
+    search_kw = keyword.strip() if keyword else title.strip()
+
+    # جلب الصورة
+    bg_image = _get_background_image(
+        keyword     = search_kw,
+        video_paths = [str(p) for p in video_paths] if video_paths else None,
+        tmp_dir     = tmp_dir,
+    )
+
+    # توليد HTML
+    result = _generate_html(
+        title         = title,
+        lang          = lang,
+        bg_image_path = bg_image,
+        output_path   = str(out_path),
+    )
+
+    print(f"  🖼️  Thumbnail HTML → {out_path.name}")
+    return result
