@@ -1,3 +1,4 @@
+# .github/workflows/generate_ar.yml
 name: 🇸🇦 Arabic Videos (Auto + Manual)
 
 on:
@@ -27,8 +28,14 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
-      publish:
+      publish_fb:
         description: "📘 Publish to Facebook?"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      publish_yt:
+        description: "📺 Publish to YouTube?"
         required: true
         default: "true"
         type: choice
@@ -72,7 +79,6 @@ jobs:
       - name: 🔧 Install system deps
         run: |
           sudo apt-get update -q
-
           sudo apt-get install -y \
             ffmpeg libsndfile1 \
             libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
@@ -82,10 +88,8 @@ jobs:
             libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
             fonts-noto fonts-noto-core fonts-hosny-amiri \
             fonts-sil-scheherazade || true
-
           sudo apt-get install -y libasound2t64 libasound2-dev || \
             sudo apt-get install -y libasound2 libasound2-dev || true
-
           sudo fc-cache -fv
 
       - name: 💾 Cache WhisperX models
@@ -129,42 +133,23 @@ jobs:
             pandas==2.2.3
 
       - name: 📦 Install Python deps
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: 🟢 Setup Node.js 20
-        if: >-
-          ${{
-            github.event.inputs.script_only != 'true' &&
-            github.event.inputs.no_video != 'true'
-          }}
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: 📦 Install Node deps
-        if: >-
-          ${{
-            github.event.inputs.script_only != 'true' &&
-            github.event.inputs.no_video != 'true'
-          }}
         working-directory: remotion
         run: |
-          if [ -f "package-lock.json" ]; then
-            npm ci
-          else
-            npm install
-          fi
+          if [ -f "package-lock.json" ]; then npm ci
+          else npm install; fi
 
       - name: 🌐 Install Playwright Chromium (Python)
         run: python -m playwright install chromium
 
       - name: 🌐 Install Playwright Chromium (Node)
-        if: >-
-          ${{
-            github.event.inputs.script_only != 'true' &&
-            github.event.inputs.no_video != 'true'
-          }}
         working-directory: remotion
         run: npx playwright install chromium
 
@@ -216,8 +201,11 @@ jobs:
           HF_TOKEN:          ${{ secrets.HF_TOKEN }}
           FB_PAGE_ID:        ${{ secrets.FB_PAGE_ID_AR }}
           FB_PAGE_TOKEN:     ${{ secrets.FB_PAGE_TOKEN_AR }}
+          YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID_AR }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET_AR }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_AR }}
         run: |
-          FLAGS="--lang ar --publish-fb"
+          FLAGS="--lang ar"
 
           if [ -n "${{ github.event.inputs.video_number }}" ]; then
             FLAGS="$FLAGS --video-number ${{ github.event.inputs.video_number }}"
@@ -225,12 +213,12 @@ jobs:
             FLAGS="$FLAGS --auto-next"
           fi
 
-          [ "${{ github.event.inputs.force }}"    = "true" ] && \
-            FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}" = "true" ] && \
-            FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish }}"  = "false" ] && \
-            FLAGS="$FLAGS --no-publish"
+          [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"   = "true" ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && FLAGS="$FLAGS --publish-yt"
+          [ "${{ github.event.inputs.publish_fb }}" = "false" ] && \
+          [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="$FLAGS --no-publish"
 
           python main.py "scripts/videos_ar.xlsx" \
             --output-dir output \
