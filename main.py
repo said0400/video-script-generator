@@ -7,9 +7,8 @@ Pipeline النهائي (تزامن 100%):
   C. بناء خطة الفيديوهات من التوقيتات الحقيقية
   D. إنتاج فيديو خلفية حسب مدة كل جملة الفعلية
   E. Render الكلمات فوق الفيديو
-  ✅ aligned يحتوي على tag لكل جملة
-  ✅ auto-invalidate cache إذا كان قديماً
-  ✅ thumbnail من Pexels Photos
+  ✅ النشر على Facebook و YouTube في نفس الوقت
+  ✅ وصف طويل بلغة الشارع
 """
 
 from __future__ import annotations
@@ -25,10 +24,11 @@ from pathlib import Path
 from db import (
     init_db, is_render_done, mark_render_start,
     mark_render_done, mark_render_failed, save_script_meta,
-    print_db_summary, is_published, has_ai_cache, get_ai_cache,
+    print_db_summary, has_ai_cache, get_ai_cache,
     save_ai_cache, clear_ai_cache, show_ai_cache,
     get_next_video_number, reset_published_for_lang,
     mark_video_published_for_lang,
+    is_published_facebook, is_published_youtube,
 )
 from script_reader import (
     read_scripts, validate_scripts,
@@ -49,7 +49,14 @@ from sync           import (
 )
 from audio_manager  import mix_voice_music_sfx
 from facebook       import (
-    publish_to_facebook, credentials_available, check_credentials,
+    publish_to_facebook,
+    credentials_available as fb_credentials_available,
+    check_credentials     as fb_check_credentials,
+)
+from youtube import (
+    publish_to_youtube,
+    credentials_available as yt_credentials_available,
+    check_credentials     as yt_check_credentials,
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -79,24 +86,25 @@ def parse_args() -> argparse.Namespace:
         description="🎬 Video Generator",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    p.add_argument("input_file",       type=str, nargs="?", default=None)
-    p.add_argument("--output-dir",     type=str, default="output")
-    p.add_argument("--video-number",   type=str, default=None)
-    p.add_argument("--lang",           type=str, default="ar",
+    p.add_argument("input_file",        type=str, nargs="?", default=None)
+    p.add_argument("--output-dir",      type=str, default="output")
+    p.add_argument("--video-number",    type=str, default=None)
+    p.add_argument("--lang",            type=str, default="ar",
                    choices=["ar", "fr", "en"])
-    p.add_argument("--auto-next",      action="store_true")
-    p.add_argument("--formats",        type=str, default="9x16")
-    p.add_argument("--no-export",      action="store_true")
-    p.add_argument("--script-only",    action="store_true")
-    p.add_argument("--no-video",       action="store_true")
-    p.add_argument("--force",          action="store_true")
-    p.add_argument("--force-ai",       action="store_true")
-    p.add_argument("--publish-fb",     action="store_true")
-    p.add_argument("--no-publish",     action="store_true")
-    p.add_argument("--show-ai-cache",  type=str, nargs="?",
+    p.add_argument("--auto-next",       action="store_true")
+    p.add_argument("--formats",         type=str, default="9x16")
+    p.add_argument("--no-export",       action="store_true")
+    p.add_argument("--script-only",     action="store_true")
+    p.add_argument("--no-video",        action="store_true")
+    p.add_argument("--force",           action="store_true")
+    p.add_argument("--force-ai",        action="store_true")
+    p.add_argument("--publish-fb",      action="store_true")
+    p.add_argument("--publish-yt",      action="store_true")
+    p.add_argument("--no-publish",      action="store_true")
+    p.add_argument("--show-ai-cache",   type=str, nargs="?",
                    const="all", default=None)
-    p.add_argument("--clear-ai-cache", type=str, default=None)
-    p.add_argument("--reset-videos",   action="store_true")
+    p.add_argument("--clear-ai-cache",  type=str, default=None)
+    p.add_argument("--reset-videos",    action="store_true")
     return p.parse_args()
 
 
@@ -109,11 +117,18 @@ def _estimate_duration(text: str) -> int:
                int(len(text.split()) / (WPM / 60))))
 
 
-def _should_publish(args: argparse.Namespace) -> bool:
+def _should_publish_fb(args: argparse.Namespace) -> bool:
     if args.no_publish:  return False
     if args.script_only: return False
     if args.no_video:    return False
-    return credentials_available() or args.publish_fb
+    return args.publish_fb or fb_credentials_available()
+
+
+def _should_publish_yt(args: argparse.Namespace, lang: str) -> bool:
+    if args.no_publish:  return False
+    if args.script_only: return False
+    if args.no_video:    return False
+    return args.publish_yt or yt_credentials_available(lang)
 
 
 def _get_content_for_lang(record: dict, lang: str) -> str:
@@ -191,12 +206,10 @@ def _inject_tags_into_aligned(
     result = []
     for i, seg in enumerate(aligned):
         seg_copy = dict(seg)
-        if i < len(tagged):
-            seg_copy["tag"] = (
-                tagged[i].get("final_tag") or "information"
-            )
-        else:
-            seg_copy["tag"] = "information"
+        seg_copy["tag"] = (
+            tagged[i].get("final_tag") or "information"
+            if i < len(tagged) else "information"
+        )
         result.append(seg_copy)
 
     print(f"  🏷️  Tags injected: {len(result)} segments")
@@ -206,7 +219,6 @@ def _inject_tags_into_aligned(
             f"{seg.get('start', 0):.2f}s → "
             f"{seg.get('end', 0):.2f}s"
         )
-
     return result
 
 
@@ -866,38 +878,68 @@ def _rebuild_text_with_tag(tagged: list[dict]) -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PUBLISH
+# ✅ PUBLISH — Facebook + YouTube في نفس الوقت
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _do_publish(
-    video_path:   str,
-    record:       dict,
-    ai_data:      dict,
-    lang:         str,
-    video_number: str,
+    video_path:         str,
+    record:             dict,
+    ai_data:            dict,
+    lang:               str,
+    video_number:       str,
+    should_publish_fb:  bool,
+    should_publish_yt:  bool,
 ) -> None:
+    """
+    ينشر على Facebook و YouTube في نفس الوقت.
+    يستخدم street_description للوصف على المنصتين.
+    """
     if not Path(video_path).exists():
-        print("  ❌ Publish skipped: not found")
+        print("  ❌ Publish skipped: video not found")
         return
 
-    captions   = ai_data.get("captions", {})
-    ai_caption = (
-        captions.get(lang) or captions.get("ar") or
-        captions.get("en") or record.get("title", "")
-    )
+    # ✅ الوصف الطويل من street_description
+    street_description = ai_data.get("street_description", "")
+    title              = record.get("title", "")
 
-    try:
-        publish_to_facebook(
-            video_path = video_path,
-            record     = record,
-            lang       = lang,
-            as_reel    = True,
-            ai_caption = ai_caption,
-        )
-        mark_video_published_for_lang(video_number, lang)
-        print(f"  📘 Published ({lang.upper()})")
-    except Exception as e:
-        print(f"  ❌ Publish failed: {e}")
+    # ── Facebook ──────────────────────────────────────────────────────────
+    if should_publish_fb:
+        if is_published_facebook(video_number, lang):
+            print(f"  ⏭️  Facebook: already published")
+        else:
+            try:
+                publish_to_facebook(
+                    video_path = video_path,
+                    record     = record,
+                    lang       = lang,
+                    as_reel    = True,
+                    ai_caption = street_description or title,
+                )
+                mark_video_published_for_lang(
+                    video_number, lang, "facebook"
+                )
+                print(f"  📘 Facebook: published ✅")
+            except Exception as e:
+                print(f"  ❌ Facebook publish failed: {e}")
+
+    # ── YouTube ───────────────────────────────────────────────────────────
+    if should_publish_yt:
+        if is_published_youtube(video_number, lang):
+            print(f"  ⏭️  YouTube: already published")
+        else:
+            try:
+                publish_to_youtube(
+                    video_path         = video_path,
+                    record             = record,
+                    lang               = lang,
+                    street_description = street_description,
+                )
+                mark_video_published_for_lang(
+                    video_number, lang, "youtube"
+                )
+                print(f"  📺 YouTube: published ✅")
+            except Exception as e:
+                print(f"  ❌ YouTube publish failed: {e}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -905,21 +947,16 @@ def _do_publish(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def process_video(
-    record:         dict,
-    args:           argparse.Namespace,
-    out_dir:        str,
-    should_publish: bool,
+    record:            dict,
+    args:              argparse.Namespace,
+    out_dir:           str,
+    should_publish_fb: bool,
+    should_publish_yt: bool,
 ) -> dict:
-    """
-    ✅ يُرجع dict يحتوي على:
-    - video_paths: الفيديوهات المحملة
-    - hook_keyword: كلمة البحث للـ thumbnail
-    """
     num   = str(record["number"])
     title = record["title"]
     lang  = args.lang
 
-    # ✅ نتيجة افتراضية للـ thumbnail
     result = {
         "video_paths":  [],
         "hook_keyword": title,
@@ -972,7 +1009,6 @@ def process_video(
         ai_data.get("tagged") or tagged
     )
 
-    # ✅ حفظ hook_keyword للـ thumbnail
     hook_keyword = ai_data.get("hook_keyword", "") or title
     result["hook_keyword"] = hook_keyword
 
@@ -986,6 +1022,11 @@ def process_video(
 
     if script_data.get("custom_hook"):
         print(f"  🪝 Hook: '{script_data['custom_hook']}'")
+
+    # ✅ طباعة الوصف
+    street_desc = ai_data.get("street_description", "")
+    if street_desc:
+        print(f"  📝 Street Description: {len(street_desc)} chars")
 
     save_script_meta(
         video_number = num,
@@ -1060,7 +1101,6 @@ def process_video(
             aligned               = aligned,
         )
 
-        # ✅ حفظ video_paths للـ thumbnail
         result["video_paths"] = [str(p) for p in video_paths]
 
         # D. Background video
@@ -1093,8 +1133,18 @@ def process_video(
 
         mark_render_done(num, lang, str(final_video), real_dur)
 
-        if should_publish:
-            _do_publish(str(final_video), record, ai_data, lang, num)
+        # ✅ F. Publish — Facebook + YouTube
+        print(f"\n  {'─'*55}")
+        print("  ✅ STEP F: Publishing")
+        _do_publish(
+            video_path        = str(final_video),
+            record            = record,
+            ai_data           = ai_data,
+            lang              = lang,
+            video_number      = num,
+            should_publish_fb = should_publish_fb,
+            should_publish_yt = should_publish_yt,
+        )
 
         mb = (
             final_video.stat().st_size / 1_048_576
@@ -1146,24 +1196,34 @@ def main() -> None:
         print("❌ Error: input_file is required")
         sys.exit(1)
 
-    lang         = args.lang
-    will_publish = _should_publish(args)
+    lang              = args.lang
+    will_publish_fb   = _should_publish_fb(args)
+    will_publish_yt   = _should_publish_yt(args, lang)
 
     print(f"\n{'═' * 62}")
     print(f"  🚀  Video Generator — {lang.upper()}")
     print(f"{'═' * 62}")
-    print(f"  Input    : {args.input_file}")
-    print(f"  Language : {lang.upper()}")
-    print(f"  Output   : {args.output_dir}")
-    print(f"  Pipeline : WhisperX → tag-based clips → visual FX ✅")
+    print(f"  Input      : {args.input_file}")
+    print(f"  Language   : {lang.upper()}")
+    print(f"  Output     : {args.output_dir}")
+    print(f"  Pipeline   : WhisperX → tag-based clips → visual FX ✅")
+    print(f"  Facebook   : {'✅' if will_publish_fb else '❌'}")
+    print(f"  YouTube    : {'✅' if will_publish_yt else '❌'}")
     print()
     print_db_summary()
 
-    if will_publish:
+    # Check credentials
+    if will_publish_fb:
         print(f"\n📘 Checking Facebook credentials...")
-        if not check_credentials():
+        if not fb_check_credentials():
             print("  ⚠️  FB credentials invalid — disabled")
-            will_publish = False
+            will_publish_fb = False
+
+    if will_publish_yt:
+        print(f"\n📺 Checking YouTube credentials ({lang.upper()})...")
+        if not yt_check_credentials(lang):
+            print("  ⚠️  YT credentials invalid — disabled")
+            will_publish_yt = False
 
     print(f"\n📖  Reading scripts...")
     try:
@@ -1183,10 +1243,11 @@ def main() -> None:
 
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
-        next_num  = get_next_video_number(lang, available)
+        next_num  = get_next_video_number(lang, available, "facebook")
         if next_num is None:
             print(f"\n  🔄 Looping!")
-            reset_published_for_lang(lang)
+            reset_published_for_lang(lang, "facebook")
+            reset_published_for_lang(lang, "youtube")
             next_num = str(valid[0]["number"])
         print(f"\n  🎯 Auto-next: #{next_num}")
         valid = [
@@ -1205,45 +1266,56 @@ def main() -> None:
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    success = failed = 0
-
-    # ✅ نحفظ نتائج كل فيديو للـ thumbnail
+    success       = failed = 0
     video_results: dict[str, dict] = {}
 
     for i, record in enumerate(valid, 1):
         print(f"\n[{i}/{len(valid)}]")
 
         if not args.force and is_render_done(record["number"], lang):
-            if will_publish and not is_published(
-                record["number"], lang
-            ):
-                out_base = str(
-                    Path(args.output_dir).resolve() /
-                    f"video_{record['number']}_{lang}"
+            # محاولة النشر إذا لم يُنشر بعد
+            out_base = str(
+                Path(args.output_dir).resolve() /
+                f"video_{record['number']}_{lang}"
+            )
+            path = f"{out_base}_final.mp4"
+
+            fb_done = is_published_facebook(record["number"], lang)
+            yt_done = is_published_youtube(record["number"], lang)
+
+            if (
+                Path(path).exists() and
+                (
+                    (will_publish_fb and not fb_done) or
+                    (will_publish_yt and not yt_done)
                 )
-                path = f"{out_base}_final.mp4"
-                if Path(path).exists():
-                    ai_data = (
-                        get_ai_cache(
-                            f"{record['number']}_{lang}"
-                        ) or {"captions": {}}
-                    )
-                    _do_publish(
-                        path, record, ai_data,
-                        lang, record["number"],
-                    )
+            ):
+                ai_data = (
+                    get_ai_cache(
+                        f"{record['number']}_{lang}"
+                    ) or {}
+                )
+                _do_publish(
+                    video_path        = path,
+                    record            = record,
+                    ai_data           = ai_data,
+                    lang              = lang,
+                    video_number      = str(record["number"]),
+                    should_publish_fb = will_publish_fb and not fb_done,
+                    should_publish_yt = will_publish_yt and not yt_done,
+                )
             else:
                 print(f"  ⏭️  #{record['number']} already done")
             continue
 
         try:
             result = process_video(
-                record         = record,
-                args           = args,
-                out_dir        = args.output_dir,
-                should_publish = will_publish,
+                record            = record,
+                args              = args,
+                out_dir           = args.output_dir,
+                should_publish_fb = will_publish_fb,
+                should_publish_yt = will_publish_yt,
             )
-            # ✅ حفظ النتيجة
             video_results[str(record["number"])] = result
             success += 1
         except KeyboardInterrupt:
@@ -1267,7 +1339,6 @@ def main() -> None:
 
         if not Path(png_path).exists():
             try:
-                # ✅ جلب نتائج الفيديو للـ thumbnail
                 vr           = video_results.get(str(record["number"]), {})
                 hook_keyword = vr.get("hook_keyword", record["title"])
                 video_paths  = vr.get("video_paths", [])
@@ -1284,7 +1355,9 @@ def main() -> None:
                 print(f"  ⚠️  Thumbnail HTML error: {e}")
 
     if thumbnail_queue:
-        print(f"\n🖼️  Rendering {len(thumbnail_queue)} thumbnail(s)...")
+        print(
+            f"\n🖼️  Rendering {len(thumbnail_queue)} thumbnail(s)..."
+        )
         try:
             render_thumbnails_batch(thumbnail_queue)
         except Exception as e:
