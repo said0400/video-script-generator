@@ -104,8 +104,6 @@ jobs:
             --index-url https://download.pytorch.org/whl/cpu
 
       - name: 📦 Install WhisperX
-        run: |
-          pip install git+https://github.com/m-bain/whisperX.git
 
       - name: 📦 Install Python deps
         run: |
