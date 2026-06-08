@@ -5,7 +5,7 @@ audio_manager.py — Background music and SFX mixing
 ✨ Compressor احترافي
 ✨ Smart SFX
 ✨ يدعم WAV و MP3
-✨ NEW: Sentence Transition SFX عند نهاية كل جملة
+✨ Sentence Transition SFX عند نهاية كل جملة
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ SFX_POOLS: dict[str, Path] = {
 }
 
 SMART_SFX_DIR      = SFX_DIR / "smart"
-TRANSITION_SFX_DIR = SFX_DIR / "transitions"  # ✅ NEW
+TRANSITION_SFX_DIR = SFX_DIR / "transitions"
 
 SFX_KEYWORDS: dict[str, list[str]] = {
     "impact_heavy": [
@@ -146,7 +146,7 @@ COMPRESSOR_FILTER = (
     "knee=2dB"
 )
 
-# ✅ NEW: حجم مؤثرات الانتقال حسب الـ tag
+# حجم مؤثرات الانتقال حسب الـ tag
 TAG_TRANSITION_VOLUME: dict[str, float] = {
     "shock":       0.90,
     "urgency":     0.85,
@@ -312,7 +312,7 @@ def build_smart_sfx_track(
     if not active_sfx:
         return None
 
-    print(f"  🔊 Smart SFX: {len(active_sfx)} effects detected")
+    print(f"  🔊 Smart SFX: {len(active_sfx)} effects")
     for sfx in active_sfx:
         print(
             f"     [{sfx['time']:.2f}s] "
@@ -356,7 +356,7 @@ def build_smart_sfx_track(
     )
 
     if result.returncode != 0:
-        print(f"  ⚠️  Smart SFX track failed: {result.stderr[-150:]}")
+        print(f"  ⚠️  Smart SFX track failed")
         return None
 
     print(f"  ✅ Smart SFX track built")
@@ -364,8 +364,7 @@ def build_smart_sfx_track(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ NEW: SENTENCE TRANSITION SFX
-# مؤثر صوتي عند نهاية كل جملة مرتبط بالـ tag
+# SENTENCE TRANSITION SFX
 # ═════════════════════════════════════════════════════════════════════════════
 
 def build_sentence_transition_sfx_track(
@@ -375,40 +374,20 @@ def build_sentence_transition_sfx_track(
     tagged:         list[dict] | None = None,
 ) -> Path | None:
     """
-    ✅ NEW: يبني مسار SFX عند نهاية كل جملة.
-
-    - يضع مؤثر صوتي عند end_time لكل جملة عدا الأخيرة
-    - حجم كل مؤثر يعتمد على tag الجملة
-    - يدور بين ملفات sfx/transitions/ تلقائياً
-    - إذا لم توجد ملفات transitions → يرجع None بهدوء
-
-    Args:
-        aligned:        قائمة الجمل مع timestamps من WhisperX
-        total_duration: المدة الكلية للصوت
-        output_path:    مسار ملف الـ SFX الناتج
-        tagged:         قائمة الجمل مع tags (اختياري)
-
-    Returns:
-        Path للملف أو None
+    يبني مسار SFX عند نهاية كل جملة.
+    حجم كل مؤثر يعتمد على tag الجملة.
     """
     if not aligned or len(aligned) < 2:
         return None
 
     if not TRANSITION_SFX_DIR.exists():
-        print(
-            f"  ⚠️  transitions dir not found: {TRANSITION_SFX_DIR}\n"
-            f"       Create it and add SFX files to enable transitions."
-        )
         return None
 
     sfx_files = _get_audio_files(TRANSITION_SFX_DIR)
     if not sfx_files:
-        print("  ⚠️  No transition SFX files found — skipping")
+        print("  ⚠️  No transition SFX files found")
         return None
 
-    # بناء جدول الانتقالات
-    # كل انتقال = نهاية الجملة (end_time)
-    # نتجاهل آخر جملة (لا يوجد انتقال بعدها)
     transitions: list[dict] = []
 
     for i, seg in enumerate(aligned[:-1]):
@@ -416,12 +395,15 @@ def build_sentence_transition_sfx_track(
         if end_time <= 0:
             continue
 
-        # استخراج الـ tag لهذه الجملة
         tag = "information"
         if tagged and i < len(tagged):
             tag = tagged[i].get("final_tag") or "information"
+        elif seg.get("tag"):
+            tag = seg.get("tag")
 
-        volume = TAG_TRANSITION_VOLUME.get(tag, DEFAULT_TRANSITION_VOLUME)
+        volume = TAG_TRANSITION_VOLUME.get(
+            tag, DEFAULT_TRANSITION_VOLUME
+        )
 
         transitions.append({
             "time":   end_time,
@@ -436,13 +418,7 @@ def build_sentence_transition_sfx_track(
         f"  🎯 Sentence Transition SFX: "
         f"{len(transitions)} transitions"
     )
-    for tr in transitions:
-        print(
-            f"     [{tr['time']:.3f}s] "
-            f"[{tr['tag']}] vol={tr['volume']:.2f}"
-        )
 
-    # بناء FFmpeg command
     inputs: list[str] = []
     delays: list[str] = []
 
@@ -479,10 +455,7 @@ def build_sentence_transition_sfx_track(
     )
 
     if result.returncode != 0:
-        print(
-            f"  ⚠️  Sentence Transition SFX failed:\n"
-            f"      {result.stderr[-200:]}"
-        )
+        print(f"  ⚠️  Sentence Transition SFX failed")
         return None
 
     print("  ✅ Sentence Transition SFX track built")
@@ -516,7 +489,11 @@ def apply_compressor(audio_path: str, output_path: str) -> str:
     return output_path
 
 
-def apply_eq(audio_path: str, output_path: str, lang: str = "ar") -> str:
+def apply_eq(
+    audio_path: str,
+    output_path: str,
+    lang: str = "ar",
+) -> str:
     eq_filter = LANG_EQ.get(lang, LANG_EQ["ar"])
     print(f"  🎚️  Applying {lang.upper()} EQ...")
 
@@ -581,7 +558,7 @@ def _build_ducking_filter(
         return f"volume='{points_str}':eval=frame"
 
     except Exception as e:
-        print(f"  ⚠️  Ducking filter error: {e} — using flat volume")
+        print(f"  ⚠️  Ducking filter error: {e}")
         return f"volume={music_volume}"
 
 
@@ -647,14 +624,14 @@ def mix_audio(
 
     if result.returncode != 0:
         print(f"  ⚠️  Audio mix failed — trying simple mix...")
-        print(f"     Error: {result.stderr[-200:]}")
 
         simple_filter = (
             f"[1:a]volume={music_volume},"
             f"afade=t=in:st=0:d={fade_in:.3f},"
             f"afade=t=out:st={fade_out_st:.3f}:d={fade_out:.3f},"
             f"atrim=0:{voice_dur:.3f}[music];"
-            f"[0:a][music]amix=inputs=2:duration=first:normalize=0[out]"
+            f"[0:a][music]amix=inputs=2:"
+            f"duration=first:normalize=0[out]"
         )
 
         result2 = subprocess.run(
@@ -680,7 +657,7 @@ def mix_audio(
         return Path(output_path)
 
     if aligned and len(aligned) > 0:
-        print(f"  🦆 Ducking applied: {len(aligned)} sentences")
+        print(f"  🦆 Ducking: {len(aligned)} sentences")
 
     print(f"  ✅ Mixed → {Path(output_path).name}")
     return Path(output_path)
@@ -751,7 +728,7 @@ def build_sfx_track(
     )
 
     if result.returncode != 0:
-        print(f"  ⚠️  SFX track failed: {result.stderr[-150:]}")
+        print(f"  ⚠️  SFX track failed")
         return None
 
     print(f"  ✅ SFX track: {len(transition_times)} transitions")
@@ -774,7 +751,7 @@ def mix_voice_music_sfx(
     lang:           str         = "ar",
     aligned:        list[dict]  = None,
     sentences:      list[str]   = None,
-    tagged:         list[dict]  = None,  # ✅ NEW
+    tagged:         list[dict]  = None,
 ) -> Path:
     """
     Full audio pipeline:
@@ -783,22 +760,22 @@ def mix_voice_music_sfx(
       3. اختيار موسيقى
       4. Mix مع Ducking
       5. SFX انتقالات كليبات
-      6. ✅ NEW: Sentence Transition SFX عند نهاية كل جملة
-      7. Smart SFX حسب محتوى الجمل
+      6. Sentence Transition SFX
+      7. Smart SFX
     """
 
-    # ── 1. Compressor ──────────────────────────────────────────────────────
+    # 1. Compressor
     comp_path       = _make_temp_path("voice_comp_", ".wav")
     voice_processed = apply_compressor(voice_path, comp_path)
 
-    # ── 2. EQ ──────────────────────────────────────────────────────────────
+    # 2. EQ
     eq_path  = _make_temp_path("voice_eq_", ".wav")
     voice_eq = apply_eq(voice_processed, eq_path, lang=lang)
 
     if voice_processed != voice_path:
         _safe_unlink(comp_path)
 
-    # ── 3. الموسيقى ────────────────────────────────────────────────────────
+    # 3. الموسيقى
     music_file = get_music_file(content_type, seed=seed)
 
     if music_file is None:
@@ -806,7 +783,7 @@ def mix_voice_music_sfx(
         _safe_unlink(eq_path)
         return Path(voice_path)
 
-    # ── 4. Mix مع Ducking ──────────────────────────────────────────────────
+    # 4. Mix مع Ducking
     p          = Path(output_path)
     mixed_path = _make_temp_path(f"{p.stem}_vm_", ".aac")
 
@@ -821,13 +798,15 @@ def mix_voice_music_sfx(
 
     _safe_unlink(eq_path)
 
-    if str(mixed) == str(voice_eq) or str(mixed) == str(voice_path):
+    if (
+        str(mixed) == str(voice_eq) or
+        str(mixed) == str(voice_path)
+    ):
         _safe_unlink(mixed_path)
         return Path(voice_path)
 
-    # ── 5. SFX انتقالات كليبات ─────────────────────────────────────────────
+    # 5. SFX انتقالات كليبات
     after_transitions = str(mixed)
-    sfx_tmp_path: str | None = None
 
     if clip_durations and len(clip_durations) > 1:
         sfx_tmp_path   = _make_temp_path("sfx_track_", ".wav")
@@ -869,12 +848,11 @@ def mix_voice_music_sfx(
 
             if result.returncode == 0:
                 after_transitions = transition_out
-                print("  ✅ Transitions SFX added")
+                print("  ✅ Clip transitions SFX added")
             else:
                 after_transitions = str(mixed)
-                print("  ⚠️  Transitions SFX failed")
 
-    # ── 6. ✅ NEW: Sentence Transition SFX ─────────────────────────────────
+    # 6. Sentence Transition SFX
     if aligned and len(aligned) > 1:
         sentence_sfx_path = _make_temp_path("sent_trans_sfx_", ".wav")
         after_sentence    = _make_temp_path("after_sent_sfx_", ".aac")
@@ -917,10 +895,9 @@ def mix_voice_music_sfx(
                 after_transitions = after_sentence
                 print("  ✅ Sentence Transition SFX merged")
             else:
-                print("  ⚠️  Sentence Transition SFX merge failed")
                 _safe_unlink(after_sentence)
 
-    # ── 7. Smart SFX ───────────────────────────────────────────────────────
+    # 7. Smart SFX
     if sentences and aligned and SMART_SFX_DIR.exists():
         smart_sfx_path = _make_temp_path("smart_sfx_", ".wav")
         smart_track    = build_smart_sfx_track(
@@ -964,7 +941,7 @@ def mix_voice_music_sfx(
                 )
                 return Path(output_path)
             else:
-                print("  ⚠️  Smart SFX merge failed")
+                print(f"  ⚠️  Smart SFX merge failed")
 
     # بدون Smart SFX
     if after_transitions != output_path:
