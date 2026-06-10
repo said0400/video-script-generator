@@ -42,7 +42,6 @@ const {
 
 const FPS = 30;
 
-// ✅ مقاسات حسب content_mode
 const SHORT_W = 1080, SHORT_H = 1920;
 const LONG_W  = 1920, LONG_H  = 1080;
 
@@ -94,20 +93,32 @@ const COLORS  = EMOTION_COLORS[emotion] || EMOTION_COLORS.default;
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TAG WORD STYLES
+// ✅ TAG WORD STYLES — Original + New tags
 // ═══════════════════════════════════════════════════════════════════════════
 
 const TAG_WORD_STYLES = {
-  shock:       { colorWord: "#FFFFFF", colorGlow: "rgba(255,50,50,0.9)",   scaleMult: 1.30, glowSpread: 80, strokeColor: "rgba(255,0,0,0.8)",   strokeWidth: 5, brightness: 1.4 },
-  urgency:     { colorWord: "#FF2200", colorGlow: "rgba(255,34,0,0.8)",    scaleMult: 1.20, glowSpread: 60, strokeColor: "rgba(0,0,0,0.9)",     strokeWidth: 4, brightness: 1.3 },
-  intrigue:    { colorWord: "#FFD700", colorGlow: "rgba(255,215,0,0.7)",   scaleMult: 1.0,  glowSpread: 50, strokeColor: "rgba(0,0,0,0.95)",    strokeWidth: 4, brightness: 1.0 },
-  emotional:   { colorWord: "#FF8FAB", colorGlow: "rgba(255,143,171,0.7)", scaleMult: 0.95, glowSpread: 45, strokeColor: "rgba(0,0,0,0.9)",     strokeWidth: 4, brightness: 1.0 },
-  confident:   { colorWord: "#FFFFFF", colorGlow: "rgba(255,255,255,0.6)", scaleMult: 1.10, glowSpread: 40, strokeColor: "rgba(0,0,0,0.95)",    strokeWidth: 5, brightness: 1.2 },
-  inspiration: { colorWord: "#FFD700", colorGlow: "rgba(255,215,0,0.8)",   scaleMult: 1.15, glowSpread: 70, strokeColor: "rgba(0,0,0,0.9)",     strokeWidth: 4, brightness: 1.3 },
-  wisdom:      { colorWord: "#82B1FF", colorGlow: "rgba(130,177,255,0.6)", scaleMult: 0.90, glowSpread: 35, strokeColor: "rgba(0,0,0,0.9)",     strokeWidth: 3, brightness: 0.95 },
-  desire:      { colorWord: "#FFB347", colorGlow: "rgba(255,179,71,0.7)",  scaleMult: 1.0,  glowSpread: 45, strokeColor: "rgba(0,0,0,0.9)",     strokeWidth: 4, brightness: 1.1 },
-  calm:        { colorWord: "#80DEEA", colorGlow: "rgba(128,222,234,0.5)", scaleMult: 0.85, glowSpread: 30, strokeColor: "rgba(0,0,0,0.85)",    strokeWidth: 3, brightness: 0.9 },
-  information: { colorWord: "#FFFFFF", colorGlow: "rgba(255,255,255,0.35)",scaleMult: 1.0,  glowSpread: 30, strokeColor: "rgba(0,0,0,0.95)",    strokeWidth: 4, brightness: 1.0 },
+  // ── Original tags ────────────────────────────────────────────────────────
+  shock:        { colorWord: "#FFFFFF", colorGlow: "rgba(255,50,50,0.9)",    scaleMult: 1.30, glowSpread: 80, strokeColor: "rgba(255,0,0,0.8)",    strokeWidth: 5, brightness: 1.4  },
+  urgency:      { colorWord: "#FF2200", colorGlow: "rgba(255,34,0,0.8)",     scaleMult: 1.20, glowSpread: 60, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.3  },
+  intrigue:     { colorWord: "#FFD700", colorGlow: "rgba(255,215,0,0.7)",    scaleMult: 1.0,  glowSpread: 50, strokeColor: "rgba(0,0,0,0.95)",     strokeWidth: 4, brightness: 1.0  },
+  emotional:    { colorWord: "#FF8FAB", colorGlow: "rgba(255,143,171,0.7)",  scaleMult: 0.95, glowSpread: 45, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.0  },
+  confident:    { colorWord: "#FFFFFF", colorGlow: "rgba(255,255,255,0.6)",  scaleMult: 1.10, glowSpread: 40, strokeColor: "rgba(0,0,0,0.95)",     strokeWidth: 5, brightness: 1.2  },
+  inspiration:  { colorWord: "#FFD700", colorGlow: "rgba(255,215,0,0.8)",    scaleMult: 1.15, glowSpread: 70, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.3  },
+  wisdom:       { colorWord: "#82B1FF", colorGlow: "rgba(130,177,255,0.6)",  scaleMult: 0.90, glowSpread: 35, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 3, brightness: 0.95 },
+  desire:       { colorWord: "#FFB347", colorGlow: "rgba(255,179,71,0.7)",   scaleMult: 1.0,  glowSpread: 45, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.1  },
+  calm:         { colorWord: "#80DEEA", colorGlow: "rgba(128,222,234,0.5)",  scaleMult: 0.85, glowSpread: 30, strokeColor: "rgba(0,0,0,0.85)",     strokeWidth: 3, brightness: 0.9  },
+  information:  { colorWord: "#FFFFFF", colorGlow: "rgba(255,255,255,0.35)", scaleMult: 1.0,  glowSpread: 30, strokeColor: "rgba(0,0,0,0.95)",     strokeWidth: 4, brightness: 1.0  },
+
+  // ── ✅ New tags ───────────────────────────────────────────────────────────
+  pause:        { colorWord: "#B0BEC5", colorGlow: "rgba(176,190,197,0.4)",  scaleMult: 0.80, glowSpread: 25, strokeColor: "rgba(0,0,0,0.8)",      strokeWidth: 2, brightness: 0.85 },
+  whisper:      { colorWord: "#CE93D8", colorGlow: "rgba(206,147,216,0.6)",  scaleMult: 0.88, glowSpread: 35, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 3, brightness: 0.9  },
+  curiosity:    { colorWord: "#FFF176", colorGlow: "rgba(255,241,118,0.6)",  scaleMult: 1.02, glowSpread: 45, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.05 },
+  storytelling: { colorWord: "#FFCC80", colorGlow: "rgba(255,204,128,0.5)",  scaleMult: 0.95, glowSpread: 35, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 3, brightness: 1.0  },
+  dramatic:     { colorWord: "#EF9A9A", colorGlow: "rgba(239,154,154,0.7)",  scaleMult: 1.12, glowSpread: 55, strokeColor: "rgba(100,0,0,0.8)",    strokeWidth: 4, brightness: 1.15 },
+  revelation:   { colorWord: "#FFFFFF", colorGlow: "rgba(255,255,200,0.9)",  scaleMult: 1.25, glowSpread: 75, strokeColor: "rgba(200,150,0,0.8)",  strokeWidth: 5, brightness: 1.45 },
+  tension:      { colorWord: "#FF7043", colorGlow: "rgba(255,112,67,0.75)",  scaleMult: 1.15, glowSpread: 55, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.25 },
+  climax:       { colorWord: "#FFFFFF", colorGlow: "rgba(255,100,50,0.95)",  scaleMult: 1.35, glowSpread: 90, strokeColor: "rgba(255,50,0,0.9)",   strokeWidth: 6, brightness: 1.5  },
+  powerful:     { colorWord: "#ECEFF1", colorGlow: "rgba(236,239,241,0.65)", scaleMult: 1.12, glowSpread: 45, strokeColor: "rgba(0,0,0,0.95)",     strokeWidth: 5, brightness: 1.2  },
 };
 
 const DEFAULT_WORD_STYLE = TAG_WORD_STYLES.information;
@@ -118,20 +129,32 @@ function getWordStyle(tag) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TAG TRANSITION CONFIG
+// ✅ TAG TRANSITION CONFIG — Original + New tags
 // ═══════════════════════════════════════════════════════════════════════════
 
 const TAG_TRANSITION = {
-  shock:       { flashColor: "rgba(255,255,255,1.0)", flashFrames: 9,  shakeAmount: 18, scaleBoost: 1.12 },
-  urgency:     { flashColor: "rgba(220,0,0,0.85)",   flashFrames: 7,  shakeAmount: 12, scaleBoost: 1.08 },
-  intrigue:    { flashColor: "rgba(0,0,0,0.6)",      flashFrames: 10, shakeAmount: 5,  scaleBoost: 1.04 },
-  emotional:   { flashColor: "rgba(255,100,150,0.35)",flashFrames: 12, shakeAmount: 3,  scaleBoost: 1.02 },
-  confident:   { flashColor: "rgba(255,255,255,0.55)",flashFrames: 6,  shakeAmount: 6,  scaleBoost: 1.06 },
-  inspiration: { flashColor: "rgba(255,215,0,0.6)",  flashFrames: 8,  shakeAmount: 4,  scaleBoost: 1.07 },
-  wisdom:      { flashColor: "rgba(130,177,255,0.3)", flashFrames: 14, shakeAmount: 2,  scaleBoost: 1.01 },
-  desire:      { flashColor: "rgba(255,100,180,0.4)", flashFrames: 10, shakeAmount: 4,  scaleBoost: 1.03 },
-  calm:        { flashColor: "rgba(100,200,255,0.2)", flashFrames: 16, shakeAmount: 1,  scaleBoost: 1.0  },
-  information: { flashColor: "rgba(255,255,255,0.15)",flashFrames: 6,  shakeAmount: 0,  scaleBoost: 1.0  },
+  // ── Original tags ────────────────────────────────────────────────────────
+  shock:        { flashColor: "rgba(255,255,255,1.0)",  flashFrames: 9,  shakeAmount: 18, scaleBoost: 1.12 },
+  urgency:      { flashColor: "rgba(220,0,0,0.85)",    flashFrames: 7,  shakeAmount: 12, scaleBoost: 1.08 },
+  intrigue:     { flashColor: "rgba(0,0,0,0.6)",       flashFrames: 10, shakeAmount: 5,  scaleBoost: 1.04 },
+  emotional:    { flashColor: "rgba(255,100,150,0.35)", flashFrames: 12, shakeAmount: 3,  scaleBoost: 1.02 },
+  confident:    { flashColor: "rgba(255,255,255,0.55)", flashFrames: 6,  shakeAmount: 6,  scaleBoost: 1.06 },
+  inspiration:  { flashColor: "rgba(255,215,0,0.6)",   flashFrames: 8,  shakeAmount: 4,  scaleBoost: 1.07 },
+  wisdom:       { flashColor: "rgba(130,177,255,0.3)",  flashFrames: 14, shakeAmount: 2,  scaleBoost: 1.01 },
+  desire:       { flashColor: "rgba(255,100,180,0.4)",  flashFrames: 10, shakeAmount: 4,  scaleBoost: 1.03 },
+  calm:         { flashColor: "rgba(100,200,255,0.2)",  flashFrames: 16, shakeAmount: 1,  scaleBoost: 1.0  },
+  information:  { flashColor: "rgba(255,255,255,0.15)", flashFrames: 6,  shakeAmount: 0,  scaleBoost: 1.0  },
+
+  // ── ✅ New tags ───────────────────────────────────────────────────────────
+  pause:        { flashColor: "rgba(0,0,0,0.7)",        flashFrames: 18, shakeAmount: 0,  scaleBoost: 1.0  },
+  whisper:      { flashColor: "rgba(100,0,150,0.4)",    flashFrames: 12, shakeAmount: 2,  scaleBoost: 1.02 },
+  curiosity:    { flashColor: "rgba(255,241,118,0.4)",  flashFrames: 10, shakeAmount: 3,  scaleBoost: 1.03 },
+  storytelling: { flashColor: "rgba(255,200,100,0.25)", flashFrames: 8,  shakeAmount: 1,  scaleBoost: 1.01 },
+  dramatic:     { flashColor: "rgba(180,0,0,0.6)",      flashFrames: 12, shakeAmount: 10, scaleBoost: 1.10 },
+  revelation:   { flashColor: "rgba(255,255,200,0.9)",  flashFrames: 10, shakeAmount: 14, scaleBoost: 1.15 },
+  tension:      { flashColor: "rgba(255,100,0,0.5)",    flashFrames: 8,  shakeAmount: 10, scaleBoost: 1.08 },
+  climax:       { flashColor: "rgba(255,255,255,0.95)", flashFrames: 11, shakeAmount: 20, scaleBoost: 1.18 },
+  powerful:     { flashColor: "rgba(255,255,255,0.6)",  flashFrames: 7,  shakeAmount: 7,  scaleBoost: 1.07 },
 };
 
 const DEFAULT_TRANSITION = {
@@ -240,6 +263,9 @@ function buildSentenceBoundaryMap() {
   const boundaries = aligned.slice(0, -1)
     .filter(s => parseFloat(s.end || 0) > 0);
   console.log(`\n🎬 Sentence boundaries: ${boundaries.length}`);
+  boundaries.forEach(b =>
+    console.log(`   [${b.tag || "info"}] @ ${parseFloat(b.end).toFixed(3)}s`)
+  );
 
   return map;
 }
@@ -265,8 +291,7 @@ function buildClipPlan() {
     });
 
     console.log(
-      `\n📋 Clip plan: ${plan.length} clips ` +
-      `[${content_mode.toUpperCase()}]`
+      `\n📋 Clip plan: ${plan.length} clips [${content_mode.toUpperCase()}]`
     );
     plan.forEach(c =>
       console.log(
@@ -336,7 +361,19 @@ function buildWordList() {
   }
 
   words.sort((a, b) => a.start - b.start);
+
   console.log(`📊 Words: ${words.length}`);
+  if (words.length > 0) {
+    console.log(
+      `   [0]  ${words[0].start.toFixed(3)}s ` +
+      `"${words[0].word}" [${words[0].tag}]`
+    );
+    console.log(
+      `   [-1] ${words[words.length-1].start.toFixed(3)}s ` +
+      `"${words[words.length-1].word}" [${words[words.length-1].tag}]`
+    );
+  }
+
   return words;
 }
 
@@ -409,7 +446,7 @@ function hookIntroKey(f) { return `hi_f${f}`; }
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ HTML BUILDER — SHORT
+// HTML BUILDER — SHORT
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTMLShort({
@@ -427,7 +464,6 @@ function buildHTMLShort({
   const dir      = word ? getDir(word) : "ltr";
   const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
-
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
@@ -615,8 +651,7 @@ function buildHTMLShort({
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ HTML BUILDER — LONG (1920×1080)
-// كلمة كبيرة في الوسط + karaoke subtitle في الأسفل
+// HTML BUILDER — LONG (1920×1080)
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTMLLong({
@@ -633,7 +668,6 @@ function buildHTMLLong({
   const dir      = word ? getDir(word) : "ltr";
   const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
-
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
   const sentDir   = currentSentence ? getDir(currentSentence) : "ltr";
@@ -641,7 +675,6 @@ function buildHTMLLong({
 
   const tagStyle = getWordStyle(tag);
 
-  // Title animation
   const INTRO_FRAMES = Math.floor(1.0 * FPS);
   const OUTRO_FRAMES = Math.floor(1.0 * FPS);
   const isIntro = globalFrame < INTRO_FRAMES;
@@ -651,7 +684,6 @@ function buildHTMLLong({
   if (isIntro) titleOpacity = globalFrame / INTRO_FRAMES;
   if (isOutro) titleOpacity = (totalFrames - globalFrame) / OUTRO_FRAMES;
 
-  // Word animation — وسط الشاشة
   let wordScale = tagStyle.scaleMult, wordOpacity = word ? 1.0 : 0;
   if (word && progress < 0.15) {
     const t = progress / 0.15;
@@ -661,7 +693,6 @@ function buildHTMLLong({
     wordOpacity = 1 - ((progress - 0.85) / 0.15) * 0.3;
   }
 
-  // Transition flash
   let flashOpacity = 0, flashColor = "rgba(0,0,0,0)";
   let shakeX = 0, shakeY = 0;
   if (transitionState) {
@@ -676,7 +707,6 @@ function buildHTMLLong({
     }
   }
 
-  // Word sizing للـ long — أصغر من الشورتس
   const wlen = word ? word.length : 0;
   let baseFontSize = 80;
   if (word) {
@@ -709,7 +739,6 @@ function buildHTMLLong({
     filter:brightness(${tagStyle.brightness});
   `;
 
-  // Subtitle — الجملة الكاملة مع تمييز الكلمة الحالية
   const subtitleHtml = currentSentence
     ? currentSentence.split(/\s+/).map(w => {
         const isHighlighted = normalizeWord(w) === normalizeWord(highlightedWord);
@@ -729,89 +758,46 @@ function buildHTMLLong({
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
   html,body { width:${WIDTH}px; height:${HEIGHT}px; overflow:hidden; background:transparent; }
-
-  /* Overlays */
   .ot { position:absolute; top:0; left:0; right:0; height:35%;
     background:linear-gradient(to bottom,rgba(0,0,0,0.8) 0%,transparent 100%);
     pointer-events:none; z-index:1; }
   .ob { position:absolute; bottom:0; left:0; right:0; height:38%;
     background:linear-gradient(to top,rgba(0,0,0,0.92) 0%,rgba(0,0,0,0.5) 60%,transparent 100%);
     pointer-events:none; z-index:1; }
-
-  /* Flash */
   .flash { position:absolute; inset:0; background:${flashColor}; opacity:${flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
-
-  /* Title — أعلى يسار/يمين */
   .tc {
-    position:absolute;
-    top:28px;
-    ${titleDir === "rtl" ? "right:40px" : "left:40px"};
+    position:absolute; top:28px;
+    ${getDir(display_title) === "rtl" ? "right:40px" : "left:40px"};
     direction:${titleDir};
     text-align:${titleDir === "rtl" ? "right" : "left"};
-    z-index:30;
-    opacity:${titleOpacity.toFixed(4)};
+    z-index:30; opacity:${titleOpacity.toFixed(4)};
   }
-  .tt {
-    font-family:${titleFont}; font-size:${titleFontSize}px;
-    font-weight:900; color:#FFFFFF;
-    display:inline-flex; align-items:center; gap:10px;
-    line-height:1.2; direction:${titleDir};
+  .tt { font-family:${titleFont}; font-size:${titleFontSize}px; font-weight:900; color:#FFFFFF;
+    display:inline-flex; align-items:center; gap:10px; line-height:1.2; direction:${titleDir};
     -webkit-text-stroke:1px rgba(0,0,0,0.8); paint-order:stroke fill;
-    text-shadow:0 0 20px rgba(255,23,68,0.5),0 2px 10px rgba(0,0,0,0.9);
-  }
+    text-shadow:0 0 20px rgba(255,23,68,0.5),0 2px 10px rgba(0,0,0,0.9); }
   .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
-  .tline {
-    display:block; margin-top:8px;
-    width:80px; height:3px; border-radius:2px;
-    background:linear-gradient(90deg,#FF1744,transparent);
-  }
-
-  /* Word — وسط الشاشة */
-  .wc {
-    position:absolute; left:50%; top:46%;
+  .tline { display:block; margin-top:8px; width:80px; height:3px; border-radius:2px; background:#FF1744; }
+  .wc { position:absolute; left:50%; top:46%;
     transform:${wordTransform};
     opacity:${wordOpacity.toFixed(4)};
     direction:${dir}; text-align:center; z-index:10;
-    width:80%; max-width:1400px;
-    transform-origin:center center;
-  }
+    width:80%; max-width:1400px; transform-origin:center center; }
   .wt { ${wordTextStyle} }
-
-  /* Subtitle — أسفل الشاشة (karaoke) */
-  .subtitle {
-    position:absolute;
-    bottom:48px; left:60px; right:60px;
-    direction:${sentDir};
-    text-align:center;
-    z-index:20;
-    font-family:${sentFont};
-    font-size:${ar ? "34px" : "30px"};
-    font-weight:700;
-    line-height:1.6;
-    letter-spacing:${ar ? "0.5px" : "1px"};
-  }
-  .sw {
-    color:rgba(255,255,255,0.65);
-    -webkit-text-stroke:1px rgba(0,0,0,0.6);
-    paint-order:stroke fill;
-    display:inline;
-  }
-  .sh {
-    color:#FFD700;
-    -webkit-text-stroke:1px rgba(0,0,0,0.8);
-    paint-order:stroke fill;
-    display:inline;
-    text-shadow:0 0 20px rgba(255,215,0,0.8);
-    font-weight:900;
-  }
+  .subtitle { position:absolute; bottom:48px; left:60px; right:60px;
+    direction:${sentDir}; text-align:center; z-index:20;
+    font-family:${sentFont}; font-size:${ar ? "34px" : "30px"};
+    font-weight:700; line-height:1.6;
+    letter-spacing:${ar ? "0.5px" : "1px"}; }
+  .sw { color:rgba(255,255,255,0.65); -webkit-text-stroke:1px rgba(0,0,0,0.6); paint-order:stroke fill; display:inline; }
+  .sh { color:#FFD700; -webkit-text-stroke:1px rgba(0,0,0,0.8); paint-order:stroke fill; display:inline;
+    text-shadow:0 0 20px rgba(255,215,0,0.8); font-weight:900; }
 </style>
 </head>
 <body>
   <div class="ot"></div>
   <div class="ob"></div>
   <div class="flash"></div>
-
-  <!-- Title أعلى -->
   <div class="tc">
     <div class="tt">
       ${titleDir === "rtl"
@@ -821,11 +807,7 @@ function buildHTMLLong({
     </div>
     <span class="tline"></span>
   </div>
-
-  <!-- Keyword وسط -->
   ${word ? `<div class="wc"><span class="wt">${esc(word)}</span></div>` : ""}
-
-  <!-- Subtitle karaoke أسفل -->
   ${subtitleHtml ? `<div class="subtitle">${subtitleHtml}</div>` : ""}
 </body>
 </html>`;
@@ -833,7 +815,7 @@ function buildHTMLLong({
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ SENTENCE MAP للـ LONG — لمعرفة الجملة الحالية لكل frame
+// SENTENCE MAP للـ LONG
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildSentenceMap() {
@@ -843,7 +825,7 @@ function buildSentenceMap() {
 
   for (const seg of aligned) {
     const segStart = Math.floor(parseFloat(seg.start || 0) * FPS);
-    const segEnd   = Math.ceil(parseFloat(seg.end || 0) * FPS);
+    const segEnd   = Math.ceil(parseFloat(seg.end   || 0) * FPS);
     const sentence = seg.sentence || "";
 
     for (let f = segStart; f < segEnd && f < totalFrames; f++) {
@@ -887,7 +869,6 @@ async function renderAllPNGsShort(page, frameStateMap, boundaryMap) {
 
   console.log(`\n📸 ${unique.size} unique states [SHORT]`);
 
-  // Font warmup
   for (const [w, l] of [["مرحبا", "ar"], ["Hello", "en"]]) {
     const html = buildHTMLShort({
       word: w, tag: "information", isPower: false, isHook: false,
@@ -935,7 +916,6 @@ async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) 
     const wordSt   = frameStateMap[f];
     const sentence = sentenceMap[f] || "";
 
-    // Key يشمل: word + tag + sentence + progress bucket
     const wordKey = wordSt
       ? `${wordSt.word}_${wordSt.tag}_${wordSt.isPower ? 1 : 0}`
       : "empty";
@@ -966,7 +946,6 @@ async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) 
 
   console.log(`\n📸 ${unique.size} unique states [LONG]`);
 
-  // Font warmup
   for (const [w, l] of [["مرحبا", "ar"], ["Hello", "en"]]) {
     const html = buildHTMLLong({
       word: w, tag: "information",
@@ -1018,18 +997,15 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
   let motionFilter;
 
   if (isLong) {
-    // ✅ Long: pan بطيء جداً بدون zoom مبالغ
     const frames = Math.ceil(d * FPS);
     const panDir = idx % 2 === 0 ? "+" : "-";
     motionFilter =
       `scale=w='trunc((iw*1.05)/2)*2':h='trunc((ih*1.05)/2)*2',` +
-      `zoompan=` +
-        `z='1.02':` +
-        `x='if(gte(on,1),x${panDir}0.2,iw/2-(iw/zoom/2))':` +
-        `y='ih/2-(ih/zoom/2)':` +
-        `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
+      `zoompan=z='1.02':` +
+      `x='if(gte(on,1),x${panDir}0.2,iw/2-(iw/zoom/2))':` +
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   } else if (isHookClip) {
-    // Short Hook: zoom in خفيف
     const frames = Math.ceil(d * FPS);
     motionFilter =
       `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
@@ -1037,7 +1013,6 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
       `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
       `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
   } else {
-    // Short عادي: حركة طبيعية
     motionFilter = scaleAndCrop;
   }
 
@@ -1056,10 +1031,8 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
 
   let r = spawnSync("ffmpeg", [
     "-y", ...loopArg, "-i", videoPath,
-    "-t", d.toFixed(3),
-    "-vf", vf,
-    "-r", String(FPS),
-    "-c:v", "libx264", "-preset", "fast",
+    "-t", d.toFixed(3), "-vf", vf,
+    "-r", String(FPS), "-c:v", "libx264", "-preset", "fast",
     "-crf", isHookClip ? "16" : "18",
     "-pix_fmt", "yuv420p", "-an", outPath,
   ], { stdio: ["ignore", "pipe", "pipe"] });
@@ -1067,10 +1040,8 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
   if (r.status !== 0) {
     spawnSync("ffmpeg", [
       "-y", "-stream_loop", "-1", "-i", videoPath,
-      "-t", d.toFixed(3),
-      "-vf", scaleAndCrop,
-      "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast",
+      "-t", d.toFixed(3), "-vf", scaleAndCrop,
+      "-r", String(FPS), "-c:v", "libx264", "-preset", "fast",
       "-crf", "21", "-pix_fmt", "yuv420p", "-an", outPath,
     ], { stdio: ["ignore", "pipe", "pipe"] });
   }
@@ -1199,7 +1170,7 @@ async function main() {
   );
 
   // ════════════════════════════════════════════════════════════════════
-  // BG_ONLY — Short + Long (نفس المنطق، مقاسات مختلفة)
+  // BG_ONLY — Short + Long
   // ════════════════════════════════════════════════════════════════════
   if (mode === "bg_only" || mode === "long_bg_only") {
     const clipPlan   = buildClipPlan();
@@ -1225,7 +1196,9 @@ async function main() {
     const dissolved = xfadeConcat(finalClips, clipDurs);
     console.log("🎵 Merging audio...");
     mergeAudio(dissolved, audio, outputPath);
-    console.log(`\n🎉 BG Video [${content_mode.toUpperCase()}] → ${outputPath}\n`);
+    console.log(
+      `\n🎉 BG Video [${content_mode.toUpperCase()}] → ${outputPath}\n`
+    );
     return;
   }
 
