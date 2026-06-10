@@ -93,7 +93,7 @@ const COLORS  = EMOTION_COLORS[emotion] || EMOTION_COLORS.default;
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ TAG WORD STYLES — Original + New tags
+// TAG WORD STYLES — Original + New tags
 // ═══════════════════════════════════════════════════════════════════════════
 
 const TAG_WORD_STYLES = {
@@ -109,7 +109,7 @@ const TAG_WORD_STYLES = {
   calm:         { colorWord: "#80DEEA", colorGlow: "rgba(128,222,234,0.5)",  scaleMult: 0.85, glowSpread: 30, strokeColor: "rgba(0,0,0,0.85)",     strokeWidth: 3, brightness: 0.9  },
   information:  { colorWord: "#FFFFFF", colorGlow: "rgba(255,255,255,0.35)", scaleMult: 1.0,  glowSpread: 30, strokeColor: "rgba(0,0,0,0.95)",     strokeWidth: 4, brightness: 1.0  },
 
-  // ── ✅ New tags ───────────────────────────────────────────────────────────
+  // ── New tags ──────────────────────────────────────────────────────────────
   pause:        { colorWord: "#B0BEC5", colorGlow: "rgba(176,190,197,0.4)",  scaleMult: 0.80, glowSpread: 25, strokeColor: "rgba(0,0,0,0.8)",      strokeWidth: 2, brightness: 0.85 },
   whisper:      { colorWord: "#CE93D8", colorGlow: "rgba(206,147,216,0.6)",  scaleMult: 0.88, glowSpread: 35, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 3, brightness: 0.9  },
   curiosity:    { colorWord: "#FFF176", colorGlow: "rgba(255,241,118,0.6)",  scaleMult: 1.02, glowSpread: 45, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.05 },
@@ -129,7 +129,7 @@ function getWordStyle(tag) {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ TAG TRANSITION CONFIG — Original + New tags
+// TAG TRANSITION CONFIG — Original + New tags
 // ═══════════════════════════════════════════════════════════════════════════
 
 const TAG_TRANSITION = {
@@ -145,7 +145,7 @@ const TAG_TRANSITION = {
   calm:         { flashColor: "rgba(100,200,255,0.2)",  flashFrames: 16, shakeAmount: 1,  scaleBoost: 1.0  },
   information:  { flashColor: "rgba(255,255,255,0.15)", flashFrames: 6,  shakeAmount: 0,  scaleBoost: 1.0  },
 
-  // ── ✅ New tags ───────────────────────────────────────────────────────────
+  // ── New tags ──────────────────────────────────────────────────────────────
   pause:        { flashColor: "rgba(0,0,0,0.7)",        flashFrames: 18, shakeAmount: 0,  scaleBoost: 1.0  },
   whisper:      { flashColor: "rgba(100,0,150,0.4)",    flashFrames: 12, shakeAmount: 2,  scaleBoost: 1.02 },
   curiosity:    { flashColor: "rgba(255,241,118,0.4)",  flashFrames: 10, shakeAmount: 3,  scaleBoost: 1.03 },
@@ -161,6 +161,19 @@ const DEFAULT_TRANSITION = {
   flashColor: "rgba(255,255,255,0.3)", flashFrames: 7,
   shakeAmount: 4, scaleBoost: 1.02,
 };
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ✅ SAFE KEY — يزيل كل الأحرف غير الصالحة من أسماء الملفات
+// ═══════════════════════════════════════════════════════════════════════════
+
+function safeKey(str, maxLen = 25) {
+  return (str || "")
+    .slice(0, maxLen * 2)
+    .replace(/[^a-zA-Z0-9\u0600-\u06FF]/g, "_")
+    .replace(/_+/g, "_")
+    .slice(0, maxLen);
+}
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -426,7 +439,7 @@ function stateKey(state, globalFrame, transitionState) {
     const pb = transitionState.progress < 0.5 ? "in" : "out";
     return (
       `tr_${transitionState.tag}_${pb}_` +
-      `${state ? state.word : "empty"}_` +
+      `${safeKey(state ? state.word : "empty", 15)}_` +
       `${state?.isPower ? 1 : 0}`
     );
   }
@@ -437,7 +450,7 @@ function stateKey(state, globalFrame, transitionState) {
   const p      = state.progress;
   const bucket = p < 0.15 ? "pop" : p > 0.85 ? "fade" : "hold";
   return (
-    `w_${state.word}_${state.tag}_` +
+    `w_${safeKey(state.word, 15)}_${state.tag}_` +
     `${state.isPower ? 1 : 0}_${hook}_${bucket}`
   );
 }
@@ -819,7 +832,7 @@ function buildHTMLLong({
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildSentenceMap() {
-  if (!aligned || aligned.length === 0) return [];
+  if (!aligned || aligned.length === 0) return new Array(totalFrames).fill(null);
 
   const map = new Array(totalFrames).fill(null);
 
@@ -906,6 +919,7 @@ async function renderAllPNGsShort(page, frameStateMap, boundaryMap) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RENDER PNGs — LONG
+// ✅ إصلاح: safeKey يزيل الأحرف غير الصالحة من أسماء الملفات
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) {
@@ -916,10 +930,11 @@ async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) 
     const wordSt   = frameStateMap[f];
     const sentence = sentenceMap[f] || "";
 
+    // ✅ إصلاح: نستخدم safeKey لتنظيف كل الأحرف غير الصالحة
     const wordKey = wordSt
-      ? `${wordSt.word}_${wordSt.tag}_${wordSt.isPower ? 1 : 0}`
+      ? `${safeKey(wordSt.word, 15)}_${wordSt.tag}_${wordSt.isPower ? 1 : 0}`
       : "empty";
-    const sentKey = sentence.slice(0, 30).replace(/\s+/g, "_");
+    const sentKey = safeKey(sentence, 25);
     const tKey    = ts ? `tr_${ts.tag}_${Math.floor(ts.progress * 4)}` : "n";
 
     let pBucket = "hold";
@@ -1268,6 +1283,7 @@ async function main() {
 
   // ════════════════════════════════════════════════════════════════════
   // LONG_WORDS_ONLY — Long
+  // ✅ إصلاح: safeKey يُستخدم في بناء الـ keys
   // ════════════════════════════════════════════════════════════════════
   if (mode === "long_words_only") {
     const bgVideoPath = videos[0];
@@ -1312,10 +1328,11 @@ async function main() {
       const wordSt   = frameStateMap[f];
       const sentence = sentenceMap[f] || "";
 
+      // ✅ إصلاح: safeKey في كل مكان
       const wordKey = wordSt
-        ? `${wordSt.word}_${wordSt.tag}_${wordSt.isPower ? 1 : 0}`
+        ? `${safeKey(wordSt.word, 15)}_${wordSt.tag}_${wordSt.isPower ? 1 : 0}`
         : "empty";
-      const sentKey = sentence.slice(0, 30).replace(/\s+/g, "_");
+      const sentKey = safeKey(sentence, 25);
       const tKey    = ts ? `tr_${ts.tag}_${Math.floor(ts.progress * 4)}` : "n";
       let pBucket   = "hold";
       if (wordSt) {
