@@ -1,3 +1,4 @@
+# .github/workflows/generate_ar.yml
 name: 🇸🇦 Arabic Videos (Auto + Manual)
 
 on:
@@ -134,6 +135,15 @@ jobs:
       - name: 📦 Install Python deps
         run: pip install -r requirements.txt
 
+      - name: 📥 Download NLTK data
+        run: |
+          python -c "
+          import nltk
+          nltk.download('punkt')
+          nltk.download('punkt_tab')
+          nltk.download('averaged_perceptron_tagger')
+          "
+
       - name: 🟢 Setup Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -207,25 +217,26 @@ jobs:
           FLAGS="--lang ar --publish-fb --publish-yt --auto-next"
 
           if [ -n "${{ github.event.inputs.video_number }}" ]; then
-            FLAGS="--lang ar --publish-fb --publish-yt --video-number ${{ github.event.inputs.video_number }}"
+            FLAGS="--lang ar --publish-fb --publish-yt \
+              --video-number ${{ github.event.inputs.video_number }}"
           fi
 
           [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
           [ "${{ github.event.inputs.force_ai }}"   = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish_fb }}" = "false" ] && FLAGS="$FLAGS --no-publish"
-          [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="${FLAGS/--publish-yt/}"
+          [ "${{ github.event.inputs.publish_fb }}" = "false" ] && \
+          [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="$FLAGS --no-publish"
 
           python main.py "scripts/videos_ar.xlsx" \
             --output-dir output \
             --formats "${{ github.event.inputs.formats || '9x16' }}" \
             $FLAGS
 
-      - name: 📤 Upload videos
+      - name: 📤 Upload final video
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ar-videos-${{ github.run_number }}
-          path: output/**/*.mp4
+          path: output/**/*_final.mp4
           retention-days: 7
           if-no-files-found: ignore
 
