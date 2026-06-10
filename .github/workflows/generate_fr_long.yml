@@ -1,0 +1,253 @@
+# .github/workflows/generate_fr_long.yml
+name: 🇫🇷 French Long Videos (Auto + Manual)
+
+on:
+  # schedule:
+  #   - cron: "30 22 * * *"   ← مرة واحدة يومياً
+
+  workflow_dispatch:
+    inputs:
+      video_number:
+        description: "🎬 Video number (empty = auto next)"
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "⚡ Force re-render?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      force_ai:
+        description: "🤖 Force re-generate AI?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      publish_yt:
+        description: "📺 Publish to YouTube?"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+concurrency:
+  group: video-fr-long
+  cancel-in-progress: false
+
+jobs:
+  generate_fr_long:
+    name: 🇫🇷 French Long Video
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🧹 Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: 🔧 Install system deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            ffmpeg libsndfile1 \
+            libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
+            libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
+            libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
+            libxcomposite1 libxdamage1 libxext6 libxfixes3 \
+            libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
+            fonts-noto fonts-noto-core fonts-hosny-amiri \
+            fonts-sil-scheherazade || true
+          sudo apt-get install -y libasound2t64 libasound2-dev || \
+            sudo apt-get install -y libasound2 libasound2-dev || true
+          sudo fc-cache -fv
+
+      - name: 💾 Cache WhisperX models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/whisperx
+            ~/.cache/huggingface
+            ~/.cache/torch
+          key: whisperx-models-v6
+          restore-keys: whisperx-models-
+
+      - name: 💾 Cache PyTorch
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pytorch-cpu-v2-${{ runner.os }}-py3.11
+          restore-keys: pytorch-cpu-v2-
+
+      - name: 🔥 Install PyTorch (CPU only)
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install \
+            torch==2.1.2 \
+            torchaudio==2.1.2 \
+            --index-url https://download.pytorch.org/whl/cpu
+
+      - name: 📦 Install WhisperX (no deps)
+        run: |
+          pip install git+https://github.com/m-bain/whisperX.git \
+            --no-deps
+          pip install \
+            faster-whisper==1.0.3 \
+            ctranslate2==4.4.0 \
+            pyannote.audio==3.3.2 \
+            pyannote.core==5.0.0 \
+            pyannote.pipeline==3.0.1 \
+            transformers==4.44.2 \
+            omegaconf==2.3.0 \
+            nltk==3.8.1 \
+            pandas==2.2.3
+
+      - name: 📦 Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: 📥 Download NLTK data
+        run: |
+          python -c "
+          import nltk
+          nltk.download('punkt')
+          nltk.download('punkt_tab')
+          nltk.download('averaged_perceptron_tagger')
+          "
+
+      - name: 🟢 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 📦 Install Node deps
+        working-directory: remotion
+        run: |
+          if [ -f "package-lock.json" ]; then npm ci
+          else npm install; fi
+
+      - name: 🌐 Install Playwright Chromium (Python)
+        run: python -m playwright install chromium
+
+      - name: 🌐 Install Playwright Chromium (Node)
+        working-directory: remotion
+        run: npx playwright install chromium
+
+      - name: 📥 Restore DB
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vsg-database-fr-long
+          if_no_artifact_found: ignore
+          search_artifacts: true
+
+      - name: 🇫🇷 Generate + Publish French Long
+        env:
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY_1:  ${{ secrets.GEMINI_API_KEY_1 }}
+          GEMINI_API_KEY_2:  ${{ secrets.GEMINI_API_KEY_2 }}
+          GEMINI_API_KEY_3:  ${{ secrets.GEMINI_API_KEY_3 }}
+          GEMINI_API_KEY_4:  ${{ secrets.GEMINI_API_KEY_4 }}
+          GEMINI_API_KEY_5:  ${{ secrets.GEMINI_API_KEY_5 }}
+          GEMINI_API_KEY_6:  ${{ secrets.GEMINI_API_KEY_6 }}
+          GEMINI_API_KEY_7:  ${{ secrets.GEMINI_API_KEY_7 }}
+          GEMINI_API_KEY_8:  ${{ secrets.GEMINI_API_KEY_8 }}
+          GEMINI_API_KEY_9:  ${{ secrets.GEMINI_API_KEY_9 }}
+          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
+          GEMINI_API_KEY_11: ${{ secrets.GEMINI_API_KEY_11 }}
+          GEMINI_API_KEY_12: ${{ secrets.GEMINI_API_KEY_12 }}
+          GEMINI_API_KEY_13: ${{ secrets.GEMINI_API_KEY_13 }}
+          GEMINI_API_KEY_14: ${{ secrets.GEMINI_API_KEY_14 }}
+          GEMINI_API_KEY_15: ${{ secrets.GEMINI_API_KEY_15 }}
+          GEMINI_API_KEY_16: ${{ secrets.GEMINI_API_KEY_16 }}
+          GEMINI_API_KEY_17: ${{ secrets.GEMINI_API_KEY_17 }}
+          GEMINI_API_KEY_18: ${{ secrets.GEMINI_API_KEY_18 }}
+          GEMINI_API_KEY_19: ${{ secrets.GEMINI_API_KEY_19 }}
+          GEMINI_API_KEY_20: ${{ secrets.GEMINI_API_KEY_20 }}
+          GEMINI_API_KEY_21: ${{ secrets.GEMINI_API_KEY_21 }}
+          GEMINI_API_KEY_22: ${{ secrets.GEMINI_API_KEY_22 }}
+          GEMINI_API_KEY_23: ${{ secrets.GEMINI_API_KEY_23 }}
+          GEMINI_API_KEY_24: ${{ secrets.GEMINI_API_KEY_24 }}
+          GEMINI_API_KEY_25: ${{ secrets.GEMINI_API_KEY_25 }}
+          GEMINI_API_KEY_26: ${{ secrets.GEMINI_API_KEY_26 }}
+          GEMINI_API_KEY_27: ${{ secrets.GEMINI_API_KEY_27 }}
+          GEMINI_API_KEY_28: ${{ secrets.GEMINI_API_KEY_28 }}
+          GEMINI_API_KEY_29: ${{ secrets.GEMINI_API_KEY_29 }}
+          PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
+          PIXABAY_API_KEY_1: ${{ secrets.PIXABAY_API_KEY_1 }}
+          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_API_KEY_1:  ${{ secrets.PEXELS_API_KEY_1 }}
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY_1:    ${{ secrets.GROQ_API_KEY_1 }}
+          HF_TOKEN:          ${{ secrets.HF_TOKEN }}
+          YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID_FR }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET_FR }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_FR }}
+        run: |
+          FLAGS="--lang fr --content-mode long --publish-yt --auto-next"
+
+          if [ -n "${{ github.event.inputs.video_number }}" ]; then
+            FLAGS="--lang fr --content-mode long --publish-yt \
+              --video-number ${{ github.event.inputs.video_number }}"
+          fi
+
+          [ "${{ github.event.inputs.force }}"      = "true" ] && \
+            FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"   = "true" ] && \
+            FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish_yt }}" = "false" ] && \
+            FLAGS="$FLAGS --no-publish"
+
+          python main.py "scripts/videos_fr_long.xlsx" \
+            --output-dir output_long \
+            --formats "16x9" \
+            $FLAGS
+
+      - name: 📤 Upload videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fr-long-videos-${{ github.run_number }}
+          path: output_long/**/*.mp4
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: 📤 Upload subtitles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fr-long-subtitles-${{ github.run_number }}
+          path: output_long/**/*.srt
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: 📤 Upload thumbnails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fr-long-thumbnails-${{ github.run_number }}
+          path: output_long/**/*.png
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: 📤 Save DB
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsg-database-fr-long
+          path: vsg.db
+          retention-days: 90
+          overwrite: true
