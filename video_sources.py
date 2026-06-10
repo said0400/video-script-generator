@@ -7,6 +7,7 @@ Sources (in priority order): Local → Pexels → Pixabay
 ✨ مسارات مطلقة
 ✨ Thread-safe key rotation
 ✨ Search fallback: keyword + dark cinematic → keyword
+✅ content_mode: short → portrait | long → landscape
 """
 
 from __future__ import annotations
@@ -42,6 +43,17 @@ PEXELS_API_URL  = "https://api.pexels.com/videos/search"
 PIXABAY_API_URL = "https://pixabay.com/api/videos/"
 
 RETRY_DELAYS = [1.0, 2.0, 4.0]
+
+# ✅ orientation و size حسب content_mode
+ORIENTATION = {
+    "short": "portrait",
+    "long":  "landscape",
+}
+
+PEXELS_SIZE = {
+    "short": "medium",
+    "long":  "large",
+}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -120,9 +132,7 @@ def _probe_video_info(path: Path) -> dict:
                 "-of", "default=noprint_wrappers=1",
                 str(path),
             ],
-            capture_output=True,
-            text=True,
-            timeout=15,
+            capture_output=True, text=True, timeout=15,
         )
 
         if r.returncode != 0:
@@ -137,7 +147,6 @@ def _probe_video_info(path: Path) -> dict:
             line = line.strip()
             if not line or "=" not in line:
                 continue
-
             key, val = line.split("=", 1)
             key = key.strip()
             val = val.strip()
@@ -220,15 +229,10 @@ def _detect_motion_simple(path: Path) -> bool:
             r = subprocess.run(
                 [
                     "ffmpeg", "-v", "error", "-y",
-                    "-ss", str(t),
-                    "-i", str(path),
-                    "-vframes", "1",
-                    "-q:v", "5",
-                    tmp_frame,
+                    "-ss", str(t), "-i", str(path),
+                    "-vframes", "1", "-q:v", "5", tmp_frame,
                 ],
-                capture_output=True,
-                text=True,
-                timeout=10,
+                capture_output=True, text=True, timeout=10,
             )
             tmp_path = Path(tmp_frame)
             if r.returncode == 0 and tmp_path.exists():
@@ -236,9 +240,7 @@ def _detect_motion_simple(path: Path) -> bool:
                 tmp_path.unlink(missing_ok=True)
 
         for i in range(3):
-            Path(f"/tmp/_motion_{pid}_{i}.jpg").unlink(
-                missing_ok=True
-            )
+            Path(f"/tmp/_motion_{pid}_{i}.jpg").unlink(missing_ok=True)
 
         if len(frame_sizes) < 2:
             return True
@@ -324,38 +326,43 @@ def _download(url: str, dest: Path, retries: int = 3) -> bool:
             dest.unlink(missing_ok=True)
             if attempt < retries - 1:
                 time.sleep(
-                    RETRY_DELAYS[
-                        min(attempt, len(RETRY_DELAYS) - 1)
-                    ]
+                    RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
                 )
 
     return False
 
 
 def _safe_name(keyword: str, length: int = 20) -> str:
-    return re.sub(
-        r"[^a-z0-9_]", "_", keyword.lower()
-    )[:length]
+    return re.sub(r"[^a-z0-9_]", "_", keyword.lower())[:length]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ QUERY VARIANTS — dark cinematic fallback
+# QUERY VARIANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _build_query_variants(keyword: str) -> list[str]:
+def _build_query_variants(
+    keyword:      str,
+    content_mode: str = "short",
+) -> list[str]:
     """
     يبني نسختين للبحث:
-      1) keyword + dark cinematic
-      2) keyword الأصلية (fallback)
+      1) keyword + dark cinematic (+ horizontal للـ long)
+      2) keyword الأصلية
     """
     kw = " ".join(keyword.strip().split())
     if not kw:
         return []
 
+    # ✅ للـ long نضيف كلمات تجلب فيديوهات أفقية
+    if content_mode == "long":
+        enhanced = f"{kw} cinematic widescreen"
+    else:
+        enhanced = f"{kw} dark cinematic"
+
     out:  list[str] = []
     seen: set[str]  = set()
 
-    for variant in [f"{kw} dark cinematic", kw]:
+    for variant in [enhanced, kw]:
         k = variant.lower().strip()
         if k and k not in seen:
             seen.add(k)
@@ -374,6 +381,7 @@ def _search_local(
     sub:          int,
     output_dir:   str,
     session_used: set[str],
+    content_mode: str = "short",
 ) -> Path | None:
     if not LOCAL_VIDEO_DIR.exists():
         return None
@@ -412,20 +420,25 @@ def _search_pexels(
     sub:          int,
     output_dir:   str,
     session_used: set[str],
+    content_mode: str = "short",
     retries:      int = 3,
 ) -> Path | None:
     api_key = _get_pexels_key()
     if not api_key:
         return None
 
-    query_variants = _build_query_variants(keyword)
+    query_variants = _build_query_variants(keyword, content_mode)
     if not query_variants:
         return None
+
+    # ✅ orientation و size حسب content_mode
+    orientation = ORIENTATION.get(content_mode, "portrait")
+    size        = PEXELS_SIZE.get(content_mode, "medium")
 
     tried_ids: set[str] = set()
 
     for query in query_variants:
-        print(f"    🔎 Pexels: {query!r}")
+        print(f"    🔎 Pexels [{content_mode}]: {query!r}")
         videos: list[dict] = []
 
         for attempt in range(retries):
@@ -436,8 +449,8 @@ def _search_pexels(
                     params  = {
                         "query":       query,
                         "per_page":    15,
-                        "orientation": "portrait",
-                        "size":        "medium",
+                        "orientation": orientation,  # ✅
+                        "size":        size,         # ✅
                     },
                     timeout = API_TIMEOUT,
                 )
@@ -446,10 +459,7 @@ def _search_pexels(
                 break
 
             except requests.exceptions.HTTPError as e:
-                status = (
-                    e.response.status_code
-                    if e.response else 0
-                )
+                status = e.response.status_code if e.response else 0
                 if status == 429:
                     print("    ⚠️  Pexels rate limit")
                     _rotate_pexels_key()
@@ -468,7 +478,7 @@ def _search_pexels(
                             ]
                         )
 
-            except Exception as e:
+            except Exception:
                 if attempt < retries - 1:
                     time.sleep(
                         RETRY_DELAYS[
@@ -504,14 +514,31 @@ def _search_pexels(
             ):
                 continue
 
-            files = sorted(
-                [
-                    f for f in video.get("video_files", [])
+            # ✅ للـ long نفضل الملفات الأفقية (wide)
+            files = video.get("video_files", [])
+            if content_mode == "long":
+                # نفضل الملفات الأفقية
+                landscape_files = [
+                    f for f in files
+                    if f.get("file_type") == "video/mp4" and
+                    f.get("width", 0) > f.get("height", 0)
+                ]
+                if landscape_files:
+                    files = landscape_files
+                else:
+                    files = [
+                        f for f in files
+                        if f.get("file_type") == "video/mp4"
+                    ]
+            else:
+                files = [
+                    f for f in files
                     if f.get("file_type") == "video/mp4"
-                ],
-                key=lambda f: (
-                    f.get("width", 0) * f.get("height", 0)
-                ),
+                ]
+
+            files = sorted(
+                files,
+                key=lambda f: f.get("width", 0) * f.get("height", 0),
                 reverse=True,
             )
             url = files[0].get("link") if files else None
@@ -526,7 +553,7 @@ def _search_pexels(
             if _download(url, dest, retries=2):
                 session_used.add(sk)
                 mark_video_used(vid_id, keyword, "pexels")
-                print(f"    🎬 Pexels: {dest.name}")
+                print(f"    🎬 Pexels [{content_mode}]: {dest.name}")
                 return dest
 
     return None
@@ -542,20 +569,21 @@ def _search_pixabay(
     sub:          int,
     output_dir:   str,
     session_used: set[str],
+    content_mode: str = "short",
     retries:      int = 3,
 ) -> Path | None:
     api_key = _get_pixabay_key()
     if not api_key:
         return None
 
-    query_variants = _build_query_variants(keyword)
+    query_variants = _build_query_variants(keyword, content_mode)
     if not query_variants:
         return None
 
     tried_ids: set[str] = set()
 
     for query in query_variants:
-        print(f"    🔎 Pixabay: {query!r}")
+        print(f"    🔎 Pixabay [{content_mode}]: {query!r}")
         hits: list[dict] = []
 
         for attempt in range(retries):
@@ -577,10 +605,7 @@ def _search_pixabay(
                 break
 
             except requests.exceptions.HTTPError as e:
-                status = (
-                    e.response.status_code
-                    if e.response else 0
-                )
+                status = e.response.status_code if e.response else 0
                 if status == 429:
                     print("    ⚠️  Pixabay rate limit")
                     _rotate_pixabay_key()
@@ -636,12 +661,23 @@ def _search_pixabay(
                 continue
 
             vids = hit.get("videos", {})
-            url  = (
-                vids.get("large",  {}).get("url") or
-                vids.get("medium", {}).get("url") or
-                vids.get("small",  {}).get("url") or
-                vids.get("tiny",   {}).get("url")
-            )
+
+            # ✅ للـ long نفضل large/medium (عادةً أفقية)
+            # للـ short نفضل small/tiny (عادةً عمودية أو مربعة)
+            if content_mode == "long":
+                url = (
+                    vids.get("large",  {}).get("url") or
+                    vids.get("medium", {}).get("url") or
+                    vids.get("small",  {}).get("url") or
+                    vids.get("tiny",   {}).get("url")
+                )
+            else:
+                url = (
+                    vids.get("medium", {}).get("url") or
+                    vids.get("small",  {}).get("url") or
+                    vids.get("large",  {}).get("url") or
+                    vids.get("tiny",   {}).get("url")
+                )
 
             if not url or ".mp4" not in url.lower():
                 continue
@@ -654,7 +690,7 @@ def _search_pixabay(
             if _download(url, dest, retries=2):
                 session_used.add(sk)
                 mark_video_used(vid_id, keyword, "pixabay")
-                print(f"    🎬 Pixabay: {dest.name}")
+                print(f"    🎬 Pixabay [{content_mode}]: {dest.name}")
                 return dest
 
     return None
@@ -733,9 +769,14 @@ def fetch_videos_for_script(
     clip_durations:        list[float],
     output_dir:            str,
     aligned:               list[dict] | None = None,
+    content_mode:          str               = "short",  # ✅
 ) -> list[Path]:
     """
     جلب فيديو واحد لكل جملة.
+
+    ✅ content_mode:
+      - "short" → portrait (للشورتس والريلز)
+      - "long"  → landscape (لفيديوهات YouTube الطويلة)
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -746,9 +787,12 @@ def fetch_videos_for_script(
     pexels_keys  = _load_keys_for("PEXELS_API_KEY")
     pixabay_keys = _load_keys_for("PIXABAY_API_KEY")
 
-    print(f"\n  📹 Fetching {n} videos (1 per sentence)...")
+    orientation = ORIENTATION.get(content_mode, "portrait")
+
+    print(f"\n  📹 Fetching {n} videos [{content_mode.upper()}]...")
     print(
-        f"     Pexels keys : {len(pexels_keys)} | "
+        f"     Orientation  : {orientation}\n"
+        f"     Pexels keys  : {len(pexels_keys)} | "
         f"Pixabay keys: {len(pixabay_keys)}"
     )
 
@@ -762,7 +806,7 @@ def fetch_videos_for_script(
 
         print(
             f"  🎞️  [{i + 1}/{n}] "
-            f"({clip_dur:.2f}s target)"
+            f"({clip_dur:.2f}s target) [{content_mode.upper()}]"
         )
 
         for sub, kw in enumerate(kws):
@@ -778,19 +822,19 @@ def fetch_videos_for_script(
 
             # 1. Local
             path = _search_local(
-                kw, i, sub, output_dir, session_used
+                kw, i, sub, output_dir, session_used, content_mode
             )
 
             # 2. Pexels
             if path is None:
                 path = _search_pexels(
-                    kw, i, sub, output_dir, session_used
+                    kw, i, sub, output_dir, session_used, content_mode
                 )
 
             # 3. Pixabay
             if path is None:
                 path = _search_pixabay(
-                    kw, i, sub, output_dir, session_used
+                    kw, i, sub, output_dir, session_used, content_mode
                 )
 
             if path is not None:
@@ -814,6 +858,9 @@ def fetch_videos_for_script(
 
     results     = _fill_gaps(results)
     found_count = sum(1 for r in results if r is not None)
-    print(f"\n  ✅ Videos: {found_count}/{n} fetched")
+    print(
+        f"\n  ✅ Videos: {found_count}/{n} fetched "
+        f"[{content_mode.upper()}]"
+    )
 
     return results
