@@ -1,8 +1,8 @@
 """
 youtube.py — Auto-publish videos to YouTube Channels
 ✨ يدعم 3 قنوات (AR, FR, EN) — كل قناة بـ Gmail خاص
-✨ كل قناة لها Client ID و Client Secret و Refresh Token خاص
-✨ يرفع كـ YouTube Shorts (9:16)
+✨ Short → YouTube Shorts (بدون عنوان #shorts في الـ tags)
+✨ Long  → YouTube Long form video
 ✨ وصف طويل بلغة الشارع من Groq
 ✨ Fallback: يقرأ بدون suffix إذا لم يجد مع suffix
 """
@@ -27,6 +27,15 @@ MIN_FILE_MB   = 0.5
 MAX_DESC_LEN  = 5000
 MAX_TITLE_LEN = 100
 
+# Category IDs
+CATEGORY_PEOPLE_BLOGS = "22"
+CATEGORY_EDUCATION    = "27"
+CATEGORY_HOWTO        = "26"
+
+# Tags حسب content_mode
+TAGS_SHORT = ["shorts", "viral", "psychology", "motivation", "reels"]
+TAGS_LONG  = ["psychology", "motivation", "education", "mindset", "viral"]
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CREDENTIALS
@@ -47,13 +56,9 @@ def _get_env(key_with_lang: str, key_generic: str) -> str:
 def _get_creds(lang: str) -> tuple[str, str, str]:
     """
     يقرأ credentials من البيئة حسب اللغة.
-
     يدعم:
       - YOUTUBE_CLIENT_ID_AR  ← مع suffix
       - YOUTUBE_CLIENT_ID     ← بدون suffix (fallback)
-
-    Returns:
-        (client_id, client_secret, refresh_token)
     """
     lang_upper = lang.upper()
 
@@ -74,9 +79,9 @@ def _get_creds(lang: str) -> tuple[str, str, str]:
         raise RuntimeError(
             f"Missing YouTube credentials for {lang_upper}.\n"
             f"  Set in GitHub Secrets:\n"
-            f"  YOUTUBE_CLIENT_ID_{lang_upper} (or YOUTUBE_CLIENT_ID)\n"
-            f"  YOUTUBE_CLIENT_SECRET_{lang_upper} (or YOUTUBE_CLIENT_SECRET)\n"
-            f"  YOUTUBE_REFRESH_TOKEN_{lang_upper} (or YOUTUBE_REFRESH_TOKEN)"
+            f"  YOUTUBE_CLIENT_ID_{lang_upper}\n"
+            f"  YOUTUBE_CLIENT_SECRET_{lang_upper}\n"
+            f"  YOUTUBE_REFRESH_TOKEN_{lang_upper}"
         )
 
     return client_id, client_secret, refresh_token
@@ -85,19 +90,18 @@ def _get_creds(lang: str) -> tuple[str, str, str]:
 def credentials_available(lang: str) -> bool:
     """هل credentials موجودة لهذه اللغة؟"""
     lang_upper = lang.upper()
-    has_client_id = bool(
-        os.environ.get(f"YOUTUBE_CLIENT_ID_{lang_upper}", "").strip() or
-        os.environ.get("YOUTUBE_CLIENT_ID", "").strip()
+    return bool(
+        (
+            os.environ.get(f"YOUTUBE_CLIENT_ID_{lang_upper}", "").strip() or
+            os.environ.get("YOUTUBE_CLIENT_ID", "").strip()
+        ) and (
+            os.environ.get(f"YOUTUBE_CLIENT_SECRET_{lang_upper}", "").strip() or
+            os.environ.get("YOUTUBE_CLIENT_SECRET", "").strip()
+        ) and (
+            os.environ.get(f"YOUTUBE_REFRESH_TOKEN_{lang_upper}", "").strip() or
+            os.environ.get("YOUTUBE_REFRESH_TOKEN", "").strip()
+        )
     )
-    has_client_secret = bool(
-        os.environ.get(f"YOUTUBE_CLIENT_SECRET_{lang_upper}", "").strip() or
-        os.environ.get("YOUTUBE_CLIENT_SECRET", "").strip()
-    )
-    has_refresh_token = bool(
-        os.environ.get(f"YOUTUBE_REFRESH_TOKEN_{lang_upper}", "").strip() or
-        os.environ.get("YOUTUBE_REFRESH_TOKEN", "").strip()
-    )
-    return has_client_id and has_client_secret and has_refresh_token
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -164,8 +168,9 @@ def _validate_video(video_path: str) -> float:
 
 def build_youtube_description(
     record:             dict,
-    lang:               str = "ar",
-    street_description: str = "",
+    lang:               str          = "ar",
+    street_description: str          = "",
+    content_mode:       str          = "short",
 ) -> str:
     """
     بناء الـ description لـ YouTube.
@@ -177,13 +182,85 @@ def build_youtube_description(
     # Fallback بسيط
     title   = record.get("title", "")
     cta_map = {
-        "ar": "اشترك في القناة وفعّل الجرس 🔔",
-        "fr": "Abonne-toi et active la cloche 🔔",
-        "en": "Subscribe and hit the bell 🔔",
+        "ar": (
+            "اشترك في القناة وفعّل الجرس 🔔\n"
+            "شارك الفيديو مع أصحابك 🔥"
+            if content_mode == "long"
+            else "اشترك وفعّل الجرس 🔔"
+        ),
+        "fr": (
+            "Abonne-toi et active la cloche 🔔\n"
+            "Partage cette vidéo 🔥"
+            if content_mode == "long"
+            else "Abonne-toi 🔔"
+        ),
+        "en": (
+            "Subscribe and hit the bell 🔔\n"
+            "Share this video with your friends 🔥"
+            if content_mode == "long"
+            else "Subscribe and hit the bell 🔔"
+        ),
     }
     cta = cta_map.get(lang, cta_map["en"])
 
-    return f"{title}\n\n{cta}\n\n#shorts #viral"[:MAX_DESC_LEN]
+    tags_str = (
+        "#psychology #motivation #mindset"
+        if content_mode == "long"
+        else "#shorts #viral #psychology"
+    )
+
+    return f"{title}\n\n{cta}\n\n{tags_str}"[:MAX_DESC_LEN]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# BUILD METADATA
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _build_metadata(
+    title:        str,
+    description:  str,
+    lang:         str,
+    content_mode: str = "short",
+) -> dict:
+    """
+    ✅ بناء metadata الفيديو حسب content_mode.
+
+    Short:
+      - privacy: public
+      - tags: shorts + viral
+      - category: People & Blogs
+
+    Long:
+      - privacy: public
+      - tags: psychology + motivation
+      - category: Education
+      - مدة أطول → YouTube يصنفه تلقائياً كـ Long form
+    """
+    default_lang_map = {"ar": "ar", "fr": "fr", "en": "en"}
+    default_lang     = default_lang_map.get(lang, "en")
+
+    if content_mode == "long":
+        tags     = list(TAGS_LONG) + [lang]
+        category = CATEGORY_EDUCATION
+    else:
+        tags     = list(TAGS_SHORT) + [lang]
+        category = CATEGORY_PEOPLE_BLOGS
+
+    return {
+        "snippet": {
+            "title":                title[:MAX_TITLE_LEN],
+            "description":          description,
+            "defaultLanguage":      default_lang,
+            "defaultAudioLanguage": default_lang,
+            "tags":                 tags,
+            "categoryId":           category,
+        },
+        "status": {
+            "privacyStatus":           "public",
+            "selfDeclaredMadeForKids": False,
+            "madeForKids":             False,
+        },
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -196,34 +273,25 @@ def _upload_video(
     description:  str,
     access_token: str,
     lang:         str,
+    content_mode: str = "short",
 ) -> dict:
-    """رفع الفيديو إلى YouTube كـ Shorts بـ resumable upload."""
+    """
+    رفع الفيديو إلى YouTube.
+    Short → Shorts (مدة ≤ 60s يصنفه يوتيوب تلقائياً)
+    Long  → Long form video
+    """
     path = Path(video_path).resolve()
     mb   = _validate_video(str(path))
     size = path.stat().st_size
 
-    print(f"  📤 Uploading to YouTube ({mb:.1f} MB)...")
+    print(
+        f"  📤 Uploading to YouTube "
+        f"[{content_mode.upper()}] ({mb:.1f} MB)..."
+    )
 
-    default_lang_map = {"ar": "ar", "fr": "fr", "en": "en"}
-    default_lang     = default_lang_map.get(lang, "en")
+    metadata = _build_metadata(title, description, lang, content_mode)
 
-    metadata = {
-        "snippet": {
-            "title":                title[:MAX_TITLE_LEN],
-            "description":          description,
-            "defaultLanguage":      default_lang,
-            "defaultAudioLanguage": default_lang,
-            "tags": ["shorts", "viral", lang, "motivation", "psychology"],
-            "categoryId": "22",
-        },
-        "status": {
-            "privacyStatus":           "public",
-            "selfDeclaredMadeForKids": False,
-            "madeForKids":             False,
-        },
-    }
-
-    # Step 1: Initialize resumable upload
+    # ── Step 1: Initialize resumable upload ──────────────────────────────────
     init_r = requests.post(
         YOUTUBE_UPLOAD_URL,
         params  = {"uploadType": "resumable", "part": "snippet,status"},
@@ -244,7 +312,7 @@ def _upload_video(
 
     print("  📡 Uploading binary...")
 
-    # Step 2: Upload binary
+    # ── Step 2: Upload binary ────────────────────────────────────────────────
     with open(str(path), "rb") as f:
         upload_r = requests.put(
             upload_url,
@@ -270,8 +338,15 @@ def _upload_video(
             f"YouTube upload response missing video ID: {result}"
         )
 
-    url = f"https://www.youtube.com/shorts/{video_id}"
-    print(f"  ✅ YouTube Shorts published → {url}")
+    # URL حسب content_mode
+    if content_mode == "short":
+        url = f"https://www.youtube.com/shorts/{video_id}"
+    else:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+
+    print(
+        f"  ✅ YouTube [{content_mode.upper()}] published → {url}"
+    )
 
     return {"id": video_id, "url": url}
 
@@ -283,9 +358,10 @@ def _upload_video(
 def publish_to_youtube(
     video_path:         str,
     record:             dict,
-    lang:               str = "ar",
-    street_description: str = "",
-    retries:            int = 3,
+    lang:               str  = "ar",
+    street_description: str  = "",
+    content_mode:       str  = "short",
+    retries:            int  = 3,
 ) -> dict:
     """
     نشر فيديو على YouTube.
@@ -295,6 +371,7 @@ def publish_to_youtube(
         record:             بيانات الفيديو (title, number, ...)
         lang:               اللغة (ar, fr, en)
         street_description: الوصف الطويل من Groq
+        content_mode:       short | long
         retries:            عدد المحاولات
 
     Returns:
@@ -315,11 +392,19 @@ def publish_to_youtube(
         record             = record,
         lang               = lang,
         street_description = street_description,
+        content_mode       = content_mode,
     )
 
-    print(f"\n  📺 Publishing to YouTube ({lang.upper()})...")
+    print(
+        f"\n  📺 Publishing to YouTube "
+        f"({lang.upper()}) [{content_mode.upper()}]..."
+    )
     print(f"     Title      : {title[:60]}")
     print(f"     Description: {len(description)} chars")
+    print(
+        f"     Type       : "
+        f"{'Shorts ⚡' if content_mode == 'short' else 'Long Form 🎬'}"
+    )
 
     last_error = None
 
@@ -333,6 +418,7 @@ def publish_to_youtube(
                 description  = description,
                 access_token = access_token,
                 lang         = lang,
+                content_mode = content_mode,
             )
 
             return result
@@ -350,7 +436,8 @@ def publish_to_youtube(
             if err_code in (401, 403):
                 raise RuntimeError(
                     f"YouTube auth error (code={err_code}). "
-                    f"Please refresh YOUTUBE_REFRESH_TOKEN_{lang.upper()}."
+                    f"Please refresh "
+                    f"YOUTUBE_REFRESH_TOKEN_{lang.upper()}."
                 )
 
             if attempt < retries - 1:
@@ -384,34 +471,16 @@ def publish_to_youtube(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def check_credentials(lang: str) -> bool:
-    """تحقق من صحة credentials مع YouTube API."""
+    """تحقق من صحة credentials — بدون channels API."""
     try:
         access_token = _get_access_token(lang)
-
-        r = requests.get(
-            "https://www.googleapis.com/youtube/v3/channels",
-            params  = {"part": "snippet", "mine": "true"},
-            headers = {"Authorization": f"Bearer {access_token}"},
-            timeout = 15,
-        )
-        r.raise_for_status()
-
-        channels = r.json().get("items", [])
-
-        if channels:
-            name = channels[0].get("snippet", {}).get("title", "Unknown")
+        if access_token:
             print(
                 f"  ✅ YouTube ({lang.upper()}): "
-                f"Channel '{name}'"
+                f"credentials OK"
             )
             return True
-        else:
-            print(
-                f"  ⚠️  YouTube ({lang.upper()}): "
-                f"No channels found"
-            )
-            return False
-
+        return False
     except Exception as e:
         print(
             f"  ❌ YouTube credentials invalid "
