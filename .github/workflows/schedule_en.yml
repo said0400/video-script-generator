@@ -2,12 +2,12 @@
 name: 🇺🇸 English Videos (Auto + Manual)
 
 on:
-  # schedule:
-  #   - cron: "0 13 * * *"
-  #   - cron: "0 15 * * *"
-  #   - cron: "0 17 * * *"
-  #   - cron: "30 19 * * *"
-  #   - cron: "0 22 * * *"
+  schedule:
+    - cron: "0 13 * * *"
+    - cron: "0 15 * * *"
+    - cron: "0 17 * * *"
+    - cron: "30 19 * * *"
+    - cron: "0 22 * * *"
 
   workflow_dispatch:
     inputs:
@@ -135,6 +135,15 @@ jobs:
       - name: 📦 Install Python deps
         run: pip install -r requirements.txt
 
+      - name: 📥 Download NLTK data
+        run: |
+          python -c "
+          import nltk
+          nltk.download('punkt')
+          nltk.download('punkt_tab')
+          nltk.download('averaged_perceptron_tagger')
+          "
+
       - name: 🟢 Setup Node.js 20
         uses: actions/setup-node@v4
         with:
@@ -205,18 +214,15 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET_EN }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_EN }}
         run: |
-          FLAGS="--lang en"
+          FLAGS="--lang en --publish-fb --publish-yt --auto-next"
 
           if [ -n "${{ github.event.inputs.video_number }}" ]; then
-            FLAGS="$FLAGS --video-number ${{ github.event.inputs.video_number }}"
-          else
-            FLAGS="$FLAGS --auto-next"
+            FLAGS="--lang en --publish-fb --publish-yt \
+              --video-number ${{ github.event.inputs.video_number }}"
           fi
 
           [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
           [ "${{ github.event.inputs.force_ai }}"   = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && FLAGS="$FLAGS --publish-yt"
           [ "${{ github.event.inputs.publish_fb }}" = "false" ] && \
           [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="$FLAGS --no-publish"
 
@@ -225,12 +231,12 @@ jobs:
             --formats "${{ github.event.inputs.formats || '9x16' }}" \
             $FLAGS
 
-      - name: 📤 Upload videos
+      - name: 📤 Upload final video
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: en-videos-${{ secrets.run_number }}
-          path: output/**/*.mp4
+          name: en-videos-${{ github.run_number }}
+          path: output/**/*_final.mp4
           retention-days: 7
           if-no-files-found: ignore
 
