@@ -1,9 +1,30 @@
 """
 tags_parser.py — Smart Emotional Tags Parser
 ✨ يستخرج ويُصحح ويُحلل الـ tags في النصوص
-✅ يدعم inline tags في نفس السطر
-✅ يدعم tags في أسطر منفصلة
-✅ auto-correction للأخطاء الإملائية
+
+الـ Tags المدعومة (أحرف صغيرة فقط):
+  === Short + Long ===
+  [intrigue]     - إثارة الفضول
+  [desire]       - رغبة وطموح
+  [information]  - معلومة محايدة
+  [inspiration]  - إلهام
+  [confident]    - ثقة
+  [shock]        - صدمة
+  [wisdom]       - حكمة
+  [urgency]      - عاجل
+  [calm]         - هدوء
+  [emotional]    - عاطفي
+
+  === Long فقط (تعمل في Short أيضاً) ===
+  [pause]        - وقفة درامية
+  [whisper]      - همس سري
+  [curiosity]    - فضول عميق
+  [storytelling] - سرد قصة
+  [dramatic]     - درامي قوي
+  [revelation]   - كشف حقيقة
+  [tension]      - توتر متصاعد
+  [climax]       - ذروة القصة
+  [powerful]     - قوة وحزم
 """
 
 from __future__ import annotations
@@ -17,6 +38,11 @@ from difflib import get_close_matches
 # ═════════════════════════════════════════════════════════════════════════════
 
 VALID_TAGS: dict[str, dict] = {
+
+    # ══════════════════════════════════════
+    # Original Tags — Short + Long
+    # ══════════════════════════════════════
+
     "intrigue": {
         "name_ar":      "إثارة الفضول",
         "name_en":      "Intrigue",
@@ -117,6 +143,101 @@ VALID_TAGS: dict[str, dict] = {
         "voice_volume": 0.95,
         "description":  "صوت رقيق ومؤثر",
     },
+
+    # ══════════════════════════════════════
+    # ✅ NEW Tags — Long + Short
+    # ══════════════════════════════════════
+
+    "pause": {
+        "name_ar":      "وقفة درامية",
+        "name_en":      "Pause",
+        "name_fr":      "Pause",
+        "voice_style":  "peaceful",
+        "voice_rate":   0.82,
+        "voice_pitch":  -3,
+        "voice_volume": 0.75,
+        "description":  "صوت هادئ جداً وبطيء للوقفات الدرامية",
+    },
+    "whisper": {
+        "name_ar":      "همس",
+        "name_en":      "Whisper",
+        "name_fr":      "Chuchotement",
+        "voice_style":  "mysterious",
+        "voice_rate":   0.88,
+        "voice_pitch":  -3,
+        "voice_volume": 0.7,
+        "description":  "صوت همس غامض وسري",
+    },
+    "curiosity": {
+        "name_ar":      "فضول",
+        "name_en":      "Curiosity",
+        "name_fr":      "Curiosité",
+        "voice_style":  "mysterious",
+        "voice_rate":   0.95,
+        "voice_pitch":  +1,
+        "voice_volume": 0.92,
+        "description":  "صوت يثير التساؤل والفضول العميق",
+    },
+    "storytelling": {
+        "name_ar":      "سرد قصة",
+        "name_en":      "Storytelling",
+        "name_fr":      "Récit",
+        "voice_style":  "clear",
+        "voice_rate":   0.98,
+        "voice_pitch":  0,
+        "voice_volume": 1.0,
+        "description":  "صوت سردي مريح وواضح لرواية القصص",
+    },
+    "dramatic": {
+        "name_ar":      "درامي",
+        "name_en":      "Dramatic",
+        "name_fr":      "Dramatique",
+        "voice_style":  "deep",
+        "voice_rate":   0.86,
+        "voice_pitch":  -2,
+        "voice_volume": 1.08,
+        "description":  "صوت عميق ومسرحي قوي",
+    },
+    "revelation": {
+        "name_ar":      "كشف حقيقة",
+        "name_en":      "Revelation",
+        "name_fr":      "Révélation",
+        "voice_style":  "intense",
+        "voice_rate":   1.02,
+        "voice_pitch":  +2,
+        "voice_volume": 1.1,
+        "description":  "صوت صادم قوي لكشف الحقيقة",
+    },
+    "tension": {
+        "name_ar":      "توتر",
+        "name_en":      "Tension",
+        "name_fr":      "Tension",
+        "voice_style":  "fast",
+        "voice_rate":   1.08,
+        "voice_pitch":  +1,
+        "voice_volume": 1.0,
+        "description":  "صوت متسارع يوحي بالتوتر المتصاعد",
+    },
+    "climax": {
+        "name_ar":      "ذروة",
+        "name_en":      "Climax",
+        "name_fr":      "Apogée",
+        "voice_style":  "bold",
+        "voice_rate":   1.05,
+        "voice_pitch":  +3,
+        "voice_volume": 1.15,
+        "description":  "أقوى نقطة صوتية — ذروة القصة",
+    },
+    "powerful": {
+        "name_ar":      "قوي",
+        "name_en":      "Powerful",
+        "name_fr":      "Puissant",
+        "voice_style":  "bold",
+        "voice_rate":   0.94,
+        "voice_pitch":  -1,
+        "voice_volume": 1.1,
+        "description":  "صوت حازم وواثق بقوة",
+    },
 }
 
 VALID_TAG_NAMES: list[str] = list(VALID_TAGS.keys())
@@ -134,30 +255,22 @@ TAG_INLINE_PATTERN = _TAG_RE
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ CORE: SPLIT INTO TAGGED SENTENCES
-# يحل مشكلة inline tags نهائياً
+# CORE: SPLIT INTO TAGGED SENTENCES
 # ═════════════════════════════════════════════════════════════════════════════
 
 def split_into_tagged_sentences(content: str) -> list[dict]:
     """
     ✅ تقسيم المحتوى إلى جمل مع tags.
 
-    يعمل مع كل الأشكال:
-      1. [tag] نص. [tag] نص. [tag] نص.   ← inline في نفس السطر
-      2. [tag] نص                          ← كل tag في سطر
-         [tag] نص
-      3. [tag] نص                          ← فقرات منفصلة
-         
-         [tag] نص
+    يعمل مع:
+      1. [tag] نص. [tag] نص.   ← inline
+      2. [tag] نص               ← كل tag في سطر
+      3. فقرات منفصلة
 
-    Input:
-      "[intrigue] جملة 1. [desire] جملة 2. [shock] جملة 3."
-
-    Output:
+    Returns:
       [
-        {"raw_tag": "intrigue", "text": "جملة 1.", "line": 1},
-        {"raw_tag": "desire",   "text": "جملة 2.", "line": 2},
-        {"raw_tag": "shock",    "text": "جملة 3.", "line": 3},
+        {"raw_tag": "intrigue", "text": "النص", "line": 1},
+        ...
       ]
     """
     if not content or not content.strip():
@@ -166,7 +279,6 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
     text    = content.strip()
     matches = list(_TAG_RE.finditer(text))
 
-    # لا يوجد أي tag → نرجع النص كله بدون tag
     if not matches:
         return [{
             "raw_tag": None,
@@ -177,21 +289,15 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
     result: list[dict] = []
 
     for i, match in enumerate(matches):
-        raw_tag = match.group(1).strip()
-
-        # النص يبدأ بعد نهاية الـ tag
+        raw_tag    = match.group(1).strip()
         text_start = match.end()
-
-        # النص ينتهي عند بداية الـ tag التالي أو نهاية المحتوى
-        text_end = (
+        text_end   = (
             matches[i + 1].start()
             if i + 1 < len(matches)
             else len(text)
         )
-
         segment = text[text_start:text_end].strip()
 
-        # تجاهل الجمل الفارغة
         if not segment:
             continue
 
@@ -209,7 +315,6 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def is_valid_tag(tag: str) -> bool:
-    """تحقق إذا كان الـ tag صحيح."""
     if not tag:
         return False
     return tag in VALID_TAGS
@@ -229,16 +334,16 @@ def auto_correct_tag(
 
     cleaned = raw_tag.strip()
 
-    # 1. مطابقة كاملة
+    # 1. exact match
     if cleaned in VALID_TAGS:
         return (cleaned, "exact_match")
 
-    # 2. تصحيح حالة الأحرف
+    # 2. case fix
     lower = cleaned.lower()
     if lower in VALID_TAGS:
         return (lower, "case_fixed")
 
-    # 3. fuzzy matching
+    # 3. fuzzy match
     matches = get_close_matches(
         lower,
         VALID_TAG_NAMES,
@@ -247,6 +352,32 @@ def auto_correct_tag(
     )
     if matches:
         return (matches[0], "spelling_fixed")
+
+    # 4. ✅ manual mapping للـ tags الشائعة التي قد تُستخدم
+    manual_map = {
+        "excited":     "inspiration",
+        "happy":       "inspiration",
+        "fear":        "urgency",
+        "angry":       "shock",
+        "sad":         "emotional",
+        "reflective":  "wisdom",
+        "mysterious":  "intrigue",
+        "suspense":    "tension",
+        "build":       "tension",
+        "soft":        "calm",
+        "hard":        "powerful",
+        "strong":      "powerful",
+        "epic":        "climax",
+        "story":       "storytelling",
+        "secret":      "whisper",
+        "reveal":      "revelation",
+        "truth":       "revelation",
+        "moment":      "pause",
+        "silence":     "pause",
+        "question":    "curiosity",
+    }
+    if lower in manual_map:
+        return (manual_map[lower], "manual_map")
 
     return (None, "no_match")
 
@@ -261,12 +392,10 @@ def strip_tags_from_text(text: str) -> str:
 
 
 def get_tag_info(tag: str) -> dict | None:
-    """إرجاع معلومات الـ tag."""
     return VALID_TAGS.get(tag)
 
 
 def get_tag_name(tag: str, lang: str = "ar") -> str:
-    """إرجاع اسم الـ tag باللغة المحددة."""
     info = VALID_TAGS.get(tag, {})
     key  = f"name_{lang}"
     return info.get(key, info.get("name_en", tag))
@@ -280,7 +409,6 @@ def format_tags_summary(
     tagged_sentences: list[dict],
     lang:             str = "ar",
 ) -> str:
-    """إنشاء ملخص نصي للـ tags المُكتشفة."""
     if not tagged_sentences:
         return "  ⚠️  No tagged sentences found"
 
@@ -295,7 +423,8 @@ def format_tags_summary(
 
         tag_counts[final_tag] = tag_counts.get(final_tag, 0) + 1
 
-        if source in ("case_fixed", "spelling_fixed") and raw_tag:
+        if source in ("case_fixed", "spelling_fixed",
+                      "manual_map") and raw_tag:
             corrections.append(
                 f"     ⚠️  [{raw_tag}] → [{final_tag}]"
             )
@@ -318,7 +447,7 @@ def format_tags_summary(
         desc   = info.get("description", "")
         plural = "sentences" if count > 1 else "sentence"
         lines.append(
-            f"     ├── [{tag:12}] : {count} {plural}"
+            f"     ├── [{tag:14}] : {count} {plural}"
         )
         lines.append(f"     │   {desc[:50]}")
 
@@ -337,5 +466,4 @@ def print_tags_summary(
     tagged_sentences: list[dict],
     lang:             str = "ar",
 ) -> None:
-    """طباعة ملخص الـ tags."""
     print(format_tags_summary(tagged_sentences, lang))
