@@ -1,11 +1,11 @@
 """
 ai_enricher.py — Smart AI Assistant powered by Groq
-✨ يولّد كل شيء عدا النصوص الرئيسية (التي تأتي من Excel)
+✨ يولّد كل شيء عدا النصوص الرئيسية
 ✨ يدعم عدة مفاتيح Groq مع تدوير فوري عند rate limit
-✨ يدعم 3 لغات (AR, FR, EN) بشكل صحيح
-✨ Hook مخصص + Keywords محسّنة لكل جملة
-✨ B-Roll ذكي — keywords مرتبطة بمحتوى كل جملة
+✨ يدعم 3 لغات (AR, FR, EN)
+✨ B-Roll ذكي — keywords مرتبطة بكل جملة
 ✨ Street description لـ Facebook و YouTube
+✅ إصلاح truncated JSON للمحتوى الطويل
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ LANG_KEY: dict[str, str] = {
 }
 
 TAG_VISUAL_STYLE: dict[str, str] = {
+    # Original tags
     "intrigue":    "dark mysterious close-up shadow whisper secret",
     "desire":      "longing gaze reaching hand beautiful dream soft light",
     "information": "clear face reaction person listening neutral expression",
@@ -54,11 +55,20 @@ TAG_VISUAL_STYLE: dict[str, str] = {
     "calm":        "slow breathing peaceful face gentle movement soft focus",
     "emotional":   "tears on face trembling lip hand on heart pain visible",
     "inspiration": "person rising up breakthrough moment sunrise dramatic",
+    # ✅ New tags
+    "pause":        "person standing alone darkness dramatic silence moment",
+    "whisper":      "person whispering close up lips shadow mystery",
+    "curiosity":    "person looking through keyhole curious eyes questioning",
+    "storytelling": "person speaking firelight crowd listening engaged",
+    "dramatic":     "cinematic wide shot dramatic lighting storm approaching",
+    "revelation":   "person gasping truth revealed bright light darkness",
+    "tension":      "tight grip hands sweat close up nervous expression",
+    "climax":       "epic moment peak emotion powerful breakthrough scene",
+    "powerful":     "strong confident person unstoppable force determination",
 }
 
 DEFAULT_VISUAL_STYLE = "cinematic dark dramatic close-up face"
 
-# ✅ Street style instructions لكل لغة
 STREET_STYLE: dict[str, dict] = {
     "ar": {
         "style_name": "لغة شارع الإمارات العربية المتحدة",
@@ -77,8 +87,7 @@ STREET_STYLE: dict[str, dict] = {
         "instructions": (
             "Écris en argot français moderne — "
             "utilise des mots comme: wesh, c'est ouf, trop stylé, "
-            "carrément, tranquille, grave, c'est chaud, t'as vu, "
-            "laisse tomber, c'est de la balle. "
+            "carrément, tranquille, grave, c'est chaud, t'as vu. "
             "Style direct, énergique, comme si tu parles à un pote. "
             "Utilise beaucoup d'emojis. "
             "Pas de français formel."
@@ -91,7 +100,7 @@ STREET_STYLE: dict[str, dict] = {
             "Write in authentic American street slang — "
             "use words like: no cap, fr fr, lowkey, bussin, "
             "it's giving, slay, periodt, facts, bet, that's wild, "
-            "deadass, finna, lowkey, hits different. "
+            "deadass, finna, hits different. "
             "Keep it real, hype, like you're talking to your homie. "
             "Use lots of emojis. "
             "No formal English."
@@ -139,8 +148,7 @@ def _get_client() -> Groq:
 
     if not _GROQ_KEYS:
         raise AIEnrichmentError(
-            "GROQ_API_KEY not found in environment.\n"
-            "Set it in .env or GitHub Secrets."
+            "GROQ_API_KEY not found in environment."
         )
 
     key = _GROQ_KEYS[_groq_key_idx % len(_GROQ_KEYS)]
@@ -180,8 +188,7 @@ def _call_groq(
 
     total_attempts = (
         max(MAX_RETRIES, len(_GROQ_KEYS) * 2)
-        if _GROQ_KEYS
-        else MAX_RETRIES
+        if _GROQ_KEYS else MAX_RETRIES
     )
 
     last_error: str | None = None
@@ -219,10 +226,7 @@ def _call_groq(
 
             if attempt < total_attempts - 1:
                 wait = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
-                print(
-                    f"  ⚠️  Error: {err_str[:80]} "
-                    f"— retrying in {wait}s..."
-                )
+                print(f"  ⚠️  Error: {err_str[:80]} — retrying in {wait}s...")
                 _rotate_groq_key()
                 time.sleep(wait)
             else:
@@ -230,8 +234,7 @@ def _call_groq(
 
     raise AIEnrichmentError(
         f"❌ {operation_name} FAILED after {total_attempts} attempts.\n"
-        f"   Last error: {last_error[:200] if last_error else 'unknown'}\n"
-        f"   Video render will STOP."
+        f"   Last error: {last_error[:200] if last_error else 'unknown'}"
     )
 
 
@@ -262,6 +265,38 @@ def _parse_json_response(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# ✅ SAFE TRUNCATE — يقطع النص بأمان بدون كسر JSON
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _safe_truncate(text: str, max_chars: int) -> str:
+    """
+    يقطع النص بأمان عند حد معين.
+    يتجنب القطع في وسط كلمة عربية أو أجنبية.
+    """
+    if len(text) <= max_chars:
+        return text
+
+    truncated = text[:max_chars]
+    last_space = max(
+        truncated.rfind(" "),
+        truncated.rfind("\n"),
+        truncated.rfind(".")
+    )
+
+    if last_space > max_chars * 0.8:
+        truncated = truncated[:last_space]
+
+    return truncated.strip() + "..."
+
+
+def _safe_title(title: str, max_chars: int = 80) -> str:
+    """يقطع العنوان بأمان."""
+    if len(title) <= max_chars:
+        return title
+    return title[:max_chars].strip() + "..."
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -284,16 +319,13 @@ def _extract_lang_value(
         if isinstance(val, list):
             values = [str(x).strip() for x in val if str(x).strip()]
             if len(values) >= min_count:
-                print(
-                    f"  ⚠️  {operation}: using key "
-                    f"'{key}' instead of '{lang_key}'"
-                )
+                print(f"  ⚠️  {operation}: using key '{key}'")
                 return values
 
     if "en" in data and isinstance(data["en"], list):
         values = [str(x).strip() for x in data["en"] if str(x).strip()]
         if len(values) >= min_count:
-            print(f"  ⚠️  {operation}: falling back to 'en' key")
+            print(f"  ⚠️  {operation}: falling back to 'en'")
             return values
 
     raise AIEnrichmentError(
@@ -320,8 +352,7 @@ def _extract_en_value(
                 return values
 
     raise AIEnrichmentError(
-        f"❌ {operation}: cannot find valid 'en' data.\n"
-        f"   Keys found: {list(data.keys())}"
+        f"❌ {operation}: cannot find valid 'en' data."
     )
 
 
@@ -336,34 +367,22 @@ def analyze_content(
 ) -> dict:
     lang_name = LANG_NAMES.get(lang, "Arabic")
 
-    prompt = f"""You are an expert content analyst for short-form viral videos.
+    # ✅ إصلاح: تقليل طول المحتوى لتجنب truncated JSON
+    safe_title   = _safe_title(title, 80)
+    safe_content = _safe_truncate(content, 600)
 
-Analyze this {lang_name} video content:
+    prompt = f"""Analyze this {lang_name} video content and return JSON.
 
-TITLE: {title}
+TITLE: {safe_title}
 
-CONTENT (sample):
-{content[:1200]}
+CONTENT:
+{safe_content}
 
-Return ONLY a valid JSON object with this exact structure:
-
-{{
-  "content_type": "<one of: psychology, relationships, business, lifestyle, motivation, education, health, spirituality, finance, social_skills>",
-  "primary_emotion": "<one of: curiosity, fear, desire, anger, hope, sadness, joy, awe, surprise>",
-  "secondary_emotions": ["<2-3 emotions>"],
-  "intensity": <integer 1-10>,
-  "audience": "<short description>",
-  "tone": "<one of: energetic, calm, emotional, inspirational, mysterious, urgent>",
-  "topic_summary": "<one sentence summary in {lang_name}>"
-}}
-
-Rules:
-- Return ONLY the JSON, no explanations
-- All values must be valid JSON types
-- Do not use markdown code blocks"""
+Return ONLY this JSON (no extra text):
+{{"content_type":"<psychology|relationships|business|lifestyle|motivation|education|health|spirituality|finance|social_skills>","primary_emotion":"<curiosity|fear|desire|anger|hope|sadness|joy|awe|surprise>","secondary_emotions":["emotion1","emotion2"],"intensity":<1-10>,"audience":"<short>","tone":"<energetic|calm|emotional|inspirational|mysterious|urgent>","topic_summary":"<one sentence in {lang_name}>"}}"""
 
     raw  = _call_groq(
-        prompt, max_tokens=400, temperature=0.3,
+        prompt, max_tokens=350, temperature=0.3,
         operation_name="Content Analysis"
     )
     data = _parse_json_response(raw, dict, "Content Analysis")
@@ -399,25 +418,25 @@ def suggest_tags_for_sentences(
 
     lang_name      = LANG_NAMES.get(lang, "Arabic")
     available_tags = ", ".join(VALID_TAG_NAMES)
+
+    # ✅ نقطع الجمل الطويلة
     sentences_text = "\n".join(
-        f"{i+1}. {s['text'][:150]}"
+        f"{i+1}. {_safe_truncate(s['text'], 120)}"
         for i, s in enumerate(sentences_needing_tags)
     )
 
-    prompt = f"""You are an expert in vocal performance for video narration.
+    prompt = f"""Choose emotional tags for video narration sentences.
 
 Context: {context.get('content_type')} content, {context.get('tone')} tone.
 Language: {lang_name}
 
-For each sentence below, choose the MOST suitable emotional tag.
-
-Available tags (lowercase only):
+Available tags:
 {available_tags}
 
 Sentences ({len(sentences_needing_tags)} total):
 {sentences_text}
 
-Return ONLY a JSON array of exactly {len(sentences_needing_tags)} tag names.
+Return ONLY a JSON array of exactly {len(sentences_needing_tags)} tags.
 Example: ["intrigue","desire","confident"]"""
 
     raw  = _call_groq(
@@ -453,32 +472,30 @@ def generate_power_words(
     count:   int = 10,
 ) -> list[str]:
     if not content or not content.strip():
-        raise AIEnrichmentError(
-            "Cannot generate power words from empty content"
-        )
+        raise AIEnrichmentError("Cannot generate power words from empty content")
 
-    lang_name = LANG_NAMES.get(lang, "Arabic")
+    lang_name    = LANG_NAMES.get(lang, "Arabic")
+    safe_content = _safe_truncate(content, 800)
 
-    prompt = f"""You are a viral content expert.
+    prompt = f"""Extract {count} powerful single words from this {lang_name} text.
 
 Content type: {context.get('content_type', 'general')}
 Primary emotion: {context.get('primary_emotion', 'curiosity')}
 
-From this {lang_name} text, extract {count} psychologically powerful SINGLE WORDS:
+Rules:
+- Single words only
+- Must exist in the text
 - Trigger strong emotions
-- Stop the scroll
-- SINGLE words only (not phrases)
-- Actually exist in the text
-- Must be in {lang_name} language
+- Must be in {lang_name}
 
 Text:
-{content[:1500]}
+{safe_content}
 
-Return ONLY a JSON array of {count} single words.
-Example: ["word1","word2","word3",...]"""
+Return ONLY a JSON array of {count} words.
+Example: ["word1","word2","word3"]"""
 
     raw   = _call_groq(
-        prompt, max_tokens=300, temperature=0.6,
+        prompt, max_tokens=250, temperature=0.6,
         operation_name=f"Power Words ({lang.upper()})"
     )
     words = _parse_json_response(raw, list, "Power Words")
@@ -494,8 +511,7 @@ Example: ["word1","word2","word3",...]"""
 
     if len(result) < 3:
         raise AIEnrichmentError(
-            f"❌ Power Words: only {len(result)} valid words "
-            f"(need at least 3)"
+            f"❌ Power Words: only {len(result)} valid words"
         )
 
     print(f"  ✅ Power Words ({lang.upper()}): {len(result)} words")
@@ -517,48 +533,32 @@ def _generate_single_sentence_keywords(
     emotion      = context.get("primary_emotion", "neutral")
     visual_style = TAG_VISUAL_STYLE.get(tag, DEFAULT_VISUAL_STYLE)
 
-    prompt = f"""You are a professional B-Roll director for dark psychological viral videos.
+    # ✅ نقطع الجملة الطويلة
+    safe_sentence = _safe_truncate(sentence, 150)
 
-SENTENCE [{sentence_idx + 1}/{total}]: "{sentence}"
-TAG: [{tag}]
-CONTENT TYPE: {content_type}
-PRIMARY EMOTION: {emotion}
-VISUAL STYLE FOR THIS TAG: {visual_style}
+    prompt = f"""B-Roll keyword for dark psychological video.
 
-TASK: Suggest 3 stock video search keywords that VISUALLY REPRESENT this exact sentence.
+SENTENCE [{sentence_idx + 1}/{total}]: "{safe_sentence}"
+TAG: [{tag}] | TYPE: {content_type} | EMOTION: {emotion}
+VISUAL STYLE: {visual_style}
 
-STRICT RULES:
-1. FORBIDDEN ABSTRACT WORDS: do NOT use:
-   "success", "betrayal", "mindset", "growth", "pain", "emotion",
-   "feeling", "concept", "idea", "psychology", "motivation", "truth"
-2. USE ONLY CONCRETE VISUALS — describe what we LITERALLY SEE on screen.
-3. DARK & CINEMATIC style only.
-4. Each keyword = 3 to 6 English words describing a real visual scene.
-5. Make each of the 3 keywords DIFFERENT from each other.
+Suggest 3 stock video search keywords.
+Rules:
+- English only
+- 3-6 words each
+- Concrete visuals (no abstract)
+- Dark cinematic style
 
-GOOD EXAMPLES:
-  - "man staring camera dark room"
-  - "fake smile slow motion close up"
-  - "person whispering shadow background"
-
-Return ONLY a JSON array of exactly 3 strings.
-Example: ["keyword one", "keyword two", "keyword three"]"""
+Return ONLY JSON array of 3 strings:
+["keyword one","keyword two","keyword three"]"""
 
     try:
         raw      = _call_groq(
-            prompt,
-            max_tokens     = 120,
-            temperature    = 0.5,
-            operation_name = (
-                f"Keywords [{tag}] "
-                f"({sentence_idx + 1}/{total})"
-            ),
+            prompt, max_tokens=120, temperature=0.5,
+            operation_name=f"Keywords [{tag}] ({sentence_idx + 1}/{total})",
         )
-        keywords = _parse_json_response(raw, list, "Sentence Keywords")
-        result   = [
-            str(k).strip() for k in keywords[:3]
-            if str(k).strip()
-        ]
+        keywords = _parse_json_response(raw, list, "Keywords")
+        result   = [str(k).strip() for k in keywords[:3] if str(k).strip()]
 
         fallbacks = [
             f"{visual_style} dark cinematic",
@@ -571,14 +571,11 @@ Example: ["keyword one", "keyword two", "keyword three"]"""
         return result[:3]
 
     except Exception as e:
-        print(
-            f"  ⚠️  Keywords failed for sentence "
-            f"{sentence_idx + 1}: {e}"
-        )
+        print(f"  ⚠️  Keywords failed for sentence {sentence_idx + 1}: {e}")
         return [
             visual_style,
-            "dramatic close up face dark background",
-            "cinematic person shadow mystery",
+            "dramatic close up face dark",
+            "cinematic shadow mystery",
         ]
 
 
@@ -589,22 +586,16 @@ def generate_visual_keywords(
     tags:      list[str] | None = None,
 ) -> list[list[str]]:
     if not sentences:
-        raise AIEnrichmentError(
-            "Cannot generate keywords for empty sentences"
-        )
+        raise AIEnrichmentError("Cannot generate keywords for empty sentences")
 
     n      = len(sentences)
-    result : list[list[str]] = []
+    result: list[list[str]] = []
 
-    print(
-        f"  🎬 Generating B-Roll keywords: "
-        f"{n} sentences (1 request each)..."
-    )
+    print(f"  🎬 Generating B-Roll keywords: {n} sentences...")
 
     for i, sentence in enumerate(sentences):
         tag = (
-            tags[i]
-            if tags and i < len(tags)
+            tags[i] if tags and i < len(tags)
             else "information"
         )
         kws = _generate_single_sentence_keywords(
@@ -617,10 +608,7 @@ def generate_visual_keywords(
         result.append(kws)
         print(f"     [{i + 1}/{n}] [{tag}] → {kws}")
 
-    print(
-        f"  ✅ B-Roll Keywords: "
-        f"{len(result)} sentences × 3 (per-sentence)"
-    )
+    print(f"  ✅ B-Roll Keywords: {len(result)} sentences × 3")
     return result
 
 
@@ -639,39 +627,30 @@ def generate_pattern_interrupts(
     emotion      = context.get("primary_emotion", "curiosity")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     lang_key     = LANG_KEY.get(lang, lang)
+    safe_title   = _safe_title(title, 60)
 
-    prompt = f"""Generate {count} SHORT pattern interrupt phrases \
-in {lang_name} AND English.
+    prompt = f"""Generate {count} SHORT pattern interrupt phrases in {lang_name} AND English.
 
-Title: "{title}" | Type: {content_type} | Emotion: {emotion}
+Title: "{safe_title}" | Type: {content_type} | Emotion: {emotion}
 
 Rules: 1-4 words MAX, shocking, can include emojis.
 
-Return ONLY JSON with exactly these two keys:
+Return ONLY JSON:
 {{"{lang_key}": ["phrase1",...], "en": ["phrase1",...]}}"""
 
     raw  = _call_groq(
-        prompt, max_tokens=500, temperature=0.8,
+        prompt, max_tokens=400, temperature=0.8,
         operation_name="Pattern Interrupts"
     )
     data = _parse_json_response(raw, dict, "Pattern Interrupts")
 
-    lang_values = _extract_lang_value(
-        data, lang, "Pattern Interrupts", min_count=3
-    )
-    en_values   = _extract_en_value(
-        data, "Pattern Interrupts", min_count=3
-    )
+    lang_values = _extract_lang_value(data, lang, "Pattern Interrupts", 3)
+    en_values   = _extract_en_value(data, "Pattern Interrupts", 3)
 
-    result = {
-        lang_key: lang_values[:count],
-        "en":     en_values[:count],
-    }
+    result = {lang_key: lang_values[:count], "en": en_values[:count]}
 
     if len(result[lang_key]) < 3 or len(result["en"]) < 3:
-        raise AIEnrichmentError(
-            "❌ Pattern Interrupts: not enough phrases"
-        )
+        raise AIEnrichmentError("❌ Pattern Interrupts: not enough")
 
     print(
         f"  ✅ Pattern Interrupts: "
@@ -695,39 +674,29 @@ def generate_engagement_questions(
     content_type = context.get("content_type", "general")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     lang_key     = LANG_KEY.get(lang, lang)
+    safe_title   = _safe_title(title, 60)
 
-    prompt = f"""Generate {count} SHORT engagement questions \
-in {lang_name} AND English.
+    prompt = f"""Generate {count} SHORT engagement questions in {lang_name} AND English.
 
-Title: "{title}" | Type: {content_type}
-
+Title: "{safe_title}" | Type: {content_type}
 Rules: 3-7 words, encourage comments, can include emojis.
 
-Return ONLY JSON with exactly these two keys:
+Return ONLY JSON:
 {{"{lang_key}": ["q1",...], "en": ["q1",...]}}"""
 
     raw  = _call_groq(
-        prompt, max_tokens=500, temperature=0.8,
+        prompt, max_tokens=400, temperature=0.8,
         operation_name="Engagement Questions"
     )
     data = _parse_json_response(raw, dict, "Engagement Questions")
 
-    lang_values = _extract_lang_value(
-        data, lang, "Engagement Questions", min_count=3
-    )
-    en_values   = _extract_en_value(
-        data, "Engagement Questions", min_count=3
-    )
+    lang_values = _extract_lang_value(data, lang, "Engagement Questions", 3)
+    en_values   = _extract_en_value(data, "Engagement Questions", 3)
 
-    result = {
-        lang_key: lang_values[:count],
-        "en":     en_values[:count],
-    }
+    result = {lang_key: lang_values[:count], "en": en_values[:count]}
 
     if len(result[lang_key]) < 3 or len(result["en"]) < 3:
-        raise AIEnrichmentError(
-            "❌ Engagement Questions: not enough"
-        )
+        raise AIEnrichmentError("❌ Engagement Questions: not enough")
 
     print(
         f"  ✅ Engagement Questions: "
@@ -751,19 +720,18 @@ def generate_hashtags(
     content_type = context.get("content_type", "general")
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     lang_key     = LANG_KEY.get(lang, lang)
+    safe_title   = _safe_title(title, 60)
 
-    prompt = f"""Generate {count} hashtags per language \
-in {lang_name} AND English.
+    prompt = f"""Generate {count} hashtags in {lang_name} AND English.
 
-Title: "{title}" | Type: {content_type}
+Title: "{safe_title}" | Type: {content_type}
+Rules: start with #, underscores for spaces.
 
-Rules: start with #, underscores instead of spaces, no spaces.
-
-Return ONLY JSON with exactly these two keys:
+Return ONLY JSON:
 {{"{lang_key}": ["#tag1",...], "en": ["#tag1",...]}}"""
 
     raw  = _call_groq(
-        prompt, max_tokens=600, temperature=0.6,
+        prompt, max_tokens=500, temperature=0.6,
         operation_name="Hashtags"
     )
     data = _parse_json_response(raw, dict, "Hashtags")
@@ -779,12 +747,8 @@ Return ONLY JSON with exactly these two keys:
             result.append(tag)
         return result
 
-    lang_values = _extract_lang_value(
-        data, lang, "Hashtags", min_count=5
-    )
-    en_values   = _extract_en_value(
-        data, "Hashtags", min_count=5
-    )
+    lang_values = _extract_lang_value(data, lang, "Hashtags", 5)
+    en_values   = _extract_en_value(data, "Hashtags", 5)
 
     result = {
         lang_key: clean_tags(lang_values[:count]),
@@ -803,7 +767,7 @@ Return ONLY JSON with exactly these two keys:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 8️⃣ CAPTIONS (قصير — للتوافق مع الكود القديم)
+# 8️⃣ CAPTIONS
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_captions(
@@ -813,37 +777,35 @@ def generate_captions(
     hashtags: dict[str, list[str]],
     lang:     str = "ar",
 ) -> dict[str, str]:
-    lang_name = LANG_NAMES.get(lang, "Arabic")
-    lang_key  = LANG_KEY.get(lang, lang)
+    lang_name    = LANG_NAMES.get(lang, "Arabic")
+    lang_key     = LANG_KEY.get(lang, lang)
+    safe_title   = _safe_title(title, 60)
+    safe_content = _safe_truncate(content, 500)
 
     lang_tags     = hashtags.get(lang_key, hashtags.get(lang, []))
     en_tags       = hashtags.get("en", [])
     lang_tags_str = " ".join(lang_tags[:10])
     en_tags_str   = " ".join(en_tags[:10])
 
-    prompt = f"""Write a professional Facebook caption \
-in {lang_name} AND English.
+    prompt = f"""Write a Facebook caption in {lang_name} AND English.
 
-Title: "{title}"
-Type: {context.get('content_type')}
-Emotion: {context.get('primary_emotion')}
+Title: "{safe_title}"
+Type: {context.get('content_type')} | Emotion: {context.get('primary_emotion')}
 
-Content sample:
-{content[:1000]}
+Content:
+{safe_content}
 
 Rules:
 - Strong hook (1 line)
-- 2-3 lines of value
-- Call-to-action
-- Use emojis
-- 5-7 lines total
-- NO hashtags in caption body
+- 2-3 lines value
+- Call-to-action + emojis
+- NO hashtags in body
 
-Return ONLY JSON with exactly these two keys:
-{{"{lang_key}": "caption here", "en": "caption here"}}"""
+Return ONLY JSON:
+{{"{lang_key}": "caption", "en": "caption"}}"""
 
     raw  = _call_groq(
-        prompt, max_tokens=800, temperature=0.7,
+        prompt, max_tokens=600, temperature=0.7,
         operation_name="Captions"
     )
     data = _parse_json_response(raw, dict, "Captions")
@@ -852,37 +814,22 @@ Return ONLY JSON with exactly these two keys:
     en_caption   = ""
 
     for key in [lang_key, lang, "ar", "fr"]:
-        if (
-            key in data and
-            isinstance(data[key], str) and
-            data[key].strip()
-        ):
+        if key in data and isinstance(data[key], str) and data[key].strip():
             lang_caption = data[key].strip()
             break
 
-    if (
-        "en" in data and
-        isinstance(data["en"], str) and
-        data["en"].strip()
-    ):
+    if "en" in data and isinstance(data["en"], str) and data["en"].strip():
         en_caption = data["en"].strip()
 
     if not lang_caption:
-        raise AIEnrichmentError(
-            f"❌ Captions: missing {lang_key} caption.\n"
-            f"   Keys found: {list(data.keys())}"
-        )
+        raise AIEnrichmentError(f"❌ Captions: missing {lang_key}")
     if not en_caption:
         en_caption = lang_caption
 
     if lang_tags_str:
-        lang_caption = (
-            f"{lang_caption}\n.\n.\n.\n{lang_tags_str}"
-        )
+        lang_caption = f"{lang_caption}\n.\n.\n.\n{lang_tags_str}"
     if en_tags_str:
-        en_caption = (
-            f"{en_caption}\n.\n.\n.\n{en_tags_str}"
-        )
+        en_caption   = f"{en_caption}\n.\n.\n.\n{en_tags_str}"
 
     result = {
         lang_key: lang_caption[:60000],
@@ -891,14 +838,14 @@ Return ONLY JSON with exactly these two keys:
 
     print(
         f"  ✅ Captions: "
-        f"{lang_key.upper()}({len(result[lang_key])} chars) | "
-        f"EN({len(result['en'])} chars)"
+        f"{lang_key.upper()}({len(result[lang_key])}) | "
+        f"EN({len(result['en'])})"
     )
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ NEW: STREET DESCRIPTION — لـ Facebook و YouTube
+# 9️⃣ STREET DESCRIPTION
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_street_description(
@@ -907,17 +854,6 @@ def generate_street_description(
     context: dict,
     lang:    str = "ar",
 ) -> str:
-    """
-    ✅ يولّد وصفاً طويلاً بلغة الشارع حسب اللغة:
-    - AR: لغة شارع الإمارات العربية المتحدة
-    - FR: argot français
-    - EN: American street slang
-
-    يُستخدم على Facebook و YouTube معاً.
-
-    Returns:
-        str: الوصف الكامل مع الـ hashtags في النهاية
-    """
     lang_key     = LANG_KEY.get(lang, lang)
     style        = STREET_STYLE.get(lang, STREET_STYLE["en"])
     content_type = context.get("content_type", "general")
@@ -926,47 +862,38 @@ def generate_street_description(
     instructions = style["instructions"]
     hashtag_lang = style["hashtag_lang"]
 
-    prompt = f"""أنت خبير في كتابة محتوى فيروسي على وسائل التواصل الاجتماعي.
+    # ✅ تقليل طول المحتوى
+    safe_title   = _safe_title(title, 80)
+    safe_content = _safe_truncate(content, 800)
 
-اكتب وصفاً طويلاً لفيديو على Facebook و YouTube.
+    prompt = f"""Write a long social media description for Facebook and YouTube.
 
-العنوان: "{title}"
-نوع المحتوى: {content_type}
-العاطفة: {emotion}
+Title: "{safe_title}"
+Type: {content_type} | Emotion: {emotion}
 
-محتوى الفيديو:
-{content[:1500]}
+Content:
+{safe_content}
 
-# أسلوب الكتابة المطلوب: {style_name}
+Style: {style_name}
 {instructions}
 
-# تعليمات الوصف:
-1. ابدأ بجملة صادمة أو مثيرة للاهتمام تجذب الانتباه فوراً
-2. اشرح محتوى الفيديو بتفصيل (8-12 سطر)
-3. أضف قصة أو مثال واقعي يتعلق بالموضوع
-4. اجعل القارئ يحس إنه لازم يشوف الفيديو
-5. أضف call-to-action قوي في النهاية (like، comment، subscribe)
-6. استخدم إيموجي بكثرة في كل الأجزاء
-7. الوصف يكون طويل (200-300 كلمة)
-
-# Hashtags:
-{hashtag_lang}
-أضف 20-25 hashtag في نهاية الوصف
-فصل بين الهاشتاج والوصف بـ:
+Instructions:
+1. Start with shocking/interesting hook
+2. Explain content in detail (8-12 lines)
+3. Add real example or story
+4. Strong call-to-action (like, comment, subscribe)
+5. Use lots of emojis
+6. {hashtag_lang}: add 20-25 hashtags at end separated by:
 .
 .
 .
 
-# مهم جداً:
-- اكتب الوصف كاملاً بنفس اللغة ({style_name})
-- لا تخلط لغات مختلفة في الوصف (فقط الهاشتاج يمكن أن يكون مختلط)
-- اكتب النص مباشرة بدون JSON أو أي تنسيق آخر
-- فقط الوصف ثم الهاشتاج"""
+Write in {style_name} only. Output description directly, no JSON."""
 
     try:
         raw = _call_groq(
             prompt,
-            max_tokens     = 1500,
+            max_tokens     = 1200,
             temperature    = 0.85,
             operation_name = f"Street Description ({lang.upper()})",
         )
@@ -974,9 +901,7 @@ def generate_street_description(
         description = raw.strip()
 
         if not description or len(description) < 100:
-            raise ValueError(
-                f"Description too short: {len(description)} chars"
-            )
+            raise ValueError(f"Too short: {len(description)} chars")
 
         print(
             f"  ✅ Street Description ({lang.upper()}): "
@@ -986,17 +911,15 @@ def generate_street_description(
 
     except Exception as e:
         print(f"  ⚠️  Street Description failed: {e}")
-        # fallback بسيط
-        lang_name = LANG_NAMES.get(lang, "Arabic")
         return (
-            f"{title}\n\n"
-            f"شاهد الفيديو كاملاً للاستفادة! 🔥\n\n"
+            f"{safe_title}\n\n"
+            f"شاهد الفيديو كاملاً! 🔥\n\n"
             f"#shorts #viral #{content_type}"
         )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 9️⃣ ACCENT COLORS
+# 🔟 ACCENT COLORS
 # ═════════════════════════════════════════════════════════════════════════════
 
 def suggest_accent_colors(context: dict) -> list[str]:
@@ -1004,14 +927,14 @@ def suggest_accent_colors(context: dict) -> list[str]:
     content_type = context.get("content_type", "general")
     intensity    = context.get("intensity", 7)
 
-    prompt = f"""Suggest 4 vibrant accent HEX colors for:
+    prompt = f"""Suggest 4 vibrant HEX colors.
 Type: {content_type} | Emotion: {emotion} | Intensity: {intensity}/10
 
-Return ONLY a JSON array of 4 HEX codes.
-Example: ["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
+Return ONLY JSON array of 4 HEX codes:
+["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
 
     raw    = _call_groq(
-        prompt, max_tokens=200, temperature=0.6,
+        prompt, max_tokens=150, temperature=0.6,
         operation_name="Accent Colors"
     )
     colors = _parse_json_response(raw, list, "Accent Colors")
@@ -1041,7 +964,7 @@ Example: ["#FF003C","#FFD700","#00FFFF","#39FF14"]"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🔟 HOOK KEYWORD
+# 1️⃣1️⃣ HOOK KEYWORD
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_hook_keyword(
@@ -1054,21 +977,20 @@ def generate_hook_keyword(
 
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "curiosity")
+    safe_title   = _safe_title(title, 60)
 
-    prompt = f"""Suggest ONE powerful visual keyword \
-for the FIRST 3 seconds of this video.
+    prompt = f"""ONE powerful visual keyword for first 3 seconds.
 
-Title: "{title[:100]}"
-Type: {content_type} | Emotion: {emotion}
+Title: "{safe_title}" | Type: {content_type} | Emotion: {emotion}
 
 Rules:
 - 3-6 words MAX
 - English only
-- SHOCKING or EMOTIONALLY INTENSE
-- Concrete visual (not abstract)
-- DARK & CINEMATIC style
+- Shocking or intense
+- Concrete visual
+- Dark cinematic
 
-Return ONLY the keyword (no quotes, no JSON).
+Return ONLY the keyword (no quotes, no JSON):
 Example: crying woman eyes closeup dark"""
 
     raw     = _call_groq(
@@ -1090,7 +1012,7 @@ Example: crying woman eyes closeup dark"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 1️⃣1️⃣ CUSTOM HOOK SENTENCE
+# 1️⃣2️⃣ CUSTOM HOOK SENTENCE
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_custom_hook(
@@ -1103,38 +1025,28 @@ def generate_custom_hook(
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "curiosity")
     tone         = context.get("tone", "mysterious")
+    safe_title   = _safe_title(title, 60)
+    safe_content = _safe_truncate(content, 300)
 
-    prompt = f"""You are a viral content expert specializing in \
-short-form video hooks that STOP the scroll.
+    prompt = f"""ONE powerful hook sentence in {lang_name}.
 
-Create ONE powerful HOOK sentence in {lang_name} for this video.
-
-Title: "{title}"
+Title: "{safe_title}"
 Type: {content_type} | Emotion: {emotion} | Tone: {tone}
 
 Content preview:
-{content[:500]}
+{safe_content}
 
-The hook must:
-- Be in {lang_name} ONLY
+Rules:
+- {lang_name} ONLY
 - Maximum 10 words
-- Create INSTANT curiosity or shock
-- Make the viewer NEED to watch more
-- Sound like a secret or revelation
+- Instant curiosity or shock
+- Sound like a secret
 
-GOOD examples in French:
-- "Ce que personne ne te dit..."
-- "Le secret que 90% ignorent"
+GOOD Arabic: "90٪ من الناس لا يعرفون هذا السر"
+GOOD French: "Ce que personne ne te dit..."
+GOOD English: "Nobody tells you this truth"
 
-GOOD examples in Arabic:
-- "90٪ من الناس لا يعرفون هذا السر"
-- "هناك كلمة واحدة تغيّر كل شيء"
-
-GOOD examples in English:
-- "Nobody tells you this truth"
-- "90% of people get this wrong"
-
-Return ONLY the hook sentence, nothing else."""
+Return ONLY the hook sentence:"""
 
     try:
         raw  = _call_groq(
@@ -1153,11 +1065,11 @@ Return ONLY the hook sentence, nothing else."""
             return hook
         else:
             print("  ⚠️  Hook too short/long — using title")
-            return title
+            return safe_title
 
     except Exception as e:
-        print(f"  ⚠️  Custom hook failed: {e} — using title")
-        return title
+        print(f"  ⚠️  Custom hook failed: {e}")
+        return safe_title
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1182,14 +1094,16 @@ def enrich_record(
     lang_key  = LANG_KEY.get(lang, lang)
 
     if verbose:
+        safe_title = _safe_title(title, 50)
         print(
             f"\n  🧠 AI Enrichment for: "
-            f"'{title[:50]}' ({lang_name})"
+            f"'{safe_title}' ({lang_name})"
         )
         print(f"  {'─' * 50}")
         print(
             f"  📌 Title: "
-            f"{DEFAULT_EMOJI_LEFT} {title} {DEFAULT_EMOJI_RIGHT}"
+            f"{DEFAULT_EMOJI_LEFT} {_safe_title(title, 60)} "
+            f"{DEFAULT_EMOJI_RIGHT}"
         )
 
     # 1. Content Analysis
@@ -1198,8 +1112,7 @@ def enrich_record(
     # 2. Suggest tags
     if tagged:
         tags_needed = [
-            s for s in tagged
-            if s.get("final_tag") is None
+            s for s in tagged if s.get("final_tag") is None
         ]
         if tags_needed:
             suggested = suggest_tags_for_sentences(
@@ -1217,14 +1130,12 @@ def enrich_record(
 
     # 4. Visual Keywords
     sentences_for_keywords = (
-        [s["text"] for s in tagged]
-        if tagged
+        [s["text"] for s in tagged] if tagged
         else [content[:200]]
     )
     tags_for_keywords = (
         [s.get("final_tag", "information") for s in tagged]
-        if tagged
-        else ["information"]
+        if tagged else ["information"]
     )
     visual_keywords = generate_visual_keywords(
         sentences = sentences_for_keywords,
@@ -1246,17 +1157,14 @@ def enrich_record(
     # 7. Hashtags
     hashtags = generate_hashtags(title, content, analysis, lang)
 
-    # 8. Captions (قصير — للتوافق)
+    # 8. Captions
     captions = generate_captions(
         title, content, analysis, hashtags, lang
     )
 
-    # ✅ 9. Street Description — لـ Facebook و YouTube
+    # 9. Street Description
     street_description = generate_street_description(
-        title   = title,
-        content = content,
-        context = analysis,
-        lang    = lang,
+        title, content, analysis, lang
     )
 
     # 10. Accent Colors
@@ -1284,13 +1192,10 @@ def enrich_record(
         print(
             f"  📌 Final: "
             f"{attractive_title['emoji_left']} "
-            f"{attractive_title['title']} "
+            f"{_safe_title(attractive_title['title'], 50)} "
             f"{attractive_title['emoji_right']}"
         )
-        print(
-            f"  📝 Street Description: "
-            f"{len(street_description)} chars"
-        )
+        print(f"  📝 Street Description: {len(street_description)} chars")
 
     return {
         "analysis":             analysis,
@@ -1300,7 +1205,7 @@ def enrich_record(
         "engagement_questions": questions,
         "hashtags":             hashtags,
         "captions":             captions,
-        "street_description":   street_description,  # ✅ جديد
+        "street_description":   street_description,
         "accent_colors":        accent_colors,
         "hook_keyword":         hook_keyword,
         "custom_hook":          custom_hook,
