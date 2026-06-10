@@ -6,7 +6,7 @@ db.py — SQLite database for VSG
   - AI cache
   - تتبع النشر لكل لغة (AR, FR, EN)
   - تتبع النشر لكل منصة (facebook, youtube)
-  - ✅ content_mode: short | long
+  - content_mode: short | long
   - Auto-next
   - Loop
 """
@@ -150,8 +150,6 @@ def init_db() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _run_migrations(c: sqlite3.Connection) -> None:
-    """تطبيق migrations بأمان."""
-
     simple_migrations = [
         "ALTER TABLE renders ADD COLUMN published INTEGER DEFAULT 0",
         "ALTER TABLE renders ADD COLUMN content_mode TEXT DEFAULT 'short'",
@@ -176,7 +174,6 @@ def _run_migrations(c: sqlite3.Connection) -> None:
 
 
 def _migrate_renders_table(c: sqlite3.Connection) -> None:
-    """يتحقق من هيكل renders ويضيف content_mode للـ UNIQUE constraint."""
     table_info = c.execute(
         "SELECT sql FROM sqlite_master "
         "WHERE type='table' AND name='renders'"
@@ -187,7 +184,10 @@ def _migrate_renders_table(c: sqlite3.Connection) -> None:
 
     table_sql = table_info["sql"] or ""
 
-    if "content_mode" in table_sql and "UNIQUE(video_number, lang, content_mode)" in table_sql:
+    if (
+        "content_mode" in table_sql and
+        "UNIQUE(video_number, lang, content_mode)" in table_sql
+    ):
         return
 
     print("  🔄 Migrating renders table...")
@@ -195,9 +195,7 @@ def _migrate_renders_table(c: sqlite3.Connection) -> None:
     c.executescript("""
         CREATE TABLE IF NOT EXISTS renders_backup AS
             SELECT * FROM renders;
-
         DROP TABLE renders;
-
         CREATE TABLE renders (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             video_number   TEXT    NOT NULL,
@@ -212,24 +210,18 @@ def _migrate_renders_table(c: sqlite3.Connection) -> None:
             updated_at     TEXT    DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(video_number, lang, content_mode)
         );
-
         INSERT OR IGNORE INTO renders
             (video_number, lang, content_mode, status,
              output_path, duration_s, error, published,
              created_at, updated_at)
         SELECT
-            video_number,
-            lang,
-            COALESCE(content_mode, 'short'),
-            status,
-            output_path,
-            duration_s,
-            error,
+            video_number, lang,
+            COALESCE(content_mode, 'short'), status,
+            output_path, duration_s, error,
             COALESCE(published, 0),
             COALESCE(created_at, CURRENT_TIMESTAMP),
             COALESCE(updated_at, CURRENT_TIMESTAMP)
         FROM renders_backup;
-
         DROP TABLE IF EXISTS renders_backup;
     """)
 
@@ -237,7 +229,6 @@ def _migrate_renders_table(c: sqlite3.Connection) -> None:
 
 
 def _migrate_publish_tracker(c: sqlite3.Connection) -> None:
-    """يتحقق من هيكل publish_tracker ويضيف content_mode و platform."""
     table_info = c.execute(
         "SELECT sql FROM sqlite_master "
         "WHERE type='table' AND name='publish_tracker'"
@@ -260,9 +251,7 @@ def _migrate_publish_tracker(c: sqlite3.Connection) -> None:
     c.executescript("""
         CREATE TABLE IF NOT EXISTS publish_tracker_backup AS
             SELECT * FROM publish_tracker;
-
         DROP TABLE publish_tracker;
-
         CREATE TABLE publish_tracker (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             video_number TEXT NOT NULL,
@@ -272,17 +261,14 @@ def _migrate_publish_tracker(c: sqlite3.Connection) -> None:
             published_at TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(video_number, lang, content_mode, platform)
         );
-
         INSERT OR IGNORE INTO publish_tracker
             (video_number, lang, content_mode, platform, published_at)
         SELECT
-            video_number,
-            lang,
+            video_number, lang,
             COALESCE(content_mode, 'short'),
             COALESCE(platform, 'facebook'),
             COALESCE(published_at, CURRENT_TIMESTAMP)
         FROM publish_tracker_backup;
-
         DROP TABLE IF EXISTS publish_tracker_backup;
     """)
 
@@ -290,7 +276,6 @@ def _migrate_publish_tracker(c: sqlite3.Connection) -> None:
 
 
 def _migrate_scripts_table(c: sqlite3.Connection) -> None:
-    """يتحقق من هيكل scripts ويضيف content_mode للـ PRIMARY KEY."""
     table_exists = c.execute(
         "SELECT name FROM sqlite_master "
         "WHERE type='table' AND name='scripts'"
@@ -329,9 +314,7 @@ def _migrate_scripts_table(c: sqlite3.Connection) -> None:
     c.executescript("""
         CREATE TABLE IF NOT EXISTS scripts_backup AS
             SELECT * FROM scripts;
-
         DROP TABLE scripts;
-
         CREATE TABLE scripts (
             video_number TEXT NOT NULL,
             lang         TEXT NOT NULL DEFAULT 'ar',
@@ -342,7 +325,6 @@ def _migrate_scripts_table(c: sqlite3.Connection) -> None:
             saved_at     TEXT DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (video_number, lang, content_mode)
         );
-
         INSERT OR IGNORE INTO scripts
             (video_number, lang, content_mode, title,
              sentences, words, saved_at)
@@ -355,11 +337,39 @@ def _migrate_scripts_table(c: sqlite3.Connection) -> None:
             COALESCE(words, 0),
             COALESCE(saved_at, CURRENT_TIMESTAMP)
         FROM scripts_backup;
-
         DROP TABLE IF EXISTS scripts_backup;
     """)
 
     print("  ✅ scripts table migrated")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✅ CACHE KEY — public + private
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _make_cache_key(
+    video_number: str,
+    lang:         str,
+    content_mode: str = "short",
+) -> str:
+    """
+    Private: يبني cache key يتضمن content_mode.
+    short → "1_ar_short"
+    long  → "1_ar_long"
+    """
+    return f"{video_number}_{lang}_{content_mode}"
+
+
+def make_cache_key(
+    video_number: str,
+    lang:         str,
+    content_mode: str = "short",
+) -> str:
+    """
+    ✅ Public wrapper لـ _make_cache_key.
+    يُستخدم في main.py.
+    """
+    return _make_cache_key(video_number, lang, content_mode)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -398,13 +408,13 @@ def get_used_count() -> int:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# RENDERS — مع content_mode
+# RENDERS
 # ═════════════════════════════════════════════════════════════════════════════
 
 def is_render_done(
-    video_number:  str,
-    lang:          str,
-    content_mode:  str = "short",
+    video_number: str,
+    lang:         str,
+    content_mode: str = "short",
 ) -> bool:
     row = _conn().execute(
         """SELECT status, output_path
@@ -426,8 +436,7 @@ def get_render_output(
     content_mode: str = "short",
 ) -> str | None:
     row = _conn().execute(
-        """SELECT output_path
-           FROM renders
+        """SELECT output_path FROM renders
            WHERE video_number=? AND lang=?
              AND content_mode=? AND status='done'""",
         (str(video_number), lang, content_mode),
@@ -467,8 +476,8 @@ def mark_render_done(
         with _conn() as c:
             c.execute(
                 """INSERT INTO renders
-                       (video_number, lang, content_mode, status,
-                        output_path, duration_s, updated_at)
+                       (video_number, lang, content_mode,
+                        status, output_path, duration_s, updated_at)
                    VALUES (?, ?, ?, 'done', ?, ?, CURRENT_TIMESTAMP)
                    ON CONFLICT(video_number, lang, content_mode)
                    DO UPDATE SET
@@ -505,7 +514,7 @@ def mark_render_failed(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PUBLISHING TRACKER — مع content_mode و platform
+# PUBLISHING TRACKER
 # ═════════════════════════════════════════════════════════════════════════════
 
 def is_published(
@@ -578,7 +587,7 @@ def get_published_count(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AUTO-NEXT — مع content_mode
+# AUTO-NEXT
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_next_video_number(
@@ -606,7 +615,7 @@ def get_next_video_number(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# LOOP — مع content_mode
+# LOOP
 # ═════════════════════════════════════════════════════════════════════════════
 
 def reset_published_for_lang(
@@ -625,13 +634,13 @@ def reset_published_for_lang(
 
     print(
         f"  🔄 Reset {lang.upper()} {platform} "
-        f"({content_mode}) publish tracker!"
+        f"({content_mode}) — ready to loop!"
     )
     return count
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PENDING PUBLISH — مع content_mode
+# PENDING PUBLISH
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_pending_publish(
@@ -644,9 +653,9 @@ def get_pending_publish(
             """SELECT r.video_number, r.lang,
                       r.content_mode, r.output_path
                FROM renders r
-               WHERE r.status      = 'done'
-                 AND r.output_path IS NOT NULL
-                 AND r.lang        = ?
+               WHERE r.status       = 'done'
+                 AND r.output_path  IS NOT NULL
+                 AND r.lang         = ?
                  AND r.content_mode = ?
                  AND NOT EXISTS (
                      SELECT 1 FROM publish_tracker p
@@ -662,8 +671,8 @@ def get_pending_publish(
             """SELECT r.video_number, r.lang,
                       r.content_mode, r.output_path
                FROM renders r
-               WHERE r.status      = 'done'
-                 AND r.output_path IS NOT NULL
+               WHERE r.status       = 'done'
+                 AND r.output_path  IS NOT NULL
                  AND r.content_mode = ?
                  AND NOT EXISTS (
                      SELECT 1 FROM publish_tracker p
@@ -688,7 +697,7 @@ def get_pending_publish(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SCRIPTS METADATA — مع content_mode
+# SCRIPTS METADATA
 # ═════════════════════════════════════════════════════════════════════════════
 
 def save_script_meta(
@@ -717,21 +726,8 @@ def save_script_meta(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AI CACHE — مع content_mode في الـ cache_key
+# AI CACHE
 # ═════════════════════════════════════════════════════════════════════════════
-
-def _make_cache_key(
-    video_number: str,
-    lang:         str,
-    content_mode: str = "short",
-) -> str:
-    """
-    ✅ cache_key يتضمن content_mode
-    short → "1_ar_short"
-    long  → "1_ar_long"
-    """
-    return f"{video_number}_{lang}_{content_mode}"
-
 
 def has_ai_cache(cache_key: str) -> bool:
     row = _conn().execute(
@@ -785,17 +781,16 @@ def get_ai_cache(cache_key: str) -> dict | None:
 
 
 def save_ai_cache(
-    cache_key: str,
-    title:     str,
-    lang:      str,
-    enriched:  dict,
+    cache_key:    str,
+    title:        str,
+    lang:         str,
+    enriched:     dict,
     content_mode: str = "short",
 ) -> None:
     def to_json(obj) -> str | None:
         return (
             json.dumps(obj, ensure_ascii=False)
-            if obj is not None
-            else None
+            if obj is not None else None
         )
 
     with _write_lock:
@@ -808,7 +803,7 @@ def save_ai_cache(
                        hashtags, captions, street_description,
                        accent_colors, hook_keyword,
                        attractive_title, tagged
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(cache_key) DO UPDATE SET
                        lang                 = excluded.lang,
                        content_mode         = excluded.content_mode,
@@ -896,7 +891,7 @@ def show_ai_cache(
         rows = _conn().execute(
             """SELECT cache_key, lang, content_mode,
                       title, created_at
-               FROM ai_cache ORDER BY cache_key"""
+               FROM ai_cache ORDER BY content_mode, cache_key"""
         ).fetchall()
 
         if not rows:
@@ -908,14 +903,14 @@ def show_ai_cache(
         print(f"  {'═' * 80}")
 
         for r in rows:
-            key   = str(r["cache_key"])[:20]
+            key   = str(r["cache_key"])[:18]
             lang  = str(r["lang"] or "ar").upper()[:3]
             mode  = str(r["content_mode"] or "short")[:5]
-            title = (r["title"] or "")[:30]
+            title = (r["title"] or "")[:28]
             date  = (r["created_at"] or "")[:19]
             print(
-                f"  {key:<20} {lang:<4} {mode:<6} "
-                f"{title:<30} {date}"
+                f"  {key:<18} {lang:<4} {mode:<6} "
+                f"{title:<28} {date}"
             )
 
         print(f"  {'═' * 80}\n")
@@ -945,24 +940,21 @@ def print_db_summary() -> None:
         "SELECT COUNT(*) FROM ai_cache"
     ).fetchone()[0]
 
-    # Short stats
     s_ar_fb = get_published_count("ar", "facebook", "short")
     s_fr_fb = get_published_count("fr", "facebook", "short")
     s_en_fb = get_published_count("en", "facebook", "short")
     s_ar_yt = get_published_count("ar", "youtube",  "short")
     s_fr_yt = get_published_count("fr", "youtube",  "short")
     s_en_yt = get_published_count("en", "youtube",  "short")
-
-    # Long stats
-    l_ar_yt = get_published_count("ar", "youtube", "long")
-    l_fr_yt = get_published_count("fr", "youtube", "long")
-    l_en_yt = get_published_count("en", "youtube", "long")
+    l_ar_yt = get_published_count("ar", "youtube",  "long")
+    l_fr_yt = get_published_count("fr", "youtube",  "long")
+    l_en_yt = get_published_count("en", "youtube",  "long")
 
     print(
         f"  📊 DB: {used} videos used | "
-        f"Renders: {done_s} short ✅ | {done_l} long ✅ | "
+        f"Short: {done_s} ✅ | Long: {done_l} ✅ | "
         f"{failed} failed ❌ | AI cached: {cached}\n"
-        f"  📱 Short — FB:  AR:{s_ar_fb} FR:{s_fr_fb} EN:{s_en_fb}\n"
-        f"  📱 Short — YT:  AR:{s_ar_yt} FR:{s_fr_yt} EN:{s_en_yt}\n"
-        f"  🎬 Long  — YT:  AR:{l_ar_yt} FR:{l_fr_yt} EN:{l_en_yt}"
+        f"  📱 Short FB : AR:{s_ar_fb} FR:{s_fr_fb} EN:{s_en_fb}\n"
+        f"  📱 Short YT : AR:{s_ar_yt} FR:{s_fr_yt} EN:{s_en_yt}\n"
+        f"  🎬 Long  YT : AR:{l_ar_yt} FR:{l_fr_yt} EN:{l_en_yt}"
     )
