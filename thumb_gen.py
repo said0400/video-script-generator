@@ -1,9 +1,9 @@
 """
-thumb_gen.py — Generate professional thumbnail for Reels.
-✨ مقاس 1080×1920 (9:16 Reels)
+thumb_gen.py — Generate professional thumbnail for Reels and YouTube Long.
+✨ Short: 1080×1920 (9:16 Reels)
+✨ Long:  1280×720  (16:9 YouTube)
 ✨ صورة خلفية من Pexels Photos API
 ✨ Fallback: frame من أول فيديو خام
-✨ Fallback أخير: خلفية سوداء
 ✨ فلتر أسود غامض
 ✨ العنوان في سطرين
 ✨ يدعم AR, FR, EN
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import tempfile
 from pathlib import Path
 
 import requests
@@ -24,8 +23,12 @@ import requests
 
 PEXELS_PHOTOS_URL = "https://api.pexels.com/v1/search"
 API_TIMEOUT       = 15
-WIDTH             = 1080
-HEIGHT            = 1920
+
+# مقاسات حسب content_mode
+DIMENSIONS = {
+    "short": {"width": 1080,  "height": 1920, "orientation": "portrait"},
+    "long":  {"width": 1280,  "height": 720,  "orientation": "landscape"},
+}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -35,10 +38,6 @@ HEIGHT            = 1920
 def _split_title_two_lines(title: str) -> str:
     """
     تقسيم العنوان إلى سطرين بشكل متوازن قدر الإمكان.
-
-    مثال:
-      "كيف تكشف نوايا الناس الحقيقية"
-      → "كيف تكشف نوايا\nالناس الحقيقية"
     """
     words = title.strip().split()
 
@@ -48,8 +47,8 @@ def _split_title_two_lines(title: str) -> str:
     if len(words) == 2:
         return f"{words[0]}\n{words[1]}"
 
-    mid      = len(words) // 2
-    best_i   = mid
+    mid       = len(words) // 2
+    best_i    = mid
     best_diff = 10 ** 9
 
     for i in range(max(1, mid - 2), min(len(words), mid + 3)):
@@ -74,8 +73,9 @@ def _split_title_two_lines(title: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _fetch_pexels_photo(
-    keyword:     str,
-    output_path: str,
+    keyword:      str,
+    output_path:  str,
+    orientation:  str = "portrait",
 ) -> bool:
     """جلب صورة من Pexels Photos API."""
     api_key = os.environ.get("PEXELS_API_KEY", "").strip()
@@ -91,7 +91,7 @@ def _fetch_pexels_photo(
             params  = {
                 "query":       keyword,
                 "per_page":    5,
-                "orientation": "portrait",
+                "orientation": orientation,
             },
             timeout = API_TIMEOUT,
         )
@@ -103,10 +103,18 @@ def _fetch_pexels_photo(
 
         photo   = photos[0]
         img_url = (
-            photo.get("src", {}).get("portrait") or
-            photo.get("src", {}).get("large2x")  or
-            photo.get("src", {}).get("large")
+            photo.get("src", {}).get("portrait")
+            if orientation == "portrait"
+            else photo.get("src", {}).get("landscape") or
+                 photo.get("src", {}).get("large2x")   or
+                 photo.get("src", {}).get("large")
         )
+
+        if not img_url:
+            img_url = (
+                photo.get("src", {}).get("large2x") or
+                photo.get("src", {}).get("large")
+            )
 
         if not img_url:
             return False
@@ -116,7 +124,7 @@ def _fetch_pexels_photo(
 
         Path(output_path).write_bytes(img_r.content)
         print(
-            f"  🖼️  Pexels photo: "
+            f"  🖼️  Pexels photo ({orientation}): "
             f"{keyword!r} → {Path(output_path).name}"
         )
         return True
@@ -127,10 +135,12 @@ def _fetch_pexels_photo(
 
 
 def _extract_frame_from_video(
-    video_path:  str,
-    output_path: str,
+    video_path:   str,
+    output_path:  str,
+    width:        int,
+    height:       int,
 ) -> bool:
-    """استخراج frame من فيديو خام بـ ffmpeg."""
+    """استخراج frame من فيديو خام بـ ffmpeg بالمقاس المطلوب."""
     try:
         if not Path(video_path).exists():
             return False
@@ -142,9 +152,9 @@ def _extract_frame_from_video(
                 "-i", video_path,
                 "-vframes", "1",
                 "-vf",
-                f"scale={WIDTH}:{HEIGHT}:"
+                f"scale={width}:{height}:"
                 f"force_original_aspect_ratio=increase,"
-                f"crop={WIDTH}:{HEIGHT}",
+                f"crop={width}:{height}",
                 "-q:v", "2",
                 output_path,
             ],
@@ -170,9 +180,12 @@ def _extract_frame_from_video(
 
 
 def _get_background_image(
-    keyword:     str,
-    video_paths: list[str] | None,
-    tmp_dir:     str,
+    keyword:      str,
+    video_paths:  list[str] | None,
+    tmp_dir:      str,
+    orientation:  str = "portrait",
+    width:        int = 1080,
+    height:       int = 1920,
 ) -> str | None:
     """
     يجلب صورة الخلفية بالأولوية:
@@ -182,7 +195,7 @@ def _get_background_image(
     """
     # 1. Pexels Photos
     pexels_img = str(Path(tmp_dir) / "thumb_bg.jpg")
-    if _fetch_pexels_photo(keyword, pexels_img):
+    if _fetch_pexels_photo(keyword, pexels_img, orientation):
         return pexels_img
 
     # 2. Frame من أول فيديو متاح
@@ -190,7 +203,9 @@ def _get_background_image(
         for vp in video_paths:
             if vp and Path(str(vp)).exists():
                 frame_img = str(Path(tmp_dir) / "thumb_frame.jpg")
-                if _extract_frame_from_video(str(vp), frame_img):
+                if _extract_frame_from_video(
+                    str(vp), frame_img, width, height
+                ):
                     return frame_img
 
     print("  ⚠️  No background image — using black")
@@ -202,7 +217,6 @@ def _get_background_image(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_lang_config(lang: str) -> dict:
-    """إعدادات اللغة للـ thumbnail."""
     if lang == "ar":
         return {
             "dir":   "rtl",
@@ -227,49 +241,67 @@ def _get_lang_config(lang: str) -> dict:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# FONT SIZE — مناسب لسطرين
+# FONT SIZE
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _get_font_size(title: str, lang: str) -> str:
+def _get_font_size(
+    title:        str,
+    lang:         str,
+    content_mode: str = "short",
+) -> str:
     """
-    حجم الخط حسب طول العنوان.
-    أكبر قليلاً بعد التقسيم إلى سطرين.
+    حجم الخط حسب طول العنوان و content_mode.
+    Long أصغر قليلاً لأن الشاشة أعرض.
     """
-    # نحسب الحجم على أطول سطر (بعد التقسيم)
     lines  = title.split("\n")
     length = max(len(line) for line in lines)
     is_ar  = lang == "ar"
+    is_long = content_mode == "long"
 
-    if length <= 10:
-        return "138px" if is_ar else "126px"
-    elif length <= 15:
-        return "120px" if is_ar else "110px"
-    elif length <= 22:
-        return "104px" if is_ar else "94px"
-    elif length <= 30:
-        return "88px"  if is_ar else "80px"
-    elif length <= 38:
-        return "76px"  if is_ar else "68px"
+    if is_long:
+        # Long — 1280×720
+        if length <= 10:
+            return "96px"  if is_ar else "88px"
+        elif length <= 15:
+            return "82px"  if is_ar else "74px"
+        elif length <= 22:
+            return "70px"  if is_ar else "62px"
+        elif length <= 30:
+            return "60px"  if is_ar else "54px"
+        elif length <= 38:
+            return "52px"  if is_ar else "46px"
+        else:
+            return "44px"  if is_ar else "40px"
     else:
-        return "64px"  if is_ar else "58px"
+        # Short — 1080×1920
+        if length <= 10:
+            return "138px" if is_ar else "126px"
+        elif length <= 15:
+            return "120px" if is_ar else "110px"
+        elif length <= 22:
+            return "104px" if is_ar else "94px"
+        elif length <= 30:
+            return "88px"  if is_ar else "80px"
+        elif length <= 38:
+            return "76px"  if is_ar else "68px"
+        else:
+            return "64px"  if is_ar else "58px"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# HTML GENERATOR
+# HTML GENERATOR — SHORT (1080×1920)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _generate_html(
+def _generate_html_short(
     title:          str,
     lang:           str,
     bg_image_path:  str | None,
     output_path:    str,
 ) -> Path:
-    """توليد ملف HTML للـ thumbnail."""
-
-    # ✅ تقسيم العنوان إلى سطرين
+    """توليد HTML للـ Short thumbnail (1080×1920)."""
     title_two_lines = _split_title_two_lines(title)
     config          = _get_lang_config(lang)
-    font_size       = _get_font_size(title_two_lines, lang)
+    font_size       = _get_font_size(title_two_lines, lang, "short")
 
     def esc(s: str) -> str:
         return (
@@ -280,16 +312,13 @@ def _generate_html(
              .replace("'", "&#039;")
         )
 
-    # HTML للعنوان — نحوّل \n إلى <br>
     title_html = esc(title_two_lines).replace("\n", "<br>")
 
-    # الخلفية
     if bg_image_path and Path(bg_image_path).exists():
         bg_image_abs = Path(bg_image_path).resolve()
         bg_style = (
             f"background-image: url('file://{bg_image_abs}'); "
-            f"background-size: cover; "
-            f"background-position: center;"
+            f"background-size: cover; background-position: center;"
         )
     else:
         bg_style = "background: #000000;"
@@ -299,106 +328,189 @@ def _generate_html(
 <head>
   <meta charset="UTF-8"/>
   <style>
-    * {{
-      margin:     0;
-      padding:    0;
-      box-sizing: border-box;
-    }}
-
-    html, body {{
-      width:    {WIDTH}px;
-      height:   {HEIGHT}px;
-      overflow: hidden;
-    }}
-
-    /* الخلفية */
-    .bg {{
-      position: absolute;
-      inset:    0;
-      {bg_style}
-    }}
-
-    /* فلتر أسود غامض */
-    .overlay {{
-      position:   absolute;
-      inset:      0;
-      background: rgba(0, 0, 0, 0.80);
-    }}
-
-    /* vignette للحواف */
+    * {{ margin:0; padding:0; box-sizing:border-box; }}
+    html, body {{ width:1080px; height:1920px; overflow:hidden; }}
+    .bg {{ position:absolute; inset:0; {bg_style} }}
+    .overlay {{ position:absolute; inset:0; background:rgba(0,0,0,0.80); }}
     .vignette {{
-      position:   absolute;
-      inset:      0;
-      background: radial-gradient(
-        ellipse at center,
-        transparent 25%,
-        rgba(0, 0, 0, 0.65) 100%
-      );
+      position:absolute; inset:0;
+      background:radial-gradient(ellipse at center, transparent 25%, rgba(0,0,0,0.65) 100%);
     }}
-
-    /* حاوية النص */
     .content {{
-      position:        absolute;
-      inset:           0;
-      display:         flex;
-      flex-direction:  column;
-      align-items:     center;
-      justify-content: center;
-      padding:         80px 70px;
-      direction:       {config['dir']};
-      text-align:      {config['align']};
-      gap:             0;
+      position:absolute; inset:0;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      padding:80px 70px;
+      direction:{config['dir']}; text-align:{config['align']};
     }}
-
-    /* العنوان — سطرين */
     .title {{
-      font-family:    {config['font']};
-      font-size:      {font_size};
-      font-weight:    900;
-      color:          #FFFFFF;
-      line-height:    1.22;
-      word-break:     break-word;
-      direction:      {config['dir']};
-      text-align:     {config['align']};
+      font-family:{config['font']};
+      font-size:{font_size};
+      font-weight:900; color:#FFFFFF; line-height:1.22;
+      word-break:break-word;
+      direction:{config['dir']}; text-align:{config['align']};
       text-shadow:
-        0 0 50px rgba(255, 255, 255, 0.12),
-        0 4px 30px rgba(0, 0, 0, 0.95),
-        2px 2px 0 rgba(0, 0, 0, 0.85),
-        -2px -2px 0 rgba(0, 0, 0, 0.85);
-      -webkit-text-stroke: 1.5px rgba(0, 0, 0, 0.6);
-      paint-order:    stroke fill;
-      max-width:      920px;
+        0 0 50px rgba(255,255,255,0.12),
+        0 4px 30px rgba(0,0,0,0.95),
+        2px 2px 0 rgba(0,0,0,0.85),
+        -2px -2px 0 rgba(0,0,0,0.85);
+      -webkit-text-stroke:1.5px rgba(0,0,0,0.6);
+      paint-order:stroke fill; max-width:920px;
     }}
-
-    /* الخط الأحمر تحت العنوان */
     .line {{
-      width:         180px;
-      height:        5px;
-      background:    linear-gradient(
-        90deg,
-        transparent,
-        #FF1744 30%,
-        #FF1744 70%,
-        transparent
-      );
-      border-radius: 3px;
-      margin-top:    44px;
-      flex-shrink:   0;
+      width:180px; height:5px; border-radius:3px; margin-top:44px;
+      background:linear-gradient(90deg, transparent, #FF1744 30%, #FF1744 70%, transparent);
+      flex-shrink:0;
     }}
-
   </style>
 </head>
 <body>
-
   <div class="bg"></div>
   <div class="overlay"></div>
   <div class="vignette"></div>
-
   <div class="content">
     <div class="title">{title_html}</div>
     <div class="line"></div>
   </div>
+</body>
+</html>"""
 
+    path = Path(output_path).resolve()
+    path.write_text(html, encoding="utf-8")
+    return path
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# HTML GENERATOR — LONG (1280×720)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _generate_html_long(
+    title:          str,
+    lang:           str,
+    bg_image_path:  str | None,
+    output_path:    str,
+) -> Path:
+    """
+    توليد HTML للـ Long thumbnail (1280×720).
+    تصميم أفقي احترافي لـ YouTube.
+    """
+    title_two_lines = _split_title_two_lines(title)
+    config          = _get_lang_config(lang)
+    font_size       = _get_font_size(title_two_lines, lang, "long")
+    is_ar           = lang == "ar"
+
+    def esc(s: str) -> str:
+        return (
+            s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;")
+             .replace("'", "&#039;")
+        )
+
+    title_html = esc(title_two_lines).replace("\n", "<br>")
+
+    if bg_image_path and Path(bg_image_path).exists():
+        bg_image_abs = Path(bg_image_path).resolve()
+        bg_style = (
+            f"background-image: url('file://{bg_image_abs}'); "
+            f"background-size: cover; background-position: center;"
+        )
+    else:
+        bg_style = "background: #0a0a0a;"
+
+    # للـ long، العنوان يكون في الجزء السفلي الأيسر (LTR) أو الأيمن (RTL)
+    text_side = "right:0; left:0;" if is_ar else "left:0; right:0;"
+    text_align = "right" if is_ar else "left"
+    text_dir   = "rtl" if is_ar else "ltr"
+
+    html = f"""<!DOCTYPE html>
+<html lang="{config['lang']}">
+<head>
+  <meta charset="UTF-8"/>
+  <style>
+    * {{ margin:0; padding:0; box-sizing:border-box; }}
+    html, body {{ width:1280px; height:720px; overflow:hidden; }}
+
+    .bg {{ position:absolute; inset:0; {bg_style} }}
+
+    /* gradient أسود من اليسار أو اليمين */
+    .side-gradient {{
+      position:absolute; inset:0;
+      background:{
+        "linear-gradient(to left, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.7) 40%, transparent 70%)"
+        if is_ar else
+        "linear-gradient(to right, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.7) 40%, transparent 70%)"
+      };
+    }}
+
+    /* gradient أسود أسفل */
+    .bottom-gradient {{
+      position:absolute; bottom:0; left:0; right:0; height:50%;
+      background:linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%);
+    }}
+
+    /* vignette */
+    .vignette {{
+      position:absolute; inset:0;
+      background:radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.5) 100%);
+    }}
+
+    /* محتوى النص */
+    .content {{
+      position:absolute;
+      bottom:48px;
+      {text_side}
+      padding:0 56px;
+      direction:{text_dir};
+      text-align:{text_align};
+      max-width:680px;
+    }}
+
+    /* خط أحمر فوق العنوان */
+    .accent-line {{
+      width:60px; height:4px; border-radius:2px;
+      background:#FF1744;
+      margin-bottom:16px;
+      {("margin-right:auto;" if is_ar else "margin-left:0;")}
+    }}
+
+    .title {{
+      font-family:{config['font']};
+      font-size:{font_size};
+      font-weight:900; color:#FFFFFF; line-height:1.25;
+      word-break:break-word;
+      direction:{text_dir}; text-align:{text_align};
+      text-shadow:
+        0 0 40px rgba(255,255,255,0.1),
+        0 3px 20px rgba(0,0,0,0.95),
+        2px 2px 0 rgba(0,0,0,0.8);
+      -webkit-text-stroke:1px rgba(0,0,0,0.6);
+      paint-order:stroke fill;
+    }}
+
+    /* شريط أحمر تحت العنوان */
+    .bottom-line {{
+      width:100px; height:3px; border-radius:2px;
+      background:linear-gradient(
+        {("to left" if is_ar else "to right")},
+        #FF1744, transparent
+      );
+      margin-top:16px;
+      {("margin-right:0; margin-left:auto;" if is_ar else "margin-left:0;")}
+    }}
+  </style>
+</head>
+<body>
+  <div class="bg"></div>
+  <div class="side-gradient"></div>
+  <div class="bottom-gradient"></div>
+  <div class="vignette"></div>
+  <div class="content">
+    <div class="accent-line"></div>
+    <div class="title">{title_html}</div>
+    <div class="bottom-line"></div>
+  </div>
 </body>
 </html>"""
 
@@ -412,25 +524,27 @@ def _generate_html(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_thumbnail_html(
-    title:       str,
-    lang:        str         = "ar",
-    output_path: str         = "thumbnail.html",
-    hook:        str         = "",
-    tone:        str         = "energetic",
-    keyword:     str         = "",
-    video_paths: list | None = None,
+    title:        str,
+    lang:         str         = "ar",
+    output_path:  str         = "thumbnail.html",
+    hook:         str         = "",
+    tone:         str         = "energetic",
+    keyword:      str         = "",
+    video_paths:  list | None = None,
+    content_mode: str         = "short",
 ) -> Path:
     """
     توليد ملف HTML للـ thumbnail.
 
     Args:
-        title:       عنوان الفيديو (الظاهر على الـ thumbnail)
-        lang:        اللغة (ar, fr, en)
-        output_path: مسار ملف HTML الناتج
-        hook:        غير مستخدم (للتوافق مع الكود القديم)
-        tone:        غير مستخدم (للتوافق مع الكود القديم)
-        keyword:     كلمة البحث للصورة (hook_keyword من AI)
-        video_paths: قائمة الفيديوهات المحملة (للـ fallback)
+        title:        عنوان الفيديو
+        lang:         اللغة (ar, fr, en)
+        output_path:  مسار ملف HTML الناتج
+        hook:         غير مستخدم (للتوافق)
+        tone:         غير مستخدم (للتوافق)
+        keyword:      كلمة البحث للصورة
+        video_paths:  قائمة الفيديوهات (للـ fallback)
+        content_mode: short | long
 
     Returns:
         Path للملف الناتج
@@ -438,8 +552,20 @@ def generate_thumbnail_html(
     out_path = Path(output_path).resolve()
     tmp_dir  = str(out_path.parent)
 
+    # مقاسات حسب content_mode
+    dims        = DIMENSIONS.get(content_mode, DIMENSIONS["short"])
+    width       = dims["width"]
+    height      = dims["height"]
+    orientation = dims["orientation"]
+
     # كلمة البحث
     search_kw = keyword.strip() if keyword else title.strip()
+
+    print(
+        f"  🖼️  Generating thumbnail "
+        f"[{content_mode.upper()}] "
+        f"({width}×{height})..."
+    )
 
     # جلب الصورة
     bg_image = _get_background_image(
@@ -449,15 +575,26 @@ def generate_thumbnail_html(
             if video_paths else None
         ),
         tmp_dir     = tmp_dir,
+        orientation = orientation,
+        width       = width,
+        height      = height,
     )
 
-    # توليد HTML
-    result = _generate_html(
-        title         = title,
-        lang          = lang,
-        bg_image_path = bg_image,
-        output_path   = str(out_path),
-    )
+    # توليد HTML حسب content_mode
+    if content_mode == "long":
+        result = _generate_html_long(
+            title         = title,
+            lang          = lang,
+            bg_image_path = bg_image,
+            output_path   = str(out_path),
+        )
+    else:
+        result = _generate_html_short(
+            title         = title,
+            lang          = lang,
+            bg_image_path = bg_image,
+            output_path   = str(out_path),
+        )
 
-    print(f"  🖼️  Thumbnail HTML → {out_path.name}")
+    print(f"  🖼️  Thumbnail HTML [{content_mode.upper()}] → {out_path.name}")
     return result
