@@ -27,7 +27,7 @@ from db import (
     get_next_video_number, reset_published_for_lang,
     mark_video_published_for_lang,
     is_published_facebook, is_published_youtube,
-    make_cache_key,                                  # ✅ public
+    make_cache_key,
 )
 from script_reader import (
     read_scripts, validate_scripts,
@@ -994,7 +994,7 @@ def _do_publish(
             except Exception as e:
                 print(f"  ❌ Facebook publish failed: {e}")
 
-    # ── YouTube — short و long ────────────────────────────────────────────
+    # ── YouTube ───────────────────────────────────────────────────────────
     if should_publish_yt:
         if is_published_youtube(video_number, lang, content_mode):
             print(
@@ -1190,11 +1190,14 @@ def process_video(
             Path(out_dir).resolve() /
             f"videos_{num}_{lang}_{content_mode}"
         )
+
+        # ✅ تمرير content_mode لجلب فيديوهات بالمقاس الصحيح
         video_paths = fetch_videos_for_script(
             keywords_per_sentence = clip_keywords,
             clip_durations        = clip_durations,
             output_dir            = vid_dir,
             aligned               = aligned,
+            content_mode          = content_mode,
         )
 
         result["video_paths"] = [str(p) for p in video_paths]
@@ -1404,7 +1407,7 @@ def main() -> None:
                 Path(args.output_dir).resolve() /
                 f"video_{record['number']}_{lang}_{content_mode}"
             )
-            path     = f"{out_base}{suffix}_final.mp4"
+            path = f"{out_base}{suffix}_final.mp4"
 
             fb_done = is_published_facebook(
                 record["number"], lang, content_mode
