@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 🎬 Video Generator — Multi-Language + Auto Schedule
-Pipeline النهائي:
+Pipeline:
   ✅ Short: 1080×1920 → Facebook + YouTube Shorts
   ✅ Long:  1920×1080 → YouTube فقط
   ✅ content_mode: short | long
@@ -27,7 +27,7 @@ from db import (
     get_next_video_number, reset_published_for_lang,
     mark_video_published_for_lang,
     is_published_facebook, is_published_youtube,
-    _make_cache_key,
+    make_cache_key,                                  # ✅ public
 )
 from script_reader import (
     read_scripts, validate_scripts,
@@ -64,8 +64,6 @@ from youtube import (
 
 CONTENT_TYPE  = "motivational"
 WPM           = 150.0
-MIN_S         = 30
-MAX_S         = 90
 RENDER_SCRIPT = Path(__file__).parent / "remotion" / "render.mjs"
 CLIP_DURATION = 3.0
 
@@ -75,13 +73,11 @@ SPEED_MULTIPLIER: dict[str, float] = {
     "en": 1.15,
 }
 
-# مقاسات حسب content_mode
 DIMENSIONS = {
-    "short": {"width": 1080, "height": 1920},
-    "long":  {"width": 1920, "height": 1080},
+    "short": {"width": 1080,  "height": 1920},
+    "long":  {"width": 1920,  "height": 1080},
 }
 
-# حدود مدة الفيديو
 DURATION_LIMITS = {
     "short": {"min": 30,  "max": 90},
     "long":  {"min": 120, "max": 1200},
@@ -97,27 +93,27 @@ def parse_args() -> argparse.Namespace:
         description="🎬 Video Generator",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    p.add_argument("input_file",         type=str, nargs="?", default=None)
-    p.add_argument("--output-dir",       type=str, default="output")
-    p.add_argument("--video-number",     type=str, default=None)
-    p.add_argument("--lang",             type=str, default="ar",
+    p.add_argument("input_file",       type=str, nargs="?", default=None)
+    p.add_argument("--output-dir",     type=str, default="output")
+    p.add_argument("--video-number",   type=str, default=None)
+    p.add_argument("--lang",           type=str, default="ar",
                    choices=["ar", "fr", "en"])
-    p.add_argument("--content-mode",     type=str, default="short",
+    p.add_argument("--content-mode",   type=str, default="short",
                    choices=["short", "long"])
-    p.add_argument("--auto-next",        action="store_true")
-    p.add_argument("--formats",          type=str, default="9x16")
-    p.add_argument("--no-export",        action="store_true")
-    p.add_argument("--script-only",      action="store_true")
-    p.add_argument("--no-video",         action="store_true")
-    p.add_argument("--force",            action="store_true")
-    p.add_argument("--force-ai",         action="store_true")
-    p.add_argument("--publish-fb",       action="store_true")
-    p.add_argument("--publish-yt",       action="store_true")
-    p.add_argument("--no-publish",       action="store_true")
-    p.add_argument("--show-ai-cache",    type=str, nargs="?",
+    p.add_argument("--auto-next",      action="store_true")
+    p.add_argument("--formats",        type=str, default="9x16")
+    p.add_argument("--no-export",      action="store_true")
+    p.add_argument("--script-only",    action="store_true")
+    p.add_argument("--no-video",       action="store_true")
+    p.add_argument("--force",          action="store_true")
+    p.add_argument("--force-ai",       action="store_true")
+    p.add_argument("--publish-fb",     action="store_true")
+    p.add_argument("--publish-yt",     action="store_true")
+    p.add_argument("--no-publish",     action="store_true")
+    p.add_argument("--show-ai-cache",  type=str, nargs="?",
                    const="all", default=None)
-    p.add_argument("--clear-ai-cache",   type=str, default=None)
-    p.add_argument("--reset-videos",     action="store_true")
+    p.add_argument("--clear-ai-cache", type=str, default=None)
+    p.add_argument("--reset-videos",   action="store_true")
     return p.parse_args()
 
 
@@ -134,7 +130,7 @@ def _estimate_duration(text: str, content_mode: str = "short") -> int:
 
 
 def _should_publish_fb(
-    args: argparse.Namespace,
+    args:         argparse.Namespace,
     content_mode: str,
 ) -> bool:
     if args.no_publish:   return False
@@ -217,7 +213,7 @@ def _is_cache_stale(cached: dict, content: str) -> bool:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAG INJECTION INTO ALIGNED
+# TAG INJECTION
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _inject_tags_into_aligned(
@@ -325,7 +321,7 @@ def _build_clip_plan(
 
     if aligned and len(aligned) >= len(sentences):
         print(
-            f"\n  🎞️  Clip plan from WhisperX timings "
+            f"\n  🎞️  Clip plan from WhisperX "
             f"({len(sentences)} sentences) [{content_mode.upper()}]..."
         )
 
@@ -657,12 +653,13 @@ def produce_bg_video(
         if clip_durations else CLIP_DURATION
     )
 
-    # ✅ mode حسب content_mode
     bg_mode = (
         "bg_only"
         if content_mode == "short"
         else "long_bg_only"
     )
+
+    suffix = f"_{content_mode}"
 
     manifest = {
         "title":          script_data["title"],
@@ -692,7 +689,6 @@ def produce_bg_video(
         "mode":           bg_mode,
     }
 
-    suffix        = f"_{content_mode}"
     manifest_path = Path(
         f"{out_base}{suffix}_bg_manifest.json"
     ).resolve()
@@ -742,12 +738,13 @@ def render_words_overlay(
 ) -> Path:
     audio_dur = get_audio_duration(str(audio_path))
 
-    # ✅ mode حسب content_mode
     words_mode = (
         "words_only"
         if content_mode == "short"
         else "long_words_only"
     )
+
+    suffix = f"_{content_mode}"
 
     manifest = {
         "title":         script_data["title"],
@@ -767,14 +764,13 @@ def render_words_overlay(
         "accent_colors": script_data.get("accent_colors", []),
         "analysis":      script_data.get("analysis",      {}),
         "clip_duration": audio_dur,
-        "has_hook":      bool(script_data.get("hook_keyword", "")),
+        "has_hook":      script_data.get("has_hook", False),
         "hook_keyword":  script_data.get("hook_keyword", ""),
         "custom_hook":   script_data.get("custom_hook",  ""),
         "aligned":       aligned,
         "mode":          words_mode,
     }
 
-    suffix        = f"_{content_mode}"
     manifest_path = Path(
         f"{out_base}{suffix}_words_manifest.json"
     ).resolve()
@@ -828,7 +824,7 @@ def get_or_create_ai_data(
 ) -> dict:
     video_number = str(record["number"])
     title        = record.get("title", "")
-    cache_key    = _make_cache_key(video_number, lang, content_mode)
+    cache_key    = make_cache_key(video_number, lang, content_mode)
 
     if not force_ai and has_ai_cache(cache_key):
         cached = get_ai_cache(cache_key)
@@ -978,7 +974,7 @@ def _do_publish(
     street_description = ai_data.get("street_description", "")
     title              = record.get("title", "")
 
-    # ── Facebook (short فقط) ──────────────────────────────────────────────
+    # ── Facebook — short فقط ──────────────────────────────────────────────
     if should_publish_fb and content_mode == "short":
         if is_published_facebook(video_number, lang, "short"):
             print(f"  ⏭️  Facebook: already published")
@@ -998,10 +994,13 @@ def _do_publish(
             except Exception as e:
                 print(f"  ❌ Facebook publish failed: {e}")
 
-    # ── YouTube (short و long) ────────────────────────────────────────────
+    # ── YouTube — short و long ────────────────────────────────────────────
     if should_publish_yt:
         if is_published_youtube(video_number, lang, content_mode):
-            print(f"  ⏭️  YouTube: already published [{content_mode}]")
+            print(
+                f"  ⏭️  YouTube: already published "
+                f"[{content_mode}]"
+            )
         else:
             try:
                 publish_to_youtube(
@@ -1014,7 +1013,10 @@ def _do_publish(
                 mark_video_published_for_lang(
                     video_number, lang, "youtube", content_mode
                 )
-                print(f"  📺 YouTube: published ✅ [{content_mode}]")
+                print(
+                    f"  📺 YouTube: published ✅ "
+                    f"[{content_mode}]"
+                )
             except Exception as e:
                 print(f"  ❌ YouTube publish failed: {e}")
 
@@ -1031,16 +1033,15 @@ def process_video(
     should_publish_yt: bool,
     content_mode:      str = "short",
 ) -> dict:
-    num   = str(record["number"])
-    title = record["title"]
-    lang  = args.lang
+    num        = str(record["number"])
+    title      = record["title"]
+    lang       = args.lang
+    mode_label = content_mode.upper()
 
     result = {
         "video_paths":  [],
         "hook_keyword": title,
     }
-
-    mode_label = content_mode.upper()
 
     print(f"\n{'═' * 65}")
     print(
@@ -1049,7 +1050,6 @@ def process_video(
     )
     print(f"{'═' * 65}")
 
-    # ✅ output path يتضمن content_mode
     out_base = str(
         Path(out_dir).resolve() /
         f"video_{num}_{lang}_{content_mode}"
@@ -1107,8 +1107,8 @@ def process_video(
         return result
 
     print(
-        f"  📊 Final sentences: {len(script_data['sentences'])} "
-        f"[{mode_label}]"
+        f"  📊 Final sentences: "
+        f"{len(script_data['sentences'])} [{mode_label}]"
     )
 
     if script_data.get("custom_hook") and content_mode == "short":
@@ -1174,7 +1174,7 @@ def process_video(
 
         # C. Clip plan + videos
         print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP C: Clip plan + fetch videos [{mode_label}]")
+        print(f"  ✅ STEP C: Clip plan + videos [{mode_label}]")
         clip_keywords, clip_durations = _build_clip_plan(
             script_data  = script_data,
             ai_data      = ai_data,
@@ -1226,6 +1226,7 @@ def process_video(
             content_mode = content_mode,
         )
 
+        # Export — فقط للـ short
         if export_formats and content_mode == "short":
             export_all(str(final_video), out_base, export_formats)
 
@@ -1304,7 +1305,10 @@ def main() -> None:
     will_publish_yt   = _should_publish_yt(args, lang)
 
     print(f"\n{'═' * 62}")
-    print(f"  🚀  Video Generator — {lang.upper()} [{content_mode.upper()}]")
+    print(
+        f"  🚀  Video Generator — "
+        f"{lang.upper()} [{content_mode.upper()}]"
+    )
     print(f"{'═' * 62}")
     print(f"  Input        : {args.input_file}")
     print(f"  Language     : {lang.upper()}")
@@ -1312,9 +1316,12 @@ def main() -> None:
     print(f"  Output       : {args.output_dir}")
     print(
         f"  Facebook     : "
-        f"{'✅' if will_publish_fb else '❌ (long mode or disabled)'}"
+        f"{'✅' if will_publish_fb else '❌'}"
     )
-    print(f"  YouTube      : {'✅' if will_publish_yt else '❌'}")
+    print(
+        f"  YouTube      : "
+        f"{'✅' if will_publish_yt else '❌'}"
+    )
     print()
     print_db_summary()
 
@@ -1325,7 +1332,10 @@ def main() -> None:
             will_publish_fb = False
 
     if will_publish_yt:
-        print(f"\n📺 Checking YouTube credentials ({lang.upper()})...")
+        print(
+            f"\n📺 Checking YouTube credentials "
+            f"({lang.upper()})..."
+        )
         if not yt_check_credentials(lang):
             print("  ⚠️  YT credentials invalid — disabled")
             will_publish_yt = False
@@ -1348,9 +1358,12 @@ def main() -> None:
 
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
-        # ✅ auto-next يأخذ content_mode بعين الاعتبار
-        platform  = "youtube" if content_mode == "long" else "facebook"
-        next_num  = get_next_video_number(
+        platform  = (
+            "youtube"
+            if content_mode == "long"
+            else "facebook"
+        )
+        next_num = get_next_video_number(
             lang, available, platform, content_mode
         )
         if next_num is None:
@@ -1386,11 +1399,12 @@ def main() -> None:
         if not args.force and is_render_done(
             record["number"], lang, content_mode
         ):
+            suffix   = f"_{content_mode}"
             out_base = str(
                 Path(args.output_dir).resolve() /
                 f"video_{record['number']}_{lang}_{content_mode}"
             )
-            path = f"{out_base}_{content_mode}_final.mp4"
+            path     = f"{out_base}{suffix}_final.mp4"
 
             fb_done = is_published_facebook(
                 record["number"], lang, content_mode
@@ -1408,7 +1422,7 @@ def main() -> None:
             ):
                 ai_data = (
                     get_ai_cache(
-                        _make_cache_key(
+                        make_cache_key(
                             str(record["number"]),
                             lang,
                             content_mode,
@@ -1492,7 +1506,7 @@ def main() -> None:
         )
         try:
             render_thumbnails_batch(
-                thumbnail_queue,
+                items        = thumbnail_queue,
                 content_mode = content_mode,
             )
         except Exception as e:
