@@ -6,15 +6,13 @@
 #
 #   1. pip install --upgrade pip setuptools wheel
 #   2. pip install torch==2.5.1 torchaudio==2.5.1 (CPU)
-#   3. pip install openai-whisper==20240930 --no-build-isolation
+#   3. pip install "setuptools<81.0.0" wheel
+#      pip install openai-whisper==20240930 --no-build-isolation
+#      pip install --upgrade setuptools
 #   4. pip install -r requirements.txt
 #   5. python -m playwright install chromium --with-deps
 #
 # ══════════════════════════════════════════════════════════════════════════════
-
-
-# ── Build Tools (required for openai-whisper) ─────────────────────────────────
-setuptools>=75.0.0
 
 
 # ── AI Services ───────────────────────────────────────────────────────────────
