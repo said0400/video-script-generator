@@ -1,22 +1,34 @@
 """
-analytics.py — Smart Analytics System
-✨ يحلل بيانات النشر ويعطي رؤى ذكية
-✨ تقارير: يومي، أسبوعي، شهري
-✨ تحليل: لغة، نوع، منصة، وقت، أخطاء، tags
-✨ تصدير: console, json, html
-✨ يرسل تقارير دورية عبر WhatsApp
+📊 Smart Analytics System
+
+Features:
+  ✅ Period-based reports (day, week, month, all)
+  ✅ Multi-dimensional analysis:
+        - By language (AR, FR, EN)
+        - By content mode (short, long)
+        - By platform (Facebook, YouTube)
+        - By hour (best publishing times)
+        - By tags (most used)
+        - By errors (patterns)
+        - Duration statistics
+  ✅ Output formats: console, JSON, HTML
+  ✅ WhatsApp notifications
+  ✅ Save reports to file
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
-from collections import Counter, defaultdict
+import logging
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from enum import Enum
 from pathlib import Path
+from typing import Any, Optional
 
-from db import init_db, _conn
+from db import _conn, init_db
 from notifier import notify_info
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -25,25 +37,166 @@ from notifier import notify_info
 
 BASE_DIR = Path(__file__).parent.resolve()
 
-LANGS = ["ar", "fr", "en"]
-MODES = ["short", "long"]
-PLATFORMS = ["facebook", "youtube"]
+# Supported values
+LANGS:     tuple[str, ...] = ("ar", "fr", "en")
+MODES:     tuple[str, ...] = ("short", "long")
+PLATFORMS: tuple[str, ...] = ("facebook", "youtube")
 
-LANG_FLAGS = {
+# Display
+LANG_FLAGS: dict[str, str] = {
     "ar": "🇸🇦",
     "fr": "🇫🇷",
     "en": "🇺🇸",
 }
 
-PLATFORM_EMOJIS = {
+PLATFORM_EMOJIS: dict[str, str] = {
     "facebook": "📘",
     "youtube":  "📺",
 }
 
-MODE_EMOJIS = {
+MODE_EMOJIS: dict[str, str] = {
     "short": "⚡",
     "long":  "🎬",
 }
+
+# Defaults
+DEFAULT_TOP_TAGS_LIMIT  = 10
+DEFAULT_TOP_HOURS_LIMIT = 5
+DEFAULT_ERRORS_LIMIT    = 10
+DEFAULT_RECENT_ERRORS   = 5
+
+# Display widths
+SUMMARY_WIDTH = 65
+SECTION_WIDTH = 50
+
+# Bar chart
+MAX_BAR_LENGTH = 30
+TAG_BAR_LENGTH = 20
+
+# Logging
+logging.basicConfig(
+    level  = logging.INFO,
+    format = "%(message)s",
+)
+log = logging.getLogger(__name__)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ENUMS
+# ═════════════════════════════════════════════════════════════════════════════
+
+class Period(str, Enum):
+    """الفترات المدعومة."""
+    DAY   = "day"
+    WEEK  = "week"
+    MONTH = "month"
+    ALL   = "all"
+
+
+class OutputFormat(str, Enum):
+    """تنسيقات الإخراج."""
+    CONSOLE = "console"
+    JSON    = "json"
+    HTML    = "html"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DATA CLASSES
+# ═════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class StatsBlock:
+    """إحصائيات أساسية لمجموعة."""
+    published:    int   = 0
+    rendered:     int   = 0
+    failed:       int   = 0
+    success_rate: float = 0.0
+
+    def calculate_success_rate(self) -> None:
+        """حساب معدل النجاح."""
+        total = self.rendered + self.failed
+        if total > 0:
+            self.success_rate = round(
+                (self.rendered / total) * 100, 1
+            )
+
+    def to_dict(self) -> dict:
+        return {
+            "published":    self.published,
+            "rendered":     self.rendered,
+            "failed":       self.failed,
+            "success_rate": self.success_rate,
+        }
+
+
+@dataclass
+class PlatformStats:
+    """إحصائيات منصة."""
+    total:   int            = 0
+    by_mode: dict[str, int] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        return {
+            "total":   self.total,
+            "by_mode": self.by_mode,
+        }
+
+
+@dataclass
+class DurationStats:
+    """إحصائيات المدة."""
+    count:       int   = 0
+    avg:         float = 0.0
+    min:         float = 0.0
+    max:         float = 0.0
+    total_hours: float = 0.0
+
+    @classmethod
+    def from_durations(
+        cls,
+        durations: list[float],
+    ) -> "DurationStats":
+        """بناء من قائمة مدد."""
+        if not durations:
+            return cls()
+
+        return cls(
+            count       = len(durations),
+            avg         = round(
+                sum(durations) / len(durations), 1
+            ),
+            min         = round(min(durations), 1),
+            max         = round(max(durations), 1),
+            total_hours = round(sum(durations) / 3600, 2),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "count":       self.count,
+            "avg":         self.avg,
+            "min":         self.min,
+            "max":         self.max,
+            "total_hours": self.total_hours,
+        }
+
+
+@dataclass
+class ErrorEntry:
+    """خطأ render."""
+    video_number: str
+    lang:         str
+    content_mode: str
+    error:        str
+    date:         str
+
+    def to_dict(self) -> dict:
+        return {
+            "video_number": self.video_number,
+            "lang":         self.lang,
+            "content_mode": self.content_mode,
+            "error":        self.error,
+            "date":         self.date,
+        }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -51,38 +204,45 @@ MODE_EMOJIS = {
 # ═════════════════════════════════════════════════════════════════════════════
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments."""
     p = argparse.ArgumentParser(
-        description="📊 Analytics System",
+        description = "📊 Analytics System",
     )
+
     p.add_argument(
         "--period",
-        type=str,
-        default="day",
-        choices=["day", "week", "month", "all"],
+        type    = str,
+        default = Period.DAY,
+        choices = [p.value for p in Period],
     )
+
     p.add_argument(
         "--lang",
-        type=str,
-        default="all",
-        choices=["all", "ar", "fr", "en"],
+        type    = str,
+        default = "all",
+        choices = ["all", *LANGS],
     )
+
     p.add_argument(
         "--format",
-        type=str,
-        default="console",
-        choices=["console", "json", "html"],
+        type    = str,
+        default = OutputFormat.CONSOLE,
+        choices = [f.value for f in OutputFormat],
     )
+
     p.add_argument(
         "--notify",
-        action="store_true",
-        help="إرسال التقرير عبر WhatsApp",
+        action = "store_true",
+        help   = "إرسال التقرير عبر WhatsApp",
     )
+
     p.add_argument(
         "--save",
-        type=str,
-        default=None,
-        help="حفظ التقرير في ملف",
+        type    = str,
+        default = None,
+        help    = "حفظ التقرير في ملف",
     )
+
     return p.parse_args()
 
 
@@ -90,35 +250,107 @@ def parse_args() -> argparse.Namespace:
 # DATE HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
+# Period labels
+PERIOD_LABELS: dict[str, str] = {
+    Period.DAY:   "Today",
+    Period.WEEK:  "Last 7 days",
+    Period.MONTH: "Last 30 days",
+    Period.ALL:   "All time",
+}
+
+
 def _get_date_range(period: str) -> tuple[str, str]:
-    """يحدد نطاق التاريخ حسب الفترة."""
+    """تحديد نطاق التاريخ حسب الفترة."""
     now = datetime.now()
 
-    if period == "day":
+    if period == Period.DAY:
         start = now.replace(
-            hour=0, minute=0, second=0, microsecond=0
+            hour   = 0,
+            minute = 0,
+            second = 0,
+            microsecond = 0,
         )
-    elif period == "week":
+    elif period == Period.WEEK:
         start = now - timedelta(days=7)
-    elif period == "month":
+    elif period == Period.MONTH:
         start = now - timedelta(days=30)
-    else:  # all
+    else:  # ALL
         start = datetime(2020, 1, 1)
 
-    return (
-        start.strftime("%Y-%m-%d %H:%M:%S"),
-        now.strftime("%Y-%m-%d %H:%M:%S"),
-    )
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return start.strftime(fmt), now.strftime(fmt)
 
 
 def _get_period_label(period: str) -> str:
     """تسمية واضحة للفترة."""
-    return {
-        "day":   "Today",
-        "week":  "Last 7 days",
-        "month": "Last 30 days",
-        "all":   "All time",
-    }.get(period, period)
+    return PERIOD_LABELS.get(period, period)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# QUERY HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _build_lang_filter(lang: str) -> tuple[str, list]:
+    """
+    بناء lang filter للـ SQL.
+
+    Returns:
+        (filter_sql, extra_params)
+    """
+    if lang == "all":
+        return "", []
+    return "AND lang = ?", [lang]
+
+
+def _count_rows(
+    table:       str,
+    where:       str,
+    params:      list,
+) -> int:
+    """عد الصفوف بـ WHERE."""
+    sql = f"SELECT COUNT(*) FROM {table} WHERE {where}"
+    row = _conn().execute(sql, params).fetchone()
+    return row[0] if row else 0
+
+
+def _count_published(
+    start: str,
+    end:   str,
+    extra_where: str = "",
+    extra_params: Optional[list] = None,
+) -> int:
+    """عد المنشور."""
+    where = "published_at BETWEEN ? AND ?"
+    params = [start, end]
+
+    if extra_where:
+        where += f" {extra_where}"
+        if extra_params:
+            params.extend(extra_params)
+
+    return _count_rows("publish_tracker", where, params)
+
+
+def _count_renders(
+    start:        str,
+    end:          str,
+    status:       str,
+    extra_where:  str = "",
+    extra_params: Optional[list] = None,
+) -> int:
+    """عد renders بحالة معينة."""
+    where = (
+        f"status = '{status}' "
+        f"AND updated_at BETWEEN ? AND ?"
+    )
+    params = [start, end]
+
+    if extra_where:
+        where += f" {extra_where}"
+        if extra_params:
+            params.extend(extra_params)
+
+    return _count_rows("renders", where, params)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -131,117 +363,78 @@ def get_overview(
     lang:       str = "all",
 ) -> dict:
     """نظرة عامة على الإنتاج."""
-    c = _conn()
-
-    lang_filter   = "" if lang == "all" else "AND lang = ?"
-    params: list  = [start_date, end_date]
-    if lang != "all":
-        params.append(lang)
+    lang_filter, lang_params = _build_lang_filter(lang)
 
     # إجمالي المنشور
-    total_published = c.execute(
-        f"""SELECT COUNT(*) FROM publish_tracker
-            WHERE published_at BETWEEN ? AND ?
-              {lang_filter}""",
-        params,
-    ).fetchone()[0]
+    total_published = _count_published(
+        start_date, end_date,
+        lang_filter, lang_params,
+    )
 
-    # عدد الفيديوهات الفريدة (لا تكرار)
+    # عدد الفيديوهات الفريدة
+    c = _conn()
+    params = [start_date, end_date] + lang_params
     unique_videos = c.execute(
-        f"""SELECT COUNT(DISTINCT video_number || '_' || lang || '_' || content_mode)
+        f"""SELECT COUNT(DISTINCT
+                video_number || '_' || lang || '_' || content_mode
+            )
             FROM publish_tracker
             WHERE published_at BETWEEN ? AND ?
               {lang_filter}""",
         params,
     ).fetchone()[0]
 
-    # عدد المرندر
-    rendered_params = [start_date, end_date]
-    if lang != "all":
-        rendered_params.append(lang)
+    # Renders
+    total_rendered = _count_renders(
+        start_date, end_date, "done",
+        lang_filter, lang_params,
+    )
+    failed_renders = _count_renders(
+        start_date, end_date, "failed",
+        lang_filter, lang_params,
+    )
 
-    total_rendered = c.execute(
-        f"""SELECT COUNT(*) FROM renders
-            WHERE status = 'done'
-              AND updated_at BETWEEN ? AND ?
-              {lang_filter}""",
-        rendered_params,
-    ).fetchone()[0]
-
-    failed_renders = c.execute(
-        f"""SELECT COUNT(*) FROM renders
-            WHERE status = 'failed'
-              AND updated_at BETWEEN ? AND ?
-              {lang_filter}""",
-        rendered_params,
-    ).fetchone()[0]
-
-    # معدل النجاح
-    success_rate = 0
-    if total_rendered + failed_renders > 0:
-        success_rate = (
-            total_rendered /
-            (total_rendered + failed_renders)
-        ) * 100
+    # Success rate
+    stats = StatsBlock(
+        rendered = total_rendered,
+        failed   = failed_renders,
+    )
+    stats.calculate_success_rate()
 
     return {
         "total_published": total_published,
         "unique_videos":   unique_videos,
         "total_rendered":  total_rendered,
         "failed_renders":  failed_renders,
-        "success_rate":    round(success_rate, 1),
+        "success_rate":    stats.success_rate,
     }
 
 
 def get_by_language(
     start_date: str,
     end_date:   str,
-) -> dict:
+) -> dict[str, dict]:
     """تحليل حسب اللغة."""
-    c = _conn()
-
     result = {}
 
     for lang in LANGS:
-        # عدد المنشور
-        published = c.execute(
-            """SELECT COUNT(*) FROM publish_tracker
-               WHERE lang = ?
-                 AND published_at BETWEEN ? AND ?""",
-            (lang, start_date, end_date),
-        ).fetchone()[0]
+        stats = StatsBlock()
 
-        # عدد المرندر الناجح
-        rendered = c.execute(
-            """SELECT COUNT(*) FROM renders
-               WHERE lang = ?
-                 AND status = 'done'
-                 AND updated_at BETWEEN ? AND ?""",
-            (lang, start_date, end_date),
-        ).fetchone()[0]
+        stats.published = _count_published(
+            start_date, end_date,
+            "AND lang = ?", [lang],
+        )
+        stats.rendered = _count_renders(
+            start_date, end_date, "done",
+            "AND lang = ?", [lang],
+        )
+        stats.failed = _count_renders(
+            start_date, end_date, "failed",
+            "AND lang = ?", [lang],
+        )
+        stats.calculate_success_rate()
 
-        # عدد المرندر الفاشل
-        failed = c.execute(
-            """SELECT COUNT(*) FROM renders
-               WHERE lang = ?
-                 AND status = 'failed'
-                 AND updated_at BETWEEN ? AND ?""",
-            (lang, start_date, end_date),
-        ).fetchone()[0]
-
-        # نسبة النجاح
-        success_rate = 0
-        if rendered + failed > 0:
-            success_rate = (
-                rendered / (rendered + failed)
-            ) * 100
-
-        result[lang] = {
-            "published":    published,
-            "rendered":     rendered,
-            "failed":       failed,
-            "success_rate": round(success_rate, 1),
-        }
+        result[lang] = stats.to_dict()
 
     return result
 
@@ -250,57 +443,32 @@ def get_by_mode(
     start_date: str,
     end_date:   str,
     lang:       str = "all",
-) -> dict:
+) -> dict[str, dict]:
     """تحليل حسب نوع المحتوى."""
-    c = _conn()
-
     result = {}
+    lang_filter, lang_params = _build_lang_filter(lang)
 
     for mode in MODES:
-        params = [mode, start_date, end_date]
-        lang_filter = ""
-        if lang != "all":
-            lang_filter = "AND lang = ?"
-            params.append(lang)
+        extra_where  = f"AND content_mode = ? {lang_filter}"
+        extra_params = [mode] + lang_params
 
-        published = c.execute(
-            f"""SELECT COUNT(*) FROM publish_tracker
-                WHERE content_mode = ?
-                  AND published_at BETWEEN ? AND ?
-                  {lang_filter}""",
-            params,
-        ).fetchone()[0]
+        stats = StatsBlock()
 
-        rendered = c.execute(
-            f"""SELECT COUNT(*) FROM renders
-                WHERE content_mode = ?
-                  AND status = 'done'
-                  AND updated_at BETWEEN ? AND ?
-                  {lang_filter}""",
-            params,
-        ).fetchone()[0]
+        stats.published = _count_published(
+            start_date, end_date,
+            extra_where, extra_params,
+        )
+        stats.rendered = _count_renders(
+            start_date, end_date, "done",
+            extra_where, extra_params,
+        )
+        stats.failed = _count_renders(
+            start_date, end_date, "failed",
+            extra_where, extra_params,
+        )
+        stats.calculate_success_rate()
 
-        failed = c.execute(
-            f"""SELECT COUNT(*) FROM renders
-                WHERE content_mode = ?
-                  AND status = 'failed'
-                  AND updated_at BETWEEN ? AND ?
-                  {lang_filter}""",
-            params,
-        ).fetchone()[0]
-
-        success_rate = 0
-        if rendered + failed > 0:
-            success_rate = (
-                rendered / (rendered + failed)
-            ) * 100
-
-        result[mode] = {
-            "published":    published,
-            "rendered":     rendered,
-            "failed":       failed,
-            "success_rate": round(success_rate, 1),
-        }
+        result[mode] = stats.to_dict()
 
     return result
 
@@ -309,45 +477,32 @@ def get_by_platform(
     start_date: str,
     end_date:   str,
     lang:       str = "all",
-) -> dict:
+) -> dict[str, dict]:
     """تحليل حسب المنصة."""
-    c = _conn()
-
     result = {}
+    lang_filter, lang_params = _build_lang_filter(lang)
 
     for platform in PLATFORMS:
-        params = [platform, start_date, end_date]
-        lang_filter = ""
-        if lang != "all":
-            lang_filter = "AND lang = ?"
-            params.append(lang)
+        platform_stats = PlatformStats()
 
-        published = c.execute(
-            f"""SELECT COUNT(*) FROM publish_tracker
-                WHERE platform = ?
-                  AND published_at BETWEEN ? AND ?
-                  {lang_filter}""",
-            params,
-        ).fetchone()[0]
+        # العدد الإجمالي
+        platform_stats.total = _count_published(
+            start_date, end_date,
+            f"AND platform = ? {lang_filter}",
+            [platform] + lang_params,
+        )
 
-        # تفصيل حسب نوع المحتوى
-        by_mode = {}
+        # التفصيل حسب الـ mode
         for mode in MODES:
-            mode_params = list(params) + [mode]
-            count = c.execute(
-                f"""SELECT COUNT(*) FROM publish_tracker
-                    WHERE platform = ?
-                      AND published_at BETWEEN ? AND ?
-                      {lang_filter}
-                      AND content_mode = ?""",
-                mode_params,
-            ).fetchone()[0]
-            by_mode[mode] = count
+            count = _count_published(
+                start_date, end_date,
+                f"AND platform = ? AND content_mode = ? "
+                f"{lang_filter}",
+                [platform, mode] + lang_params,
+            )
+            platform_stats.by_mode[mode] = count
 
-        result[platform] = {
-            "total":   published,
-            "by_mode": by_mode,
-        }
+        result[platform] = platform_stats.to_dict()
 
     return result
 
@@ -356,17 +511,12 @@ def get_by_hour(
     start_date: str,
     end_date:   str,
     lang:       str = "all",
-) -> dict:
-    """تحليل حسب الساعة (أفضل أوقات النشر)."""
-    c = _conn()
+) -> dict[str, int]:
+    """تحليل حسب الساعة."""
+    lang_filter, lang_params = _build_lang_filter(lang)
+    params = [start_date, end_date] + lang_params
 
-    params = [start_date, end_date]
-    lang_filter = ""
-    if lang != "all":
-        lang_filter = "AND lang = ?"
-        params.append(lang)
-
-    rows = c.execute(
+    rows = _conn().execute(
         f"""SELECT strftime('%H', published_at) as hour,
                    COUNT(*) as count
             FROM publish_tracker
@@ -377,28 +527,20 @@ def get_by_hour(
         params,
     ).fetchall()
 
-    return {
-        str(r["hour"]): r["count"]
-        for r in rows
-    }
+    return {str(r["hour"]): r["count"] for r in rows}
 
 
 def get_top_tags(
     start_date: str,
     end_date:   str,
     lang:       str = "all",
-    limit:      int = 10,
-) -> dict:
+    limit:      int = DEFAULT_TOP_TAGS_LIMIT,
+) -> dict[str, int]:
     """أكثر Tags استخدامًا."""
-    c = _conn()
+    lang_filter, lang_params = _build_lang_filter(lang)
+    params = [start_date, end_date] + lang_params
 
-    params = [start_date, end_date]
-    lang_filter = ""
-    if lang != "all":
-        lang_filter = "AND lang = ?"
-        params.append(lang)
-
-    rows = c.execute(
+    rows = _conn().execute(
         f"""SELECT tagged FROM ai_cache
             WHERE created_at BETWEEN ? AND ?
               {lang_filter}""",
@@ -410,13 +552,14 @@ def get_top_tags(
     for row in rows:
         if not row["tagged"]:
             continue
+
         try:
             tagged = json.loads(row["tagged"])
             for sent in tagged:
                 tag = sent.get("final_tag", "information")
                 if tag:
                     tag_counter[tag] += 1
-        except Exception:
+        except (json.JSONDecodeError, TypeError):
             continue
 
     return dict(tag_counter.most_common(limit))
@@ -426,18 +569,13 @@ def get_errors(
     start_date: str,
     end_date:   str,
     lang:       str = "all",
-    limit:      int = 10,
+    limit:      int = DEFAULT_ERRORS_LIMIT,
 ) -> list[dict]:
-    """تحليل الأخطاء."""
-    c = _conn()
+    """جلب أحدث الأخطاء."""
+    lang_filter, lang_params = _build_lang_filter(lang)
+    params = [start_date, end_date] + lang_params + [limit]
 
-    params = [start_date, end_date]
-    lang_filter = ""
-    if lang != "all":
-        lang_filter = "AND lang = ?"
-        params.append(lang)
-
-    rows = c.execute(
+    rows = _conn().execute(
         f"""SELECT video_number, lang, content_mode,
                    error, updated_at
             FROM renders
@@ -446,29 +584,51 @@ def get_errors(
               {lang_filter}
             ORDER BY updated_at DESC
             LIMIT ?""",
-        params + [limit],
+        params,
     ).fetchall()
 
     return [
-        {
-            "video_number": r["video_number"],
-            "lang":         r["lang"],
-            "content_mode": r["content_mode"],
-            "error":        r["error"],
-            "date":         r["updated_at"],
-        }
+        ErrorEntry(
+            video_number = r["video_number"],
+            lang         = r["lang"],
+            content_mode = r["content_mode"],
+            error        = r["error"] or "",
+            date         = r["updated_at"],
+        ).to_dict()
         for r in rows
     ]
+
+
+# Error pattern detection
+ERROR_PATTERNS: list[tuple[str, list[str]]] = [
+    ("Rate Limit",       ["rate limit", "429"]),
+    ("Timeout",          ["timeout"]),
+    ("Token/Auth Error", ["token", "401", "403"]),
+    ("WhisperX/STT",     ["whisperx", "whisper", "stable-ts"]),
+    ("Render/FFmpeg",    ["render", "ffmpeg"]),
+    ("Facebook",         ["facebook"]),
+    ("YouTube",          ["youtube"]),
+    ("Network",          ["network", "connection"]),
+]
+
+
+def _classify_error(error: str) -> str:
+    """تصنيف خطأ إلى نمط."""
+    error_lower = error.lower()
+
+    for pattern_name, keywords in ERROR_PATTERNS:
+        if any(kw in error_lower for kw in keywords):
+            return pattern_name
+
+    return "Other"
 
 
 def get_error_patterns(
     start_date: str,
     end_date:   str,
-) -> dict:
-    """تحليل الأنماط في الأخطاء."""
-    c = _conn()
-
-    rows = c.execute(
+) -> dict[str, int]:
+    """تحليل أنماط الأخطاء."""
+    rows = _conn().execute(
         """SELECT error FROM renders
            WHERE status = 'failed'
              AND error IS NOT NULL
@@ -479,28 +639,9 @@ def get_error_patterns(
     patterns: Counter = Counter()
 
     for row in rows:
-        error = (row["error"] or "").lower()
-
-        # تصنيف الأخطاء
-        if "rate limit" in error or "429" in error:
-            patterns["Rate Limit"] += 1
-        elif "timeout" in error:
-            patterns["Timeout"] += 1
-        elif "token" in error or "401" in error \
-                or "403" in error:
-            patterns["Token/Auth Error"] += 1
-        elif "whisperx" in error or "whisper" in error:
-            patterns["WhisperX"] += 1
-        elif "render" in error or "ffmpeg" in error:
-            patterns["Render/FFmpeg"] += 1
-        elif "facebook" in error:
-            patterns["Facebook"] += 1
-        elif "youtube" in error:
-            patterns["YouTube"] += 1
-        elif "network" in error or "connection" in error:
-            patterns["Network"] += 1
-        else:
-            patterns["Other"] += 1
+        error = row["error"] or ""
+        pattern = _classify_error(error)
+        patterns[pattern] += 1
 
     return dict(patterns.most_common())
 
@@ -509,20 +650,15 @@ def get_duration_stats(
     start_date: str,
     end_date:   str,
     lang:       str = "all",
-) -> dict:
+) -> dict[str, dict]:
     """إحصائيات المدة."""
-    c = _conn()
-
     result = {}
+    lang_filter, lang_params = _build_lang_filter(lang)
 
     for mode in MODES:
-        params = [mode, start_date, end_date]
-        lang_filter = ""
-        if lang != "all":
-            lang_filter = "AND lang = ?"
-            params.append(lang)
+        params = [mode, start_date, end_date] + lang_params
 
-        rows = c.execute(
+        rows = _conn().execute(
             f"""SELECT duration_s FROM renders
                 WHERE content_mode = ?
                   AND status = 'done'
@@ -537,126 +673,106 @@ def get_duration_stats(
             if r["duration_s"]
         ]
 
-        if not durations:
-            result[mode] = {
-                "count":   0,
-                "avg":     0,
-                "min":     0,
-                "max":     0,
-                "total_hours": 0,
-            }
-            continue
-
-        result[mode] = {
-            "count":       len(durations),
-            "avg":         round(sum(durations) / len(durations), 1),
-            "min":         round(min(durations), 1),
-            "max":         round(max(durations), 1),
-            "total_hours": round(sum(durations) / 3600, 2),
-        }
+        stats = DurationStats.from_durations(durations)
+        result[mode] = stats.to_dict()
 
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# COMPLETE REPORT
+# REPORT GENERATOR
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_report(
     period: str = "day",
     lang:   str = "all",
 ) -> dict:
-    """يولد التقرير الكامل."""
+    """توليد التقرير الكامل."""
     start_date, end_date = _get_date_range(period)
 
-    report = {
-        "period":     period,
-        "label":      _get_period_label(period),
-        "lang":       lang,
-        "start_date": start_date,
-        "end_date":   end_date,
-        "generated":  datetime.now().isoformat(),
+    return {
+        "period":         period,
+        "label":          _get_period_label(period),
+        "lang":           lang,
+        "start_date":     start_date,
+        "end_date":       end_date,
+        "generated":      datetime.now().isoformat(),
 
-        "overview":         get_overview(
-            start_date, end_date, lang
+        "overview":       get_overview(
+            start_date, end_date, lang,
         ),
-        "by_language":      get_by_language(
-            start_date, end_date
+        "by_language":    get_by_language(
+            start_date, end_date,
         ),
-        "by_mode":          get_by_mode(
-            start_date, end_date, lang
+        "by_mode":        get_by_mode(
+            start_date, end_date, lang,
         ),
-        "by_platform":      get_by_platform(
-            start_date, end_date, lang
+        "by_platform":    get_by_platform(
+            start_date, end_date, lang,
         ),
-        "by_hour":          get_by_hour(
-            start_date, end_date, lang
+        "by_hour":        get_by_hour(
+            start_date, end_date, lang,
         ),
-        "top_tags":         get_top_tags(
-            start_date, end_date, lang
+        "top_tags":       get_top_tags(
+            start_date, end_date, lang,
         ),
-        "recent_errors":    get_errors(
-            start_date, end_date, lang, 10
+        "recent_errors":  get_errors(
+            start_date, end_date, lang,
         ),
-        "error_patterns":   get_error_patterns(
-            start_date, end_date
+        "error_patterns": get_error_patterns(
+            start_date, end_date,
         ),
-        "duration_stats":   get_duration_stats(
-            start_date, end_date, lang
+        "duration_stats": get_duration_stats(
+            start_date, end_date, lang,
         ),
     }
-
-    return report
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSOLE REPORT
 # ═════════════════════════════════════════════════════════════════════════════
 
-def build_console_report(report: dict) -> str:
-    """بناء تقرير مفصل للـ console."""
-    lines = []
-    sep = "═" * 65
+def _section_header(
+    title: str,
+    width: int = SECTION_WIDTH,
+) -> list[str]:
+    """بناء header قسم."""
+    return [
+        f"\n  {title}",
+        "  " + "─" * width,
+    ]
 
-    # Header
-    lines.append("\n" + sep)
-    lines.append(
-        f"  📊 Analytics Report — {report['label']}"
-    )
-    lines.append(
-        f"  📅 {report['start_date']} → {report['end_date']}"
-    )
-    if report['lang'] != 'all':
-        flag = LANG_FLAGS.get(report['lang'], '🌐')
-        lines.append(
-            f"  🌐 Language: {flag} {report['lang'].upper()}"
-        )
-    lines.append(sep)
 
-    # Overview
-    o = report["overview"]
-    lines.append("\n  📈 Production Overview")
-    lines.append("  " + "─" * 50)
+def _build_console_overview(overview: dict) -> list[str]:
+    """بناء قسم Overview."""
+    lines = _section_header("📈 Production Overview")
+
     lines.append(
-        f"     Total Published : {o['total_published']}"
+        f"     Total Published : {overview['total_published']}"
     )
     lines.append(
-        f"     Unique Videos   : {o['unique_videos']}"
+        f"     Unique Videos   : {overview['unique_videos']}"
     )
     lines.append(
-        f"     Total Rendered  : {o['total_rendered']}"
+        f"     Total Rendered  : {overview['total_rendered']}"
     )
     lines.append(
-        f"     Failed Renders  : {o['failed_renders']}"
+        f"     Failed Renders  : {overview['failed_renders']}"
     )
     lines.append(
-        f"     Success Rate    : {o['success_rate']}%"
+        f"     Success Rate    : {overview['success_rate']}%"
     )
 
-    # By Language
-    lines.append("\n  🌍 By Language")
-    lines.append("  " + "─" * 50)
-    for lang, stats in report["by_language"].items():
+    return lines
+
+
+def _build_console_by_language(
+    by_language: dict,
+) -> list[str]:
+    """بناء قسم By Language."""
+    lines = _section_header("🌍 By Language")
+
+    for lang, stats in by_language.items():
         flag = LANG_FLAGS.get(lang, "🌐")
         lines.append(
             f"     {flag} {lang.upper()}: "
@@ -665,10 +781,16 @@ def build_console_report(report: dict) -> str:
             f"{stats['success_rate']}% success"
         )
 
-    # By Mode
-    lines.append("\n  📹 By Content Type")
-    lines.append("  " + "─" * 50)
-    for mode, stats in report["by_mode"].items():
+    return lines
+
+
+def _build_console_by_mode(
+    by_mode: dict,
+) -> list[str]:
+    """بناء قسم By Mode."""
+    lines = _section_header("📹 By Content Type")
+
+    for mode, stats in by_mode.items():
         emoji = MODE_EMOJIS.get(mode, "📹")
         lines.append(
             f"     {emoji} {mode.upper():<6}: "
@@ -676,56 +798,84 @@ def build_console_report(report: dict) -> str:
             f"{stats['success_rate']}% success"
         )
 
-    # By Platform
-    lines.append("\n  📤 By Platform")
-    lines.append("  " + "─" * 50)
-    for platform, stats in report["by_platform"].items():
+    return lines
+
+
+def _build_console_by_platform(
+    by_platform: dict,
+) -> list[str]:
+    """بناء قسم By Platform."""
+    lines = _section_header("📤 By Platform")
+
+    for platform, stats in by_platform.items():
         emoji = PLATFORM_EMOJIS.get(platform, "📤")
         lines.append(
             f"     {emoji} {platform.title():<10}: "
             f"{stats['total']} total"
         )
+
         for mode, count in stats["by_mode"].items():
             mode_emoji = MODE_EMOJIS.get(mode, "📹")
             lines.append(
                 f"        └── {mode_emoji} {mode}: {count}"
             )
 
-    # By Hour
-    if report["by_hour"]:
-        lines.append("\n  ⏰ Top Publishing Hours")
-        lines.append("  " + "─" * 50)
-        sorted_hours = sorted(
-            report["by_hour"].items(),
-            key=lambda x: int(x[1]),
-            reverse=True,
-        )[:5]
-        for hour, count in sorted_hours:
-            bar = "█" * min(count, 30)
-            lines.append(
-                f"     {hour}:00 │ {bar} {count}"
-            )
+    return lines
 
-    # Top Tags
-    if report["top_tags"]:
-        lines.append("\n  🏷️  Top Tags Used")
-        lines.append("  " + "─" * 50)
-        max_count = max(report["top_tags"].values())
-        for tag, count in report["top_tags"].items():
-            bar_len = int((count / max_count) * 20)
-            bar     = "█" * bar_len
-            lines.append(
-                f"     {tag:<14} {bar} {count}"
-            )
 
-    # Duration Stats
-    lines.append("\n  ⏱️  Duration Statistics")
-    lines.append("  " + "─" * 50)
-    for mode, stats in report["duration_stats"].items():
+def _build_console_by_hour(
+    by_hour: dict,
+) -> list[str]:
+    """بناء قسم By Hour."""
+    if not by_hour:
+        return []
+
+    lines = _section_header("⏰ Top Publishing Hours")
+
+    sorted_hours = sorted(
+        by_hour.items(),
+        key     = lambda x: int(x[1]),
+        reverse = True,
+    )[:DEFAULT_TOP_HOURS_LIMIT]
+
+    for hour, count in sorted_hours:
+        bar = "█" * min(count, MAX_BAR_LENGTH)
+        lines.append(f"     {hour}:00 │ {bar} {count}")
+
+    return lines
+
+
+def _build_console_top_tags(
+    top_tags: dict,
+) -> list[str]:
+    """بناء قسم Top Tags."""
+    if not top_tags:
+        return []
+
+    lines = _section_header("🏷️  Top Tags Used")
+    max_count = max(top_tags.values())
+
+    for tag, count in top_tags.items():
+        bar_len = int((count / max_count) * TAG_BAR_LENGTH)
+        bar     = "█" * bar_len
+        lines.append(f"     {tag:<14} {bar} {count}")
+
+    return lines
+
+
+def _build_console_duration_stats(
+    duration_stats: dict,
+) -> list[str]:
+    """بناء قسم Duration Stats."""
+    lines = _section_header("⏱️  Duration Statistics")
+
+    for mode, stats in duration_stats.items():
         if stats["count"] == 0:
             continue
-        emoji = MODE_EMOJIS.get(mode, "📹")
+
+        emoji   = MODE_EMOJIS.get(mode, "📹")
         avg_min = stats["avg"] / 60
+
         lines.append(
             f"     {emoji} {mode.upper():<6}: "
             f"{stats['count']} videos | "
@@ -733,29 +883,94 @@ def build_console_report(report: dict) -> str:
             f"total {stats['total_hours']}h"
         )
 
-    # Error Patterns
-    if report["error_patterns"]:
-        lines.append("\n  ⚠️  Error Patterns")
-        lines.append("  " + "─" * 50)
-        for pattern, count in report["error_patterns"].items():
-            lines.append(f"     {pattern:<20}: {count}x")
+    return lines
 
-    # Recent Errors
-    if report["recent_errors"]:
-        lines.append("\n  ❌ Recent Errors (last 5)")
-        lines.append("  " + "─" * 50)
-        for err in report["recent_errors"][:5]:
-            flag = LANG_FLAGS.get(err["lang"], "🌐")
-            mode_emoji = MODE_EMOJIS.get(
-                err["content_mode"], "📹"
-            )
-            lines.append(
-                f"     #{err['video_number']} "
-                f"{flag} {mode_emoji} "
-                f"{err['date'][:16]}"
-            )
-            error_msg = (err["error"] or "")[:60]
-            lines.append(f"        └── {error_msg}")
+
+def _build_console_error_patterns(
+    error_patterns: dict,
+) -> list[str]:
+    """بناء قسم Error Patterns."""
+    if not error_patterns:
+        return []
+
+    lines = _section_header("⚠️  Error Patterns")
+
+    for pattern, count in error_patterns.items():
+        lines.append(f"     {pattern:<20}: {count}x")
+
+    return lines
+
+
+def _build_console_recent_errors(
+    recent_errors: list,
+) -> list[str]:
+    """بناء قسم Recent Errors."""
+    if not recent_errors:
+        return []
+
+    lines = _section_header(
+        f"❌ Recent Errors (last {DEFAULT_RECENT_ERRORS})"
+    )
+
+    for err in recent_errors[:DEFAULT_RECENT_ERRORS]:
+        flag       = LANG_FLAGS.get(err["lang"], "🌐")
+        mode_emoji = MODE_EMOJIS.get(
+            err["content_mode"], "📹"
+        )
+
+        lines.append(
+            f"     #{err['video_number']} "
+            f"{flag} {mode_emoji} "
+            f"{err['date'][:16]}"
+        )
+
+        error_msg = (err["error"] or "")[:60]
+        lines.append(f"        └── {error_msg}")
+
+    return lines
+
+
+def build_console_report(report: dict) -> str:
+    """بناء تقرير مفصل للـ console."""
+    sep = "═" * SUMMARY_WIDTH
+    lines = ["\n" + sep]
+
+    # Header
+    lines.append(
+        f"  📊 Analytics Report — {report['label']}"
+    )
+    lines.append(
+        f"  📅 {report['start_date']} → {report['end_date']}"
+    )
+
+    if report["lang"] != "all":
+        flag = LANG_FLAGS.get(report["lang"], "🌐")
+        lines.append(
+            f"  🌐 Language: {flag} {report['lang'].upper()}"
+        )
+
+    lines.append(sep)
+
+    # Sections
+    lines.extend(_build_console_overview(report["overview"]))
+    lines.extend(
+        _build_console_by_language(report["by_language"])
+    )
+    lines.extend(_build_console_by_mode(report["by_mode"]))
+    lines.extend(
+        _build_console_by_platform(report["by_platform"])
+    )
+    lines.extend(_build_console_by_hour(report["by_hour"]))
+    lines.extend(_build_console_top_tags(report["top_tags"]))
+    lines.extend(
+        _build_console_duration_stats(report["duration_stats"])
+    )
+    lines.extend(
+        _build_console_error_patterns(report["error_patterns"])
+    )
+    lines.extend(
+        _build_console_recent_errors(report["recent_errors"])
+    )
 
     lines.append("\n" + sep + "\n")
     return "\n".join(lines)
@@ -767,17 +982,16 @@ def build_console_report(report: dict) -> str:
 
 def build_whatsapp_report(report: dict) -> str:
     """تقرير مختصر للـ WhatsApp."""
-    lines = []
-    o = report["overview"]
+    lines    = []
+    overview = report["overview"]
 
-    lines.append(
-        f"📊 Analytics — {report['label']}\n"
-    )
+    # Header
+    lines.append(f"📊 Analytics — {report['label']}\n")
 
     # Overview
     lines.append(
-        f"📈 {o['total_published']} published | "
-        f"{o['success_rate']}% success"
+        f"📈 {overview['total_published']} published | "
+        f"{overview['success_rate']}% success"
     )
     lines.append("")
 
@@ -810,9 +1024,7 @@ def build_whatsapp_report(report: dict) -> str:
     # Top Tags
     if report["top_tags"]:
         lines.append("\n🏷️ Top Tags:")
-        for tag, count in list(
-            report["top_tags"].items()
-        )[:5]:
+        for tag, count in list(report["top_tags"].items())[:5]:
             lines.append(f"  {tag}: {count}")
 
     # Errors
@@ -830,15 +1042,11 @@ def build_whatsapp_report(report: dict) -> str:
 # HTML REPORT
 # ═════════════════════════════════════════════════════════════════════════════
 
-def build_html_report(report: dict) -> str:
-    """تقرير HTML أنيق."""
-    o = report["overview"]
-
-    html = f"""<!DOCTYPE html>
+HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Analytics Report — {report['label']}</title>
+  <title>Analytics Report — {label}</title>
   <style>
     body {{
       font-family: -apple-system, sans-serif;
@@ -901,33 +1109,44 @@ def build_html_report(report: dict) -> str:
 <body>
   <h1>📊 Analytics Report</h1>
   <p>
-    <strong>{report['label']}</strong> |
-    {report['start_date']} → {report['end_date']}
+    <strong>{label}</strong> |
+    {start_date} → {end_date}
   </p>
 
+  {body}
+
+</body>
+</html>"""
+
+
+def _build_html_overview(overview: dict) -> str:
+    """بناء قسم Overview HTML."""
+    return f"""
   <div class="card">
     <h2>📈 Overview</h2>
     <div class="stat">
-      <div class="stat-value">{o['total_published']}</div>
+      <div class="stat-value">{overview['total_published']}</div>
       <div class="stat-label">Total Published</div>
     </div>
     <div class="stat">
-      <div class="stat-value">{o['total_rendered']}</div>
+      <div class="stat-value">{overview['total_rendered']}</div>
       <div class="stat-label">Rendered</div>
     </div>
     <div class="stat">
-      <div class="stat-value success">{o['success_rate']}%</div>
+      <div class="stat-value success">{overview['success_rate']}%</div>
       <div class="stat-label">Success Rate</div>
     </div>
     <div class="stat">
-      <div class="stat-value error">{o['failed_renders']}</div>
+      <div class="stat-value error">{overview['failed_renders']}</div>
       <div class="stat-label">Failed</div>
     </div>
   </div>
 """
 
-    # By Language
-    html += """
+
+def _build_html_by_language(by_language: dict) -> str:
+    """بناء قسم By Language HTML."""
+    html = """
   <div class="card">
     <h2>🌍 By Language</h2>
     <table>
@@ -938,7 +1157,8 @@ def build_html_report(report: dict) -> str:
         <th>Success Rate</th>
       </tr>
 """
-    for lang, stats in report["by_language"].items():
+
+    for lang, stats in by_language.items():
         flag = LANG_FLAGS.get(lang, "🌐")
         html += f"""
       <tr>
@@ -948,16 +1168,21 @@ def build_html_report(report: dict) -> str:
         <td class="success">{stats['success_rate']}%</td>
       </tr>
 """
-    html += "    </table>\n  </div>\n"
 
-    # By Platform
-    html += """
+    html += "    </table>\n  </div>\n"
+    return html
+
+
+def _build_html_by_platform(by_platform: dict) -> str:
+    """بناء قسم By Platform HTML."""
+    html = """
   <div class="card">
     <h2>📤 By Platform</h2>
     <table>
       <tr><th>Platform</th><th>Total</th></tr>
 """
-    for platform, stats in report["by_platform"].items():
+
+    for platform, stats in by_platform.items():
         emoji = PLATFORM_EMOJIS.get(platform, "📤")
         html += f"""
       <tr>
@@ -965,16 +1190,26 @@ def build_html_report(report: dict) -> str:
         <td>{stats['total']}</td>
       </tr>
 """
-    html += "    </table>\n  </div>\n"
 
-    # Top Tags
-    if report["top_tags"]:
-        html += '\n  <div class="card">\n'
-        html += '    <h2>🏷️ Top Tags</h2>\n    <table>\n'
-        max_count = max(report["top_tags"].values())
-        for tag, count in report["top_tags"].items():
-            width = int((count / max_count) * 300)
-            html += f"""
+    html += "    </table>\n  </div>\n"
+    return html
+
+
+def _build_html_top_tags(top_tags: dict) -> str:
+    """بناء قسم Top Tags HTML."""
+    if not top_tags:
+        return ""
+
+    html = """
+  <div class="card">
+    <h2>🏷️ Top Tags</h2>
+    <table>
+"""
+
+    max_count = max(top_tags.values())
+    for tag, count in top_tags.items():
+        width = int((count / max_count) * 300)
+        html += f"""
       <tr>
         <td><strong>{tag}</strong></td>
         <td>
@@ -983,10 +1218,62 @@ def build_html_report(report: dict) -> str:
         </td>
       </tr>
 """
-        html += "    </table>\n  </div>\n"
 
-    html += "\n</body>\n</html>"
+    html += "    </table>\n  </div>\n"
     return html
+
+
+def build_html_report(report: dict) -> str:
+    """تقرير HTML أنيق."""
+    body  = ""
+    body += _build_html_overview(report["overview"])
+    body += _build_html_by_language(report["by_language"])
+    body += _build_html_by_platform(report["by_platform"])
+    body += _build_html_top_tags(report["top_tags"])
+
+    return HTML_TEMPLATE.format(
+        label      = report["label"],
+        start_date = report["start_date"],
+        end_date   = report["end_date"],
+        body       = body,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# OUTPUT HANDLER
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _format_output(
+    report: dict,
+    fmt:    str,
+) -> str:
+    """تنسيق التقرير حسب الـ format."""
+    if fmt == OutputFormat.JSON:
+        return json.dumps(report, indent=2, default=str)
+
+    if fmt == OutputFormat.HTML:
+        return build_html_report(report)
+
+    return build_console_report(report)
+
+
+def _save_report(
+    output: str,
+    path:   str,
+) -> None:
+    """حفظ التقرير في ملف."""
+    save_path = Path(path).resolve()
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_path.write_text(output, encoding="utf-8")
+
+    log.info(f"\n  💾 Saved to: {save_path}")
+
+
+def _send_whatsapp_notification(report: dict) -> None:
+    """إرسال التقرير عبر WhatsApp."""
+    whatsapp_msg = build_whatsapp_report(report)
+    notify_info(whatsapp_msg, skip_rate=True)
+    log.info("  📱 Report sent via WhatsApp")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -994,44 +1281,32 @@ def build_html_report(report: dict) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
+    """نقطة الدخول الرئيسية."""
     args = parse_args()
     init_db()
 
-    print(
+    log.info(
         f"\n  📊 Generating analytics report "
         f"({args.period})..."
     )
 
+    # توليد التقرير
     report = generate_report(
         period = args.period,
         lang   = args.lang,
     )
 
-    # تنسيق الإخراج
-    if args.format == "json":
-        output = json.dumps(report, indent=2, default=str)
-        print(output)
+    # تنسيق + طباعة
+    output = _format_output(report, args.format)
+    print(output)
 
-    elif args.format == "html":
-        output = build_html_report(report)
-        print(output)
-
-    else:  # console
-        output = build_console_report(report)
-        print(output)
-
-    # حفظ في ملف
+    # حفظ
     if args.save:
-        save_path = Path(args.save).resolve()
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        save_path.write_text(output, encoding="utf-8")
-        print(f"\n  💾 Saved to: {save_path}")
+        _save_report(output, args.save)
 
-    # إرسال WhatsApp
+    # إشعار
     if args.notify:
-        whatsapp_msg = build_whatsapp_report(report)
-        notify_info(whatsapp_msg, skip_rate=True)
-        print("  📱 Report sent via WhatsApp")
+        _send_whatsapp_notification(report)
 
 
 if __name__ == "__main__":
