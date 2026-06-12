@@ -4,7 +4,7 @@
 Features:
   ✅ Short: 1080×1920 (9:16 Reels/Shorts)
   ✅ Long:  1280×720  (16:9 YouTube)
-  ✅ Background from Pexels Photos API
+  ✅ Background from Pexels Photos API (10 keys support)
   ✅ Fallback: frame extraction from raw video
   ✅ Auto title balancing (2 lines)
   ✅ Dynamic font sizing
@@ -31,6 +31,9 @@ PEXELS_PHOTOS_URL  = "https://api.pexels.com/v1/search"
 API_TIMEOUT        = 15
 DOWNLOAD_TIMEOUT   = 30
 PHOTOS_PER_PAGE    = 5
+
+# Pexels keys support (matches video_sources.py)
+MAX_PEXELS_KEYS = 10
 
 # FFmpeg
 FFMPEG_TIMEOUT    = 15
@@ -178,11 +181,29 @@ def _split_title_two_lines(title: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_pexels_key() -> str:
-    """جلب أول مفتاح Pexels متوفر."""
-    for key_name in ("PEXELS_API_KEY", "PEXELS_API_KEY_1"):
-        key = os.environ.get(key_name, "").strip()
+    """
+    جلب أول مفتاح Pexels متوفر.
+
+    يدعم حتى MAX_PEXELS_KEYS مفاتيح:
+        PEXELS_API_KEY
+        PEXELS_API_KEY_1
+        PEXELS_API_KEY_2
+        ...
+        PEXELS_API_KEY_{MAX_PEXELS_KEYS}
+    """
+    # المفتاح الرئيسي
+    main_key = os.environ.get("PEXELS_API_KEY", "").strip()
+    if main_key:
+        return main_key
+
+    # المفاتيح الإضافية
+    for i in range(1, MAX_PEXELS_KEYS + 1):
+        key = os.environ.get(
+            f"PEXELS_API_KEY_{i}", ""
+        ).strip()
         if key:
             return key
+
     return ""
 
 
