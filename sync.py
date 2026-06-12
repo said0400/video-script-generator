@@ -1,15 +1,22 @@
 """
-🎤 Word-level Alignment via WhisperX
+🎤 Word-level Alignment via stable-ts (Modern Stack)
 
 Features:
-  ✅ Direct 1:1 timestamps from WhisperX (no manipulation)
+  ✅ Powered by stable-ts (latest, maintained)
+  ✅ Built-in word-level alignment (no pyannote needed)
+  ✅ No HF_TOKEN required
   ✅ Singleton model loading
-  ✅ Per-language align model caching
-  ✅ Backward compatibility with old API
-  ✅ Fallback equal-split when needed
+  ✅ Backward compatible API
+  ✅ Same output format as old WhisperX-based sync.py
 
 IMPORTANT:
   Audio passed = Audio that will play in final video
+
+Migration notes:
+  - Replaces WhisperX with stable-ts
+  - No more pyannote.audio
+  - No more HF_TOKEN
+  - Same API for main.py compatibility
 """
 
 from __future__ import annotations
@@ -27,17 +34,16 @@ from typing import Any, Optional
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Model settings
-WHISPERX_MODEL  = "medium"
-WHISPERX_DEVICE = "cpu"
-COMPUTE_TYPE    = "int8"
-BATCH_SIZE      = 16
+WHISPER_MODEL  = "medium"
+WHISPER_DEVICE = "cpu"
+COMPUTE_TYPE   = "int8"
 
 # Cache directory
-MODEL_CACHE_DIR = Path.home() / ".cache" / "whisperx"
+MODEL_CACHE_DIR = Path.home() / ".cache" / "stable-ts"
 MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Language mapping
-LANG_MAP = {
+LANG_MAP: dict[str, str] = {
     "ar": "ar",
     "fr": "fr",
     "en": "en",
@@ -47,7 +53,19 @@ LANG_MAP = {
 FFPROBE_TIMEOUT = 15
 
 # Validation thresholds
-MIN_REMAP_WORDS_RATIO = 0.05  # 5% tolerance for remap
+MIN_REMAP_WORDS_RATIO = 0.05   # 5% tolerance for remap
+MIN_WORD_DURATION     = 0.05   # ثوانٍ (50ms minimum)
+
+# stable-ts options
+TRANSCRIBE_OPTIONS = {
+    "word_timestamps":         True,
+    "regroup":                 True,
+    "suppress_silence":        True,
+    "suppress_word_ts":        False,
+    "use_word_position":       True,
+    "vad":                     False,  # تعطيل VAD للسرعة
+    "verbose":                 None,   # silent
+}
 
 # Logging
 logging.basicConfig(
@@ -63,9 +81,6 @@ log = logging.getLogger(__name__)
 
 # Singleton model instance
 _MODEL: Any = None
-
-# Per-language align model cache
-_ALIGN_CACHE: dict[str, tuple[Any, Any]] = {}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -127,34 +142,12 @@ def get_audio_duration(path: str) -> float:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TORCH PATCH
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _patch_torch() -> None:
-    """
-    إصلاح torch serialization مع pyannote.
-
-    يُحل مشكلة UnpicklingError مع OmegaConf.
-    """
-    try:
-        import torch
-        from omegaconf import ListConfig, DictConfig
-
-        torch.serialization.add_safe_globals([
-            ListConfig,
-            DictConfig,
-        ])
-    except Exception:
-        pass
-
-
-# ═════════════════════════════════════════════════════════════════════════════
 # MODEL LOADING (Singleton)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _load_model() -> Any:
     """
-    تحميل WhisperX model (singleton).
+    تحميل stable-ts model (singleton).
 
     Returns:
         Model instance أو None
@@ -165,25 +158,24 @@ def _load_model() -> Any:
         return _MODEL
 
     try:
-        import whisperx
+        import stable_whisper
     except ImportError as e:
-        log.error(f"  ❌ WhisperX not installed: {e}")
+        log.error(f"  ❌ stable-ts not installed: {e}")
+        log.error("     Install: pip install stable-ts")
         return None
 
     try:
-        _patch_torch()
-
         log.info(
-            f"  📥 Loading WhisperX '{WHISPERX_MODEL}'..."
+            f"  📥 Loading stable-ts '{WHISPER_MODEL}'..."
         )
         t0 = time.time()
 
-        _MODEL = whisperx.load_model(
-            WHISPERX_MODEL,
-            device        = WHISPERX_DEVICE,
-            compute_type  = COMPUTE_TYPE,
-            download_root = str(MODEL_CACHE_DIR),
-            language      = None,
+        # تحميل faster-whisper backend (أسرع وأخف على CPU)
+        _MODEL = stable_whisper.load_faster_whisper(
+            WHISPER_MODEL,
+            device         = WHISPER_DEVICE,
+            compute_type   = COMPUTE_TYPE,
+            download_root  = str(MODEL_CACHE_DIR),
         )
 
         elapsed = time.time() - t0
@@ -191,123 +183,94 @@ def _load_model() -> Any:
 
     except Exception as e:
         log.error(f"  ❌ Model load failed: {e}")
+        traceback.print_exc()
         return None
 
     return _MODEL
 
 
-def _load_align(lang: str) -> tuple[Any, Any]:
+# ═════════════════════════════════════════════════════════════════════════════
+# TRANSCRIPTION
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _transcribe_with_alignment(
+    model:      Any,
+    audio_path: str,
+    lang:       str,
+) -> Optional[Any]:
     """
-    تحميل align model للغة معينة (مع cache).
+    تشغيل stable-ts transcribe مع alignment مدمج.
 
     Returns:
-        (model, metadata) أو (None, None)
+        WhisperResult object أو None
     """
-    if lang in _ALIGN_CACHE:
-        return _ALIGN_CACHE[lang]
+    log.info(f"  📝 Transcribing + Aligning ({lang})...")
+    t0 = time.time()
 
     try:
-        import whisperx
-    except ImportError:
-        _ALIGN_CACHE[lang] = (None, None)
-        return _ALIGN_CACHE[lang]
-
-    try:
-        _patch_torch()
-
-        log.info(f"  📥 Align model: {lang.upper()}...")
-        t0 = time.time()
-
-        model, meta = whisperx.load_align_model(
-            language_code = lang,
-            device        = WHISPERX_DEVICE,
-            model_dir     = str(MODEL_CACHE_DIR),
+        result = model.transcribe_stable(
+            audio_path,
+            language = lang,
+            **TRANSCRIBE_OPTIONS,
         )
 
-        _ALIGN_CACHE[lang] = (model, meta)
-
         elapsed = time.time() - t0
-        log.info(f"  ✅ Loaded in {elapsed:.1f}s")
+        n_segs  = len(result.segments) if result else 0
+
+        log.info(
+            f"  ✅ {n_segs} segments in {elapsed:.1f}s"
+        )
+
+        return result
 
     except Exception as e:
-        log.warning(f"  ⚠️  Align load failed: {e}")
-        _ALIGN_CACHE[lang] = (None, None)
-
-    return _ALIGN_CACHE[lang]
+        log.error(f"  ❌ Transcribe failed: {e}")
+        traceback.print_exc()
+        return None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# DATA EXTRACTION HELPERS
+# DATA EXTRACTION FROM stable-ts
 # ═════════════════════════════════════════════════════════════════════════════
-
-def _get_seg_attr(
-    seg:    Any,
-    key:    str,
-    default: Any = None,
-) -> Any:
-    """جلب attribute من segment (dict أو object)."""
-    if isinstance(seg, dict):
-        return seg.get(key, default)
-    return getattr(seg, key, default)
-
-
-def _extract_segment_data(seg: Any) -> tuple[str, float, float, list]:
-    """
-    استخراج بيانات segment.
-
-    Returns:
-        (text, start, end, words)
-    """
-    text  = (_get_seg_attr(seg, "text") or "").strip()
-    start = float(_get_seg_attr(seg, "start") or 0)
-    end   = float(_get_seg_attr(seg, "end")   or 0)
-    words = _get_seg_attr(seg, "words")     or []
-
-    return text, start, end, words
-
-
-def _extract_word_data(
-    w: Any,
-) -> tuple[str, Optional[float], Optional[float]]:
-    """
-    استخراج بيانات كلمة.
-
-    Returns:
-        (word_text, start, end)
-    """
-    wtext  = (_get_seg_attr(w, "word") or "").strip()
-    wstart = _get_seg_attr(w, "start", None)
-    wend   = _get_seg_attr(w, "end",   None)
-
-    return wtext, wstart, wend
-
 
 def _is_valid_timestamp(start: float, end: float) -> bool:
     """التحقق من صحة timestamps."""
-    return start >= 0 and end > start
+    return (
+        start >= 0 and
+        end > start and
+        (end - start) >= MIN_WORD_DURATION
+    )
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# WORD EXTRACTION
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _extract_words_from_segment(
-    seg:   Any,
-    s_idx: int,
+    segment: Any,
+    s_idx:   int,
 ) -> list[WordEntry]:
-    """استخراج الكلمات من segment واحد."""
-    text, seg_start, seg_end, wdata = _extract_segment_data(seg)
+    """
+    استخراج الكلمات من segment.
 
-    if not text:
-        return []
-
+    stable-ts WordTiming has:
+        .word  → str
+        .start → float
+        .end   → float
+    """
     seg_words: list[WordEntry] = []
 
-    # محاولة استخراج من بيانات WhisperX
-    for w_idx, w in enumerate(wdata):
-        wtext, wstart, wend = _extract_word_data(w)
+    # في stable-ts: segment.words is list of WordTiming
+    words = getattr(segment, "words", None) or []
 
-        if not wtext or wstart is None or wend is None:
+    for w_idx, word_obj in enumerate(words):
+        wtext = (
+            getattr(word_obj, "word", "") or ""
+        ).strip()
+
+        if not wtext:
+            continue
+
+        wstart = getattr(word_obj, "start", None)
+        wend   = getattr(word_obj, "end",   None)
+
+        if wstart is None or wend is None:
             continue
 
         ws = float(wstart)
@@ -325,27 +288,43 @@ def _extract_words_from_segment(
         ))
 
     # Fallback: توزيع متساوٍ إذا لم نحصل على كلمات
-    if not seg_words and text and seg_end > seg_start:
-        tokens   = text.split()
-        word_dur = (seg_end - seg_start) / len(tokens)
+    if not seg_words:
+        seg_text  = (
+            getattr(segment, "text", "") or ""
+        ).strip()
+        seg_start = float(
+            getattr(segment, "start", 0) or 0
+        )
+        seg_end   = float(
+            getattr(segment, "end",   0) or 0
+        )
 
-        for w_idx, tok in enumerate(tokens):
-            seg_words.append(WordEntry(
-                word  = tok,
-                start = round(seg_start + w_idx * word_dur, 4),
-                end   = round(seg_start + (w_idx + 1) * word_dur, 4),
-                s_idx = s_idx,
-                w_idx = w_idx,
-            ))
+        if seg_text and seg_end > seg_start:
+            tokens   = seg_text.split()
+            word_dur = (seg_end - seg_start) / len(tokens)
+
+            for w_idx, tok in enumerate(tokens):
+                seg_words.append(WordEntry(
+                    word  = tok,
+                    start = round(
+                        seg_start + w_idx * word_dur, 4
+                    ),
+                    end   = round(
+                        seg_start + (w_idx + 1) * word_dur,
+                        4,
+                    ),
+                    s_idx = s_idx,
+                    w_idx = w_idx,
+                ))
 
     return seg_words
 
 
-def _extract_all_words(
-    source: list,
+def _extract_all_data(
+    result: Any,
 ) -> tuple[list[str], list[WordEntry]]:
     """
-    استخراج جميع الجمل والكلمات.
+    استخراج جميع الجمل والكلمات من نتيجة stable-ts.
 
     Returns:
         (sentences, all_words)
@@ -353,15 +332,21 @@ def _extract_all_words(
     sentences: list[str]       = []
     all_words: list[WordEntry] = []
 
-    for s_idx, seg in enumerate(source):
-        text, _, _, _ = _extract_segment_data(seg)
+    segments = getattr(result, "segments", None) or []
 
-        if not text:
+    for s_idx, segment in enumerate(segments):
+        seg_text = (
+            getattr(segment, "text", "") or ""
+        ).strip()
+
+        if not seg_text:
             continue
 
-        sentences.append(text)
+        sentences.append(seg_text)
 
-        seg_words = _extract_words_from_segment(seg, s_idx)
+        seg_words = _extract_words_from_segment(
+            segment, s_idx,
+        )
         all_words.extend(seg_words)
 
     return sentences, all_words
@@ -470,81 +455,24 @@ def _empty_result(aud_dur: float = 0.0) -> dict:
     }
 
 
-def _transcribe_audio(
-    model: Any,
-    audio: Any,
-    wlang: str,
-) -> list:
-    """تشغيل WhisperX transcribe."""
-    log.info(f"  📝 Transcribing ({wlang})...")
-    t0 = time.time()
-
-    res = model.transcribe(
-        audio,
-        batch_size = BATCH_SIZE,
-        language   = wlang,
-        task       = "transcribe",
-    )
-
-    segs = res.get("segments", [])
-    elapsed = time.time() - t0
-    detected = res.get("language", "?")
-
-    log.info(
-        f"  ✅ {len(segs)} segs in {elapsed:.1f}s "
-        f"| detected: {detected}"
-    )
-
-    return segs
-
-
-def _align_segments(
-    segs:  list,
-    audio: Any,
-    wlang: str,
-) -> Optional[list]:
-    """تشغيل WhisperX align."""
-    log.info("  🎯 Aligning...")
-    t0 = time.time()
-
-    am, meta = _load_align(wlang)
-
-    if am is None:
-        return None
-
-    try:
-        import whisperx
-
-        ar = whisperx.align(
-            segs, am, meta, audio,
-            device                 = WHISPERX_DEVICE,
-            return_char_alignments = False,
-        )
-
-        aligned_segs = ar.get("segments", [])
-        elapsed = time.time() - t0
-        log.info(f"  ✅ Aligned in {elapsed:.1f}s")
-
-        return aligned_segs
-
-    except Exception as e:
-        log.warning(f"  ⚠️  Align failed: {e}")
-        return None
-
-
 def extract_transcript_from_audio(
     audio_path: str,
     lang:       str = "ar",
 ) -> dict:
     """
-    استخراج النص مع timestamps فعلية من WhisperX.
+    استخراج النص مع timestamps من stable-ts.
 
     Args:
         audio_path: مسار الصوت
         lang:       ar | fr | en
 
     Returns:
-        dict مع: sentences, aligned, timeline, total_duration, success
+        dict مع:
+            - sentences:      list[str]
+            - aligned:        list[dict] (sentence + words)
+            - timeline:       list[dict]
+            - total_duration: float
+            - success:        bool
 
     Note:
         الصوت المُمرَّر يجب أن يكون نفس الصوت في الفيديو النهائي.
@@ -557,11 +485,11 @@ def extract_transcript_from_audio(
         f"lang={lang} | {aud_dur:.3f}s"
     )
 
-    # تحميل WhisperX
+    # تحميل stable-ts
     try:
-        import whisperx
+        import stable_whisper  # noqa: F401
     except ImportError as e:
-        log.error(f"  ❌ WhisperX not installed: {e}")
+        log.error(f"  ❌ stable-ts not installed: {e}")
         return _empty_result(aud_dur)
 
     try:
@@ -570,36 +498,33 @@ def extract_transcript_from_audio(
         if model is None:
             return _empty_result(aud_dur)
 
-        # تحميل الصوت
-        audio = whisperx.load_audio(audio_path)
+        # Transcribe + Align (مدمج في stable-ts)
+        result = _transcribe_with_alignment(
+            model, audio_path, wlang,
+        )
 
-        # 1) Transcribe
-        segs_raw = _transcribe_audio(model, audio, wlang)
-
-        if not segs_raw:
+        if result is None:
             return _empty_result(aud_dur)
 
-        # 2) Align
-        aligned_segs = _align_segments(segs_raw, audio, wlang)
-
-        # نستخدم aligned إذا نجح، وإلا raw
-        source = aligned_segs if aligned_segs else segs_raw
-
-        # 3) استخراج الكلمات
-        sentences, all_words = _extract_all_words(source)
+        # استخراج البيانات
+        sentences, all_words = _extract_all_data(result)
 
         if not sentences:
             return _empty_result(aud_dur)
 
-        # 4) ترتيب الكلمات حسب الوقت (لا تعديل على القيم)
+        # ترتيب الكلمات حسب الوقت
         all_words.sort(key=lambda w: w.start)
 
-        # 5) بناء output
-        aligned_out = _build_aligned_output(sentences, all_words)
-        timeline    = _build_timeline(all_words)
+        # بناء output
+        aligned_out = _build_aligned_output(
+            sentences, all_words,
+        )
+        timeline = _build_timeline(all_words)
 
-        # 6) تقرير
-        _print_extraction_report(sentences, all_words, aud_dur)
+        # تقرير
+        _print_extraction_report(
+            sentences, all_words, aud_dur,
+        )
 
         return {
             "sentences":      sentences,
@@ -615,7 +540,7 @@ def extract_transcript_from_audio(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# BACKWARD COMPATIBILITY
+# BACKWARD COMPATIBILITY (Same API as old sync.py)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_word_timestamps(
