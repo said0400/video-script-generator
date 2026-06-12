@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """
-🎬 Video Generator — Multi-Language + Auto Schedule
+🎬 Video Generator — Multi-Language Auto Publisher
+
 Pipeline:
   ✅ Short: 1080×1920 → Facebook Reel + YouTube Shorts
   ✅ Long:  1920×1080 → YouTube + 1080×1920 → Facebook Video
-  ✅ content_mode: short | long
-  ✅ auto-next يتتبع المنصتين معًا
+  ✅ Auto-next يتتبع المنصتين معًا
+  ✅ Resume system
+  ✅ Smart caching
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import subprocess
 import sys
 import traceback
 from pathlib import Path
+from typing import Optional
 
 from db import (
     init_db,
@@ -28,33 +32,32 @@ from db import (
     get_next_video_number, reset_published_for_lang,
     mark_video_published_for_lang,
     is_published_facebook, is_published_youtube,
-    is_fully_published,
     make_cache_key,
 )
 from script_reader import (
     read_scripts, validate_scripts,
     process_tagged_content, print_scripts_summary,
 )
-from tags_parser    import print_tags_summary
-from ai_enricher    import enrich_record, AIEnrichmentError
-from tts            import synthesize_speech, VOICE_CONFIGS
-from video_sources  import fetch_videos_for_script
-from srt            import generate_srt, generate_word_srt
-from export         import export_all
-from thumb_gen      import generate_thumbnail_html
-from thumbnail      import render_thumbnails_batch
-from sync           import (
+from tags_parser   import print_tags_summary
+from ai_enricher   import enrich_record, AIEnrichmentError
+from tts           import synthesize_speech, VOICE_CONFIGS
+from video_sources import fetch_videos_for_script
+from srt           import generate_srt, generate_word_srt
+from export        import export_all
+from thumb_gen     import generate_thumbnail_html
+from thumbnail     import render_thumbnails_batch
+from sync          import (
     get_audio_duration,
     extract_transcript_from_audio,
     build_word_timeline,
 )
-from audio_manager  import mix_voice_music_sfx
-from facebook       import (
+from audio_manager import mix_voice_music_sfx
+from facebook      import (
     publish_to_facebook,
     credentials_available as fb_credentials_available,
     check_credentials     as fb_check_credentials,
 )
-from youtube import (
+from youtube       import (
     publish_to_youtube,
     credentials_available as yt_credentials_available,
     check_credentials     as yt_check_credentials,
@@ -64,26 +67,45 @@ from youtube import (
 # CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
+BASE_DIR      = Path(__file__).parent.resolve()
+RENDER_SCRIPT = BASE_DIR / "remotion" / "render.mjs"
+
 CONTENT_TYPE  = "motivational"
 WPM           = 150.0
-RENDER_SCRIPT = Path(__file__).parent / "remotion" / "render.mjs"
 CLIP_DURATION = 3.0
 
+# سرعة الصوت حسب اللغة (للـ short فقط)
 SPEED_MULTIPLIER: dict[str, float] = {
     "ar": 1.15,
     "fr": 1.05,
     "en": 1.15,
 }
 
-DIMENSIONS = {
-    "short": {"width": 1080,  "height": 1920},
-    "long":  {"width": 1920,  "height": 1080},
+# أبعاد الفيديو
+DIMENSIONS: dict[str, dict[str, int]] = {
+    "short": {"width": 1080, "height": 1920},
+    "long":  {"width": 1920, "height": 1080},
 }
 
-DURATION_LIMITS = {
-    "short": {"min": 30,   "max": 90},
-    "long":  {"min": 120,  "max": 900},
+# حدود المدة بالثواني
+DURATION_LIMITS: dict[str, dict[str, int]] = {
+    "short": {"min": 30,  "max": 90},
+    "long":  {"min": 120, "max": 900},
 }
+
+# الحد الأدنى للصوت الصالح
+MIN_VALID_AUDIO_S = 5.0
+
+# Timeout للعمليات الفرعية
+FFMPEG_TIMEOUT = 300  # 5 دقائق
+RENDER_TIMEOUT = 1800  # 30 دقيقة
+
+# Logging setup
+logging.basicConfig(
+    level  = logging.INFO,
+    format = "%(message)s",
+)
+log = logging.getLogger(__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -91,31 +113,122 @@ DURATION_LIMITS = {
 # ═════════════════════════════════════════════════════════════════════════════
 
 def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
     p = argparse.ArgumentParser(
-        description="🎬 Video Generator",
-        formatter_class=argparse.RawTextHelpFormatter,
+        description     = "🎬 Video Generator",
+        formatter_class = argparse.RawTextHelpFormatter,
     )
-    p.add_argument("input_file",       type=str, nargs="?", default=None)
-    p.add_argument("--output-dir",     type=str, default="output")
-    p.add_argument("--video-number",   type=str, default=None)
-    p.add_argument("--lang",           type=str, default="ar",
-                   choices=["ar", "fr", "en"])
-    p.add_argument("--content-mode",   type=str, default="short",
-                   choices=["short", "long"])
-    p.add_argument("--auto-next",      action="store_true")
-    p.add_argument("--formats",        type=str, default="9x16")
-    p.add_argument("--no-export",      action="store_true")
-    p.add_argument("--script-only",    action="store_true")
-    p.add_argument("--no-video",       action="store_true")
-    p.add_argument("--force",          action="store_true")
-    p.add_argument("--force-ai",       action="store_true")
-    p.add_argument("--publish-fb",     action="store_true")
-    p.add_argument("--publish-yt",     action="store_true")
-    p.add_argument("--no-publish",     action="store_true")
-    p.add_argument("--show-ai-cache",  type=str, nargs="?",
-                   const="all", default=None)
-    p.add_argument("--clear-ai-cache", type=str, default=None)
-    p.add_argument("--reset-videos",   action="store_true")
+
+    # Input/Output
+    p.add_argument(
+        "input_file",
+        type    = str,
+        nargs   = "?",
+        default = None,
+        help    = "Excel file with video scripts",
+    )
+    p.add_argument(
+        "--output-dir",
+        type    = str,
+        default = "output",
+        help    = "Output directory",
+    )
+
+    # Video selection
+    p.add_argument(
+        "--video-number",
+        type    = str,
+        default = None,
+        help    = "Specific video number",
+    )
+    p.add_argument(
+        "--auto-next",
+        action = "store_true",
+        help   = "Auto-select next unpublished video",
+    )
+
+    # Language & mode
+    p.add_argument(
+        "--lang",
+        type    = str,
+        default = "ar",
+        choices = ["ar", "fr", "en"],
+    )
+    p.add_argument(
+        "--content-mode",
+        type    = str,
+        default = "short",
+        choices = ["short", "long"],
+    )
+
+    # Export
+    p.add_argument(
+        "--formats",
+        type    = str,
+        default = "9x16",
+        help    = "Export formats (comma-separated)",
+    )
+    p.add_argument(
+        "--no-export",
+        action = "store_true",
+    )
+
+    # Modes
+    p.add_argument(
+        "--script-only",
+        action = "store_true",
+        help   = "Only parse scripts, no video",
+    )
+    p.add_argument(
+        "--no-video",
+        action = "store_true",
+        help   = "Generate audio only",
+    )
+
+    # Force
+    p.add_argument(
+        "--force",
+        action = "store_true",
+        help   = "Force re-render",
+    )
+    p.add_argument(
+        "--force-ai",
+        action = "store_true",
+        help   = "Force regenerate AI data",
+    )
+
+    # Publishing
+    p.add_argument(
+        "--publish-fb",
+        action = "store_true",
+    )
+    p.add_argument(
+        "--publish-yt",
+        action = "store_true",
+    )
+    p.add_argument(
+        "--no-publish",
+        action = "store_true",
+    )
+
+    # Management
+    p.add_argument(
+        "--show-ai-cache",
+        type    = str,
+        nargs   = "?",
+        const   = "all",
+        default = None,
+    )
+    p.add_argument(
+        "--clear-ai-cache",
+        type    = str,
+        default = None,
+    )
+    p.add_argument(
+        "--reset-videos",
+        action = "store_true",
+    )
+
     return p.parse_args()
 
 
@@ -123,27 +236,21 @@ def parse_args() -> argparse.Namespace:
 # HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _estimate_duration(
-    text:         str,
-    content_mode: str = "short",
-) -> int:
+def _estimate_duration(text: str, content_mode: str = "short") -> int:
+    """تقدير مدة النص بالثواني."""
     limits = DURATION_LIMITS.get(content_mode, DURATION_LIMITS["short"])
-    return max(
-        limits["min"],
-        min(limits["max"], int(len(text.split()) / (WPM / 60)))
-    )
+    word_count = len(text.split())
+    estimated  = int(word_count / (WPM / 60))
+    return max(limits["min"], min(limits["max"], estimated))
 
 
 def _should_publish_fb(
     args:         argparse.Namespace,
     content_mode: str,
 ) -> bool:
-    """
-    ✅ Long و Short كلاهما يمكن نشره على Facebook.
-    """
-    if args.no_publish:   return False
-    if args.script_only:  return False
-    if args.no_video:     return False
+    """تحديد إذا كان يجب النشر على Facebook."""
+    if args.no_publish or args.script_only or args.no_video:
+        return False
     return args.publish_fb or fb_credentials_available()
 
 
@@ -151,69 +258,100 @@ def _should_publish_yt(
     args: argparse.Namespace,
     lang: str,
 ) -> bool:
-    if args.no_publish:  return False
-    if args.script_only: return False
-    if args.no_video:    return False
+    """تحديد إذا كان يجب النشر على YouTube."""
+    if args.no_publish or args.script_only or args.no_video:
+        return False
     return args.publish_yt or yt_credentials_available(lang)
 
 
 def _get_content_for_lang(record: dict, lang: str) -> str:
-    if lang == "ar":
-        content = record.get("ar_content", "").strip()
-    elif lang == "fr":
-        content = record.get("fr_content", "").strip()
-    else:
-        content = record.get("en_content", "").strip()
-    if not content:
-        content = record.get("content", "").strip()
-    return content
+    """جلب المحتوى حسب اللغة."""
+    lang_key = f"{lang}_content"
+    content  = record.get(lang_key, "").strip()
+    return content or record.get("content", "").strip()
 
 
 def _reset_used_videos() -> int:
+    """إعادة ضبط الفيديوهات المستخدمة."""
     from db import _conn, _write_lock
+
     with _write_lock:
         with _conn() as c:
             count = c.execute(
                 "DELETE FROM used_videos"
             ).rowcount
-    print(f"  🗑️  Reset {count} used videos")
+
+    log.info(f"  🗑️  Reset {count} used videos")
     return count
 
 
-def _safe_unlink(path: str) -> None:
+def _safe_unlink(path: str | Path) -> None:
+    """حذف ملف بأمان."""
     try:
         Path(path).unlink(missing_ok=True)
     except Exception:
         pass
 
 
+def _run_ffmpeg(
+    args:    list[str],
+    timeout: int = FFMPEG_TIMEOUT,
+) -> tuple[bool, str]:
+    """تشغيل ffmpeg بأمان."""
+    try:
+        result = subprocess.run(
+            args,
+            capture_output = True,
+            text           = True,
+            timeout        = timeout,
+        )
+        return result.returncode == 0, result.stderr
+    except subprocess.TimeoutExpired:
+        return False, "Timeout"
+    except Exception as e:
+        return False, str(e)
+
+
+def _file_size_mb(path: Path | str) -> float:
+    """حجم الملف بالـ MB."""
+    try:
+        return Path(path).stat().st_size / 1_048_576
+    except Exception:
+        return 0.0
+
+
 # ═════════════════════════════════════════════════════════════════════════════
-# AUTO-INVALIDATE CACHE
+# CACHE INVALIDATION
 # ═════════════════════════════════════════════════════════════════════════════
 
+_TAG_RE = re.compile(r"\[[a-zA-Z_]+\]")
+
+
 def _count_tags_in_content(content: str) -> int:
-    return len(re.findall(r'\[[a-zA-Z_]+\]', content))
+    """عدد الـ tags في النص."""
+    return len(_TAG_RE.findall(content))
 
 
 def _is_cache_stale(cached: dict, content: str) -> bool:
+    """التحقق إذا كان الـ cache قديمًا."""
     tags_in_content = _count_tags_in_content(content)
+
     if tags_in_content <= 1:
         return False
 
     cached_tagged = cached.get("tagged") or []
 
     if not cached_tagged:
-        print(
+        log.info(
             f"  🔄 Cache stale: no tagged sentences "
             f"(content has {tags_in_content} tags)"
         )
         return True
 
     if len(cached_tagged) < tags_in_content * 0.5:
-        print(
-            f"  🔄 Cache stale: "
-            f"{len(cached_tagged)} sentences cached "
-            f"but content has {tags_in_content} tags"
+        log.info(
+            f"  🔄 Cache stale: {len(cached_tagged)} cached "
+            f"vs {tags_in_content} tags"
         )
         return True
 
@@ -228,6 +366,7 @@ def _inject_tags_into_aligned(
     aligned: list[dict],
     tagged:  list[dict],
 ) -> list[dict]:
+    """حقن الـ tags في الـ aligned segments."""
     if not aligned or not tagged:
         return aligned
 
@@ -235,18 +374,20 @@ def _inject_tags_into_aligned(
     for i, seg in enumerate(aligned):
         seg_copy = dict(seg)
         seg_copy["tag"] = (
-            tagged[i].get("final_tag") or "information"
-            if i < len(tagged) else "information"
+            tagged[i].get("final_tag", "information")
+            if i < len(tagged)
+            else "information"
         )
         result.append(seg_copy)
 
-    print(f"  🏷️  Tags injected: {len(result)} segments")
+    log.info(f"  🏷️  Tags injected: {len(result)} segments")
     for i, seg in enumerate(result):
-        print(
+        log.info(
             f"     [{i + 1}] [{seg.get('tag', 'information')}] "
             f"{seg.get('start', 0):.2f}s → "
             f"{seg.get('end', 0):.2f}s"
         )
+
     return result
 
 
@@ -258,59 +399,68 @@ def _estimate_sentence_durations(
     sentences:      list[str],
     total_duration: float,
 ) -> list[float]:
+    """توزيع المدة على الجمل حسب عدد الكلمات."""
     if not sentences:
         return []
+
     if total_duration <= 0:
         return [CLIP_DURATION] * len(sentences)
 
-    counts = [max(1, len(s.split())) for s in sentences]
-    total  = sum(counts)
-    raw    = [
-        max(0.8, total_duration * c / total)
-        for c in counts
-    ]
-    s = sum(raw)
+    word_counts = [max(1, len(s.split())) for s in sentences]
+    total_words = sum(word_counts)
 
-    if s <= 0:
+    raw_durations = [
+        max(0.8, total_duration * c / total_words)
+        for c in word_counts
+    ]
+
+    total_raw = sum(raw_durations)
+    if total_raw <= 0:
         return [CLIP_DURATION] * len(sentences)
 
-    scale = total_duration / s
-    out   = [round(d * scale, 3) for d in raw]
-    diff  = round(total_duration - sum(out), 3)
+    # تطبيع
+    scale     = total_duration / total_raw
+    durations = [round(d * scale, 3) for d in raw_durations]
 
-    if out:
-        out[-1] = max(0.8, round(out[-1] + diff, 3))
+    # تعويض الفرق في آخر جملة
+    diff = round(total_duration - sum(durations), 3)
+    if durations:
+        durations[-1] = max(0.8, round(durations[-1] + diff, 3))
 
-    return out
+    return durations
 
 
 def _normalize_keywords_row(
     row,
     index: int,
 ) -> list[str]:
+    """تطبيع وتنظيف keywords."""
     defaults = [
         "dramatic close up face dark",
         "person staring camera shadow",
         "mysterious cinematic expression slow motion",
     ]
 
-    cleaned = (
-        [str(x).strip() for x in row if str(x).strip()]
-        if isinstance(row, list) else []
-    )
+    if isinstance(row, list):
+        cleaned = [str(x).strip() for x in row if str(x).strip()]
+    else:
+        cleaned = []
 
+    # ملء النواقص
     while len(cleaned) < 3:
         cleaned.append(defaults[len(cleaned) % 3])
 
+    # إزالة التكرار
     dedup: list[str] = []
     seen:  set[str]  = set()
 
     for item in cleaned:
-        k = item.lower().strip()
-        if k and k not in seen:
-            seen.add(k)
+        key = item.lower().strip()
+        if key and key not in seen:
+            seen.add(key)
             dedup.append(item)
 
+    # ملء النواقص بعد إزالة التكرار
     while len(dedup) < 3:
         dedup.append(defaults[len(dedup) % 3])
 
@@ -324,6 +474,7 @@ def _build_clip_plan(
     total_dur:    float,
     content_mode: str = "short",
 ) -> tuple[list[list[str]], list[float]]:
+    """بناء خطة الكليبات."""
     sentences       = script_data.get("sentences", [])
     visual_keywords = ai_data.get("visual_keywords", []) or []
     hook_keyword    = (
@@ -335,35 +486,36 @@ def _build_clip_plan(
 
     clip_keywords:  list[list[str]] = []
     clip_durations: list[float]     = []
+
     estimated = _estimate_sentence_durations(sentences, total_dur)
 
+    # استخدام WhisperX إذا متوفر
     if aligned and len(aligned) >= len(sentences):
-        print(
+        log.info(
             f"\n  🎞️  Clip plan from WhisperX "
             f"({len(sentences)} sentences) "
-            f"[{content_mode.upper()}]..."
+            f"[{content_mode.upper()}]"
         )
 
         for i in range(len(sentences)):
-            cur_start  = float(aligned[i].get("start", 0.0))
-            next_start = (
-                float(aligned[i + 1].get("start", cur_start))
-                if i < len(sentences) - 1
-                else total_dur
-            )
+            cur_start = float(aligned[i].get("start", 0.0))
+
+            if i < len(sentences) - 1:
+                next_start = float(
+                    aligned[i + 1].get("start", cur_start)
+                )
+            else:
+                next_start = total_dur
+
             dur = max(0.8, round(next_start - cur_start, 3))
 
             row = _normalize_keywords_row(
-                visual_keywords[i]
-                if i < len(visual_keywords) else [],
+                visual_keywords[i] if i < len(visual_keywords) else [],
                 i,
             )
 
-            if (
-                i == 0 and
-                hook_keyword and
-                content_mode == "short"
-            ):
+            # إضافة hook keyword للجملة الأولى (short فقط)
+            if i == 0 and hook_keyword and content_mode == "short":
                 row = [hook_keyword] + [
                     k for k in row
                     if k.lower() != hook_keyword.lower()
@@ -373,7 +525,7 @@ def _build_clip_plan(
             clip_keywords.append(row)
             clip_durations.append(dur)
 
-            print(
+            log.info(
                 f"     [{i + 1}/{len(sentences)}] "
                 f"[{aligned[i].get('tag', 'info')}] "
                 f"{dur:.2f}s → {row[0]}"
@@ -381,29 +533,23 @@ def _build_clip_plan(
 
         return clip_keywords, clip_durations
 
-    print(f"\n  ⚠️  Using estimated durations fallback...")
+    # Fallback: استخدام التقديرات
+    log.warning("\n  ⚠️  Using estimated durations fallback")
+
     for i in range(len(sentences)):
         row = _normalize_keywords_row(
-            visual_keywords[i]
-            if i < len(visual_keywords) else [],
+            visual_keywords[i] if i < len(visual_keywords) else [],
             i,
         )
-        if (
-            i == 0 and
-            hook_keyword and
-            content_mode == "short"
-        ):
+
+        if i == 0 and hook_keyword and content_mode == "short":
             row = [hook_keyword] + [
                 k for k in row
                 if k.lower() != hook_keyword.lower()
             ]
             row = (row + ["dramatic close up dark"])[:3]
 
-        dur = (
-            estimated[i]
-            if i < len(estimated)
-            else CLIP_DURATION
-        )
+        dur = estimated[i] if i < len(estimated) else CLIP_DURATION
         clip_keywords.append(row)
         clip_durations.append(dur)
 
@@ -411,73 +557,63 @@ def _build_clip_plan(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TRIM SILENCE
+# AUDIO PROCESSING
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _trim_silence(
-    audio_path:  str,
-    output_path: str,
-) -> str:
+def _trim_silence(audio_path: str, output_path: str) -> str:
+    """قص الصمت من بداية الصوت."""
     if not Path(audio_path).exists():
         return audio_path
 
-    print("  ✂️  Trimming leading silence...")
+    log.info("  ✂️  Trimming leading silence...")
 
-    r = subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", audio_path,
-            "-af",
-            "silenceremove=start_periods=1"
-            ":start_duration=0.3:start_threshold=-40dB",
-            "-c:a", "pcm_s16le", output_path,
-        ],
-        capture_output=True, text=True,
-    )
+    success, _ = _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i", audio_path,
+        "-af",
+        "silenceremove=start_periods=1"
+        ":start_duration=0.3:start_threshold=-40dB",
+        "-c:a", "pcm_s16le",
+        output_path,
+    ])
 
-    if r.returncode != 0:
+    if not success:
         return audio_path
 
     trimmed = get_audio_duration(output_path)
     if trimmed < 3.0:
-        Path(output_path).unlink(missing_ok=True)
+        _safe_unlink(output_path)
         return audio_path
 
     original = get_audio_duration(audio_path)
-    print(f"  ✅ {original:.1f}s → {trimmed:.1f}s")
+    log.info(f"  ✅ {original:.1f}s → {trimmed:.1f}s")
     return output_path
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# SPEED UP
-# ═════════════════════════════════════════════════════════════════════════════
 
 def _speed_up_audio(
     audio_path:  str,
     speed:       float,
     output_path: str,
 ) -> str:
-    if (
-        abs(speed - 1.0) < 0.01 or
-        not Path(audio_path).exists()
-    ):
+    """تسريع الصوت."""
+    if abs(speed - 1.0) < 0.01 or not Path(audio_path).exists():
         return audio_path
 
-    print(f"  ⏩ Speeding up: {speed}x")
+    log.info(f"  ⏩ Speeding up: {speed}x")
 
-    r = subprocess.run(
-        [
-            "ffmpeg", "-y", "-i", audio_path,
-            "-filter:a", f"atempo={speed}",
-            "-c:a", "pcm_s16le", output_path,
-        ],
-        capture_output=True, text=True,
-    )
+    success, _ = _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i", audio_path,
+        "-filter:a", f"atempo={speed}",
+        "-c:a", "pcm_s16le",
+        output_path,
+    ])
 
-    if r.returncode != 0 or not Path(output_path).exists():
+    if not success or not Path(output_path).exists():
         return audio_path
 
     dur = get_audio_duration(output_path)
-    print(f"  ✅ Sped up: {dur:.3f}s")
+    log.info(f"  ✅ Sped up: {dur:.3f}s")
     return output_path
 
 
@@ -488,22 +624,24 @@ def _speed_up_audio(
 def produce_full_audio(
     script_data:  dict,
     output_base:  str,
-    content_mode: str              = "short",
-    aligned:      list[dict] | None = None,
-    music_volume: float             = 0.12,
-    sfx_type:     str               = "swoosh",
+    content_mode: str                = "short",
+    aligned:      Optional[list[dict]] = None,
+    music_volume: float              = 0.12,
+    sfx_type:     str                = "swoosh",
 ) -> tuple[Path, Path, float]:
+    """إنتاج الصوت الكامل (TTS + Music + SFX)."""
     tagged_sentences = script_data["tagged_sentences"]
     lang             = script_data.get("lang", "ar")
     voice_config     = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
     voice_key        = voice_config["voice_key"]
 
-    print(
+    log.info(
         f"\n  🎙️  TTS ({lang.upper()}, "
         f"voice={voice_key}, "
         f"mode={content_mode.upper()})"
     )
 
+    # 1. TTS
     synthesize_speech(
         tagged_sentences = tagged_sentences,
         output_path      = f"{output_base}_voice",
@@ -511,8 +649,10 @@ def produce_full_audio(
         lang             = lang,
     )
 
-    out_dir        = Path(output_base).parent
-    prefix         = Path(output_base).name
+    # 2. البحث عن ملف الصوت الناتج
+    out_dir = Path(output_base).parent
+    prefix  = Path(output_base).name
+
     wav_candidates = sorted(set(
         list(out_dir.glob(f"{prefix}_voice_*.wav")) +
         list(out_dir.glob(f"{prefix}_voice*.wav"))
@@ -521,17 +661,19 @@ def produce_full_audio(
     real_dur = float(script_data["estimated_seconds"])
     wav_path = (
         str(wav_candidates[0])
-        if wav_candidates else None
+        if wav_candidates
+        else None
     )
 
     if wav_path and Path(wav_path).exists():
         measured = get_audio_duration(wav_path)
-        if measured >= 5:
+        if measured >= MIN_VALID_AUDIO_S:
             real_dur = measured
-            print(f"  📏 Raw: {real_dur:.3f}s")
+            log.info(f"  📏 Raw: {real_dur:.3f}s")
     else:
         wav_path = None
 
+    # 3. Trim silence
     if wav_path:
         trimmed = _trim_silence(
             wav_path,
@@ -540,10 +682,10 @@ def produce_full_audio(
         if trimmed != wav_path:
             wav_path = trimmed
             d = get_audio_duration(wav_path)
-            if d >= 5:
+            if d >= MIN_VALID_AUDIO_S:
                 real_dur = d
 
-    # Speed up فقط للـ short
+    # 4. Speed up (short فقط)
     if content_mode == "short":
         speed = SPEED_MULTIPLIER.get(lang, 1.0)
         if wav_path and speed != 1.0:
@@ -554,10 +696,11 @@ def produce_full_audio(
             if sped != wav_path:
                 wav_path = sped
                 d = get_audio_duration(wav_path)
-                if d >= 5:
+                if d >= MIN_VALID_AUDIO_S:
                     real_dur = d
-                print(f"  📏 After speed: {real_dur:.3f}s")
+                log.info(f"  📏 After speed: {real_dur:.3f}s")
 
+    # 5. تحضير المسارات
     clean_voice_path = (
         Path(wav_path) if wav_path
         else Path(f"{output_base}_voice_0.wav")
@@ -568,6 +711,7 @@ def produce_full_audio(
     n_clips        = max(1, int(real_dur / CLIP_DURATION))
     clip_dur_list  = [real_dur / n_clips] * n_clips
 
+    # 6. Mix
     try:
         final_audio = mix_voice_music_sfx(
             voice_path     = fallback_voice,
@@ -582,14 +726,16 @@ def produce_full_audio(
             sentences      = script_data.get("sentences", []),
             tagged         = tagged_sentences,
         )
+
         d = get_audio_duration(str(final_audio))
-        if d >= 5:
+        if d >= MIN_VALID_AUDIO_S:
             real_dur = d
-        print(f"  ✅ Audio ready: {real_dur:.3f}s")
+
+        log.info(f"  ✅ Audio ready: {real_dur:.3f}s")
         return Path(final_audio), clean_voice_path, real_dur
 
     except Exception as e:
-        print(f"  ⚠️  Mix error: {e} — using raw voice")
+        log.warning(f"  ⚠️  Mix error: {e} — using raw voice")
         return clean_voice_path, clean_voice_path, real_dur
 
 
@@ -601,44 +747,47 @@ def run_whisperx(
     clean_voice_path: Path,
     out_base:         str,
     lang:             str,
-    script_sentences: list[str] | None = None,
+    script_sentences: Optional[list[str]] = None,
 ) -> tuple[list, list]:
-    print(f"\n  🎤 WhisperX: {clean_voice_path.name}")
+    """تشغيل WhisperX للحصول على timestamps."""
+    log.info(f"\n  🎤 WhisperX: {clean_voice_path.name}")
 
+    # تحويل الصوت لـ 16kHz mono
     whisper_input = f"{out_base}_whisper_input.wav"
-    r = subprocess.run(
-        [
-            "ffmpeg", "-y",
-            "-i", str(clean_voice_path),
-            "-acodec", "pcm_s16le",
-            "-ar", "16000",
-            "-ac", "1",
-            whisper_input,
-        ],
-        capture_output=True, text=True,
-    )
 
-    if r.returncode != 0:
+    success, _ = _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i", str(clean_voice_path),
+        "-acodec", "pcm_s16le",
+        "-ar", "16000",
+        "-ac", "1",
+        whisper_input,
+    ])
+
+    if not success:
         whisper_input = str(clean_voice_path)
 
+    # استخراج النص
     transcript = extract_transcript_from_audio(
         whisper_input, lang=lang
     )
     _safe_unlink(whisper_input)
 
     if not transcript["success"]:
-        print("  ⚠️  WhisperX failed")
+        log.warning("  ⚠️  WhisperX failed")
         return [], []
 
     aligned   = transcript["aligned"]
     sentences = transcript["sentences"]
 
+    # محاولة إعادة map الكلمات على الجمل الأصلية
     if script_sentences:
         word_timestamps = [
             w
             for seg in transcript["aligned"]
             for w in seg.get("words", [])
         ]
+
         total_script_words = sum(
             len(s.split()) for s in script_sentences
         )
@@ -646,46 +795,47 @@ def run_whisperx(
         if (
             word_timestamps and
             len(word_timestamps) >= 5 and
-            total_script_words > 0 and
-            abs(
-                len(word_timestamps) - total_script_words
-            ) / total_script_words <= 0.30
+            total_script_words > 0
         ):
-            try:
-                _, rebuilt = build_word_timeline(
-                    script_sentences,
-                    word_timestamps,
-                    transcript["total_duration"],
-                )
-                if (
-                    rebuilt and
-                    len(rebuilt) == len(script_sentences)
-                ):
-                    aligned   = rebuilt
-                    sentences = list(script_sentences)
-                    print(
-                        f"  ✅ Re-mapped: "
-                        f"{len(sentences)} sentences"
-                    )
-            except Exception as e:
-                print(f"  ⚠️  Remap skipped: {e}")
-        else:
-            print(
-                f"  ⚠️  Remap skipped — "
-                f"words: {len(word_timestamps)} vs "
-                f"script: {total_script_words}"
+            diff_ratio = (
+                abs(len(word_timestamps) - total_script_words)
+                / total_script_words
             )
 
-    total_words = sum(
-        len(s.get("words", [])) for s in aligned
-    )
-    print(
+            if diff_ratio <= 0.30:
+                try:
+                    _, rebuilt = build_word_timeline(
+                        script_sentences,
+                        word_timestamps,
+                        transcript["total_duration"],
+                    )
+
+                    if rebuilt and len(rebuilt) == len(script_sentences):
+                        aligned   = rebuilt
+                        sentences = list(script_sentences)
+                        log.info(
+                            f"  ✅ Re-mapped: "
+                            f"{len(sentences)} sentences"
+                        )
+                except Exception as e:
+                    log.warning(f"  ⚠️  Remap skipped: {e}")
+            else:
+                log.warning(
+                    f"  ⚠️  Remap skipped — "
+                    f"words: {len(word_timestamps)} vs "
+                    f"script: {total_script_words}"
+                )
+
+    total_words = sum(len(s.get("words", [])) for s in aligned)
+    log.info(
         f"  ✅ WhisperX: {len(sentences)} sentences, "
         f"{total_words} words"
     )
 
+    # توليد SRT
     generate_srt(aligned, f"{out_base}.srt")
     generate_word_srt(aligned, f"{out_base}_words.srt")
+
     return aligned, sentences
 
 
@@ -693,30 +843,25 @@ def run_whisperx(
 # STEP C: PRODUCE BACKGROUND VIDEO
 # ═════════════════════════════════════════════════════════════════════════════
 
-def produce_bg_video(
-    video_paths:    list,
-    audio_path:     Path,
-    real_dur:       float,
-    out_base:       str,
+def _build_manifest(
     script_data:    dict,
-    has_hook:       bool,
+    audio_path:     Path,
+    video_paths:    list,
+    real_dur:       float,
     clip_durations: list[float],
-    content_mode:   str = "short",
-) -> Path:
+    aligned:        list,
+    content_mode:   str,
+    mode:           str,
+    has_hook:       bool = False,
+) -> dict:
+    """بناء manifest للرندر."""
     avg_clip = (
         sum(clip_durations) / len(clip_durations)
-        if clip_durations else CLIP_DURATION
+        if clip_durations
+        else CLIP_DURATION
     )
 
-    bg_mode = (
-        "bg_only"
-        if content_mode == "short"
-        else "long_bg_only"
-    )
-
-    suffix = f"_{content_mode}"
-
-    manifest = {
+    return {
         "title":          script_data["title"],
         "display_title":  script_data.get(
             "display_title", script_data["title"]
@@ -733,7 +878,7 @@ def produce_bg_video(
         "lang":           script_data.get("lang", "ar"),
         "content_type":   CONTENT_TYPE,
         "content_mode":   content_mode,
-        "power_words":    [],
+        "power_words":    script_data.get("power_words", []),
         "accent_colors":  script_data.get("accent_colors", []),
         "analysis":       script_data.get("analysis", {}),
         "clip_duration":  avg_clip,
@@ -741,10 +886,77 @@ def produce_bg_video(
         "has_hook":       has_hook,
         "hook_keyword":   script_data.get("hook_keyword", ""),
         "custom_hook":    script_data.get("custom_hook", ""),
-        "aligned":        [],
-        "mode":           bg_mode,
+        "aligned":        aligned,
+        "mode":           mode,
     }
 
+
+def _run_remotion_render(
+    manifest_path: Path,
+    output_path:   Path,
+) -> None:
+    """تشغيل Remotion render.mjs."""
+    if not RENDER_SCRIPT.exists():
+        raise FileNotFoundError(
+            f"render.mjs not found: {RENDER_SCRIPT}"
+        )
+
+    try:
+        result = subprocess.run(
+            [
+                "node",
+                str(RENDER_SCRIPT.resolve()),
+                str(manifest_path),
+                str(output_path),
+            ],
+            text    = True,
+            stdout  = subprocess.PIPE,
+            stderr  = subprocess.STDOUT,
+            timeout = RENDER_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"Render timeout ({RENDER_TIMEOUT}s)"
+        )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Render failed:\n{result.stdout[-600:]}"
+        )
+
+
+def produce_bg_video(
+    video_paths:    list,
+    audio_path:     Path,
+    real_dur:       float,
+    out_base:       str,
+    script_data:    dict,
+    has_hook:       bool,
+    clip_durations: list[float],
+    content_mode:   str = "short",
+) -> Path:
+    """إنتاج فيديو الخلفية."""
+    bg_mode = (
+        "bg_only"
+        if content_mode == "short"
+        else "long_bg_only"
+    )
+
+    suffix = f"_{content_mode}"
+
+    manifest = _build_manifest(
+        script_data    = script_data,
+        audio_path     = audio_path,
+        video_paths    = video_paths,
+        real_dur       = real_dur,
+        clip_durations = clip_durations,
+        aligned        = [],
+        content_mode   = content_mode,
+        mode           = bg_mode,
+        has_hook       = has_hook,
+    )
+
+    # حفظ manifest
     manifest_path = Path(
         f"{out_base}{suffix}_bg_manifest.json"
     ).resolve()
@@ -753,40 +965,22 @@ def produce_bg_video(
         encoding="utf-8",
     )
 
-    out    = Path(f"{out_base}{suffix}_bg.mp4").resolve()
-    script = RENDER_SCRIPT.resolve()
+    output_path = Path(f"{out_base}{suffix}_bg.mp4").resolve()
 
-    if not script.exists():
-        raise FileNotFoundError(
-            f"render.mjs not found: {script}"
-        )
-
-    print(
+    log.info(
         f"\n  🎬 Producing background video "
         f"[{content_mode.upper()}]..."
     )
 
-    r = subprocess.run(
-        ["node", str(script), str(manifest_path), str(out)],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    _run_remotion_render(manifest_path, output_path)
 
-    if r.returncode != 0:
-        raise RuntimeError(
-            f"BG render failed:\n{r.stdout[-600:]}"
-        )
-
-    mb = (
-        out.stat().st_size / 1_048_576
-        if out.exists() else 0
-    )
-    print(
+    mb = _file_size_mb(output_path)
+    log.info(
         f"  ✅ BG video [{content_mode.upper()}]: "
         f"{mb:.1f} MB"
     )
-    return out
+
+    return output_path
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -802,6 +996,7 @@ def render_words_overlay(
     out_base:     str,
     content_mode: str = "short",
 ) -> Path:
+    """رندر الكلمات فوق فيديو الخلفية."""
     audio_dur = get_audio_duration(str(audio_path))
 
     words_mode = (
@@ -812,30 +1007,17 @@ def render_words_overlay(
 
     suffix = f"_{content_mode}"
 
-    manifest = {
-        "title":         script_data["title"],
-        "display_title": script_data.get(
-            "display_title", script_data["title"]
-        ),
-        "emoji_left":    script_data.get("emoji_left",  "🔥"),
-        "emoji_right":   script_data.get("emoji_right", "💥"),
-        "sentences":     sentences,
-        "audio":         str(Path(str(audio_path)).resolve()),
-        "videos":        [str(bg_video.resolve())],
-        "duration_s":    audio_dur,
-        "lang":          script_data.get("lang", "ar"),
-        "content_type":  CONTENT_TYPE,
-        "content_mode":  content_mode,
-        "power_words":   script_data.get("power_words",   []),
-        "accent_colors": script_data.get("accent_colors", []),
-        "analysis":      script_data.get("analysis",      {}),
-        "clip_duration": audio_dur,
-        "has_hook":      script_data.get("has_hook", False),
-        "hook_keyword":  script_data.get("hook_keyword", ""),
-        "custom_hook":   script_data.get("custom_hook",  ""),
-        "aligned":       aligned,
-        "mode":          words_mode,
-    }
+    manifest = _build_manifest(
+        script_data    = {**script_data, "sentences": sentences},
+        audio_path     = audio_path,
+        video_paths    = [bg_video],
+        real_dur       = audio_dur,
+        clip_durations = [audio_dur],
+        aligned        = aligned,
+        content_mode   = content_mode,
+        mode           = words_mode,
+        has_hook       = script_data.get("has_hook", False),
+    )
 
     manifest_path = Path(
         f"{out_base}{suffix}_words_manifest.json"
@@ -845,44 +1027,28 @@ def render_words_overlay(
         encoding="utf-8",
     )
 
-    out    = Path(f"{out_base}{suffix}_final.mp4").resolve()
-    script = RENDER_SCRIPT.resolve()
+    output_path = Path(
+        f"{out_base}{suffix}_final.mp4"
+    ).resolve()
 
-    if not script.exists():
-        raise FileNotFoundError(
-            f"render.mjs not found: {script}"
-        )
-
-    print(
+    log.info(
         f"\n  🔧 Rendering words overlay "
         f"[{content_mode.upper()}]..."
     )
 
-    r = subprocess.run(
-        ["node", str(script), str(manifest_path), str(out)],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    _run_remotion_render(manifest_path, output_path)
 
-    if r.returncode != 0:
-        raise RuntimeError(
-            f"Words render failed:\n{r.stdout[-600:]}"
-        )
-
-    mb = (
-        out.stat().st_size / 1_048_576
-        if out.exists() else 0
-    )
-    print(
+    mb = _file_size_mb(output_path)
+    log.info(
         f"  🎉 Final [{content_mode.upper()}]: "
-        f"{out.name} ({mb:.1f} MB)"
+        f"{output_path.name} ({mb:.1f} MB)"
     )
-    return out
+
+    return output_path
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ STEP D2: PRODUCE FACEBOOK VERTICAL VERSION (Long فقط)
+# STEP E: FACEBOOK VERTICAL (Long فقط)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_fb_vertical_version(
@@ -892,32 +1058,37 @@ def produce_fb_vertical_version(
     video_paths:    list,
     clip_durations: list[float],
     out_base:       str,
-) -> Path | None:
+) -> Optional[Path]:
     """
-    ✅ ينتج نسخة 9:16 من الفيديو الطويل للنشر على Facebook.
-    يستخدم نفس الصوت والفيديوهات لكن بـ content_mode=short.
+    إنتاج نسخة 9:16 من الفيديو الطويل للنشر على Facebook.
+
+    Returns:
+        Path للفيديو أو None في حالة الفشل.
     """
     try:
-        print(
+        log.info(
             "\n  📱 Rendering Facebook vertical "
             "version (9:16)..."
         )
 
         real_dur = get_audio_duration(str(audio_path))
 
-        # جلب فيديوهات portrait للـ Facebook
+        # جلب فيديوهات portrait
         vid_dir_fb = str(
             Path(out_base).parent /
             f"{Path(out_base).name}_fb_videos"
         )
 
-        # نستخدم نفس keywords لكن بـ orientation=portrait
+        # استخدام نفس keywords لكن portrait
+        fb_keywords = []
+        for p in video_paths:
+            if hasattr(p, "stem"):
+                fb_keywords.append([str(p.stem)])
+            else:
+                fb_keywords.append(["cinematic dark person"])
+
         fb_video_paths = fetch_videos_for_script(
-            keywords_per_sentence = [
-                [str(p.stem)] if hasattr(p, 'stem')
-                else ["cinematic dark person"]
-                for p in video_paths
-            ],
+            keywords_per_sentence = fb_keywords,
             clip_durations        = clip_durations,
             output_dir            = vid_dir_fb,
             aligned               = aligned,
@@ -947,14 +1118,14 @@ def produce_fb_vertical_version(
             content_mode = "short",
         )
 
-        print(
+        log.info(
             f"  ✅ Facebook vertical ready: "
             f"{fb_final.name}"
         )
         return fb_final
 
     except Exception as e:
-        print(f"  ⚠️  FB vertical failed: {e}")
+        log.error(f"  ⚠️  FB vertical failed: {e}")
         traceback.print_exc()
         return None
 
@@ -971,34 +1142,36 @@ def get_or_create_ai_data(
     force_ai:     bool = False,
     content:      str  = "",
 ) -> dict:
+    """جلب أو إنشاء بيانات AI."""
     video_number = str(record["number"])
     title        = record.get("title", "")
-    cache_key    = make_cache_key(
-        video_number, lang, content_mode
-    )
+    cache_key    = make_cache_key(video_number, lang, content_mode)
 
+    # محاولة استخدام Cache
     if not force_ai and has_ai_cache(cache_key):
         cached = get_ai_cache(cache_key)
 
         if cached and cached.get("hook_keyword"):
             if content and _is_cache_stale(cached, content):
-                print(
+                log.info(
                     f"\n  🔄 Auto-invalidating stale cache "
                     f"for #{video_number} "
-                    f"[{content_mode.upper()}]..."
+                    f"[{content_mode.upper()}]"
                 )
                 clear_ai_cache(cache_key)
             else:
-                print(
+                log.info(
                     f"\n  ♻️  Using cached AI for "
                     f"#{video_number} "
                     f"[{content_mode.upper()}]"
                 )
                 return cached
 
+    # إنشاء جديد
     content_to_use = (
         content or _get_content_for_lang(record, lang)
     )
+
     if not content_to_use:
         raise AIEnrichmentError(
             f"No content for #{video_number} ({lang.upper()})"
@@ -1010,16 +1183,14 @@ def get_or_create_ai_data(
         "content": content_to_use,
     }
 
-    try:
-        enriched = enrich_record(
-            record  = enricher_record,
-            lang    = lang,
-            tagged  = tagged,
-            verbose = True,
-        )
-    except AIEnrichmentError:
-        raise
+    enriched = enrich_record(
+        record  = enricher_record,
+        lang    = lang,
+        tagged  = tagged,
+        verbose = True,
+    )
 
+    # حفظ في Cache
     save_ai_cache(
         cache_key    = cache_key,
         title        = title,
@@ -1027,10 +1198,12 @@ def get_or_create_ai_data(
         enriched     = enriched,
         content_mode = content_mode,
     )
-    print(
+
+    log.info(
         f"  💾 AI cached for #{video_number} "
         f"[{content_mode.upper()}]"
     )
+
     return enriched
 
 
@@ -1044,29 +1217,32 @@ def _build_script_data(
     ai_data:      dict,
     tagged:       list[dict],
     content_mode: str = "short",
-) -> dict | None:
+) -> Optional[dict]:
+    """بناء script_data من record + ai_data + tagged."""
     if not tagged:
         return None
 
     sentences_clean = [s["text"] for s in tagged]
     full_script     = " ".join(sentences_clean)
 
+    # العنوان الجذاب
     attractive_title = ai_data.get("attractive_title") or {}
     display_title    = (
         attractive_title.get("title") or record["title"]
     )
-    emoji_left  = attractive_title.get("emoji_left",  "🔥")
-    emoji_right = attractive_title.get("emoji_right", "💥")
 
+    # Power words حسب اللغة
     power_words = ai_data.get("power_words", [])
     if isinstance(power_words, dict):
         power_words = (
             power_words.get(lang) or
             power_words.get("ar")  or
-            power_words.get("en")  or []
+            power_words.get("en")  or
+            []
         )
 
-    emotion  = (
+    # bg_style حسب العاطفة
+    emotion = (
         ai_data.get("analysis", {})
         .get("primary_emotion", "")
     )
@@ -1079,10 +1255,16 @@ def _build_script_data(
     return {
         "title":             record["title"],
         "display_title":     display_title,
-        "emoji_left":        emoji_left,
-        "emoji_right":       emoji_right,
+        "emoji_left":        attractive_title.get(
+            "emoji_left", "🔥"
+        ),
+        "emoji_right":       attractive_title.get(
+            "emoji_right", "💥"
+        ),
         "hook":              (
-            sentences_clean[0] if sentences_clean else ""
+            sentences_clean[0]
+            if sentences_clean
+            else ""
         ),
         "full_script":       full_script,
         "sentences":         sentences_clean,
@@ -1095,11 +1277,19 @@ def _build_script_data(
         "content_mode":      content_mode,
         "content_type":      CONTENT_TYPE,
         "power_words":       power_words,
-        "accent_colors":     ai_data.get("accent_colors",   []),
-        "visual_keywords":   ai_data.get("visual_keywords", []),
-        "analysis":          ai_data.get("analysis",        {}),
-        "hook_keyword":      ai_data.get("hook_keyword",    ""),
-        "custom_hook":       ai_data.get("custom_hook",     ""),
+        "accent_colors":     ai_data.get(
+            "accent_colors", []
+        ),
+        "visual_keywords":   ai_data.get(
+            "visual_keywords", []
+        ),
+        "analysis":          ai_data.get("analysis", {}),
+        "hook_keyword":      ai_data.get(
+            "hook_keyword", ""
+        ),
+        "custom_hook":       ai_data.get(
+            "custom_hook", ""
+        ),
         "bg_style":          bg_style,
         "has_hook":          bool(
             ai_data.get("hook_keyword", "") and
@@ -1109,6 +1299,7 @@ def _build_script_data(
 
 
 def _rebuild_text_with_tag(tagged: list[dict]) -> list[dict]:
+    """إعادة بناء text_with_tag."""
     for sent in tagged:
         final_tag = sent.get("final_tag")
         text      = sent.get("text", "")
@@ -1119,31 +1310,31 @@ def _rebuild_text_with_tag(tagged: list[dict]) -> list[dict]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ PUBLISH
+# PUBLISH
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _do_publish(
-    video_path:         str,
-    record:             dict,
-    ai_data:            dict,
-    lang:               str,
-    video_number:       str,
-    content_mode:       str,
-    should_publish_fb:  bool,
-    should_publish_yt:  bool,
-    fb_video_path:      str  = "",
-    yt_video_path:      str  = "",
+    video_path:        str,
+    record:            dict,
+    ai_data:           dict,
+    lang:              str,
+    video_number:      str,
+    content_mode:      str,
+    should_publish_fb: bool,
+    should_publish_yt: bool,
+    fb_video_path:     str = "",
+    yt_video_path:     str = "",
 ) -> None:
     """
-    ✅ نشر الفيديو على المنصتين.
+    نشر الفيديو على المنصتين.
 
     Args:
-        video_path:    المسار الأصلي (YouTube للـ long)
-        fb_video_path: مسار نسخة Facebook (9:16 للـ long)
-        yt_video_path: مسار نسخة YouTube (16:9 للـ long)
+        video_path:    المسار الأصلي
+        fb_video_path: مسار نسخة Facebook
+        yt_video_path: مسار نسخة YouTube
     """
     if not Path(video_path).exists():
-        print("  ❌ Publish skipped: video not found")
+        log.error("  ❌ Publish skipped: video not found")
         return
 
     street_description = ai_data.get("street_description", "")
@@ -1153,12 +1344,10 @@ def _do_publish(
     fb_path = fb_video_path or video_path
     yt_path = yt_video_path or video_path
 
-    # ── Facebook ──────────────────────────────────────────────────────────
+    # ── Facebook ──────────────────────────────────────────────
     if should_publish_fb:
-        if is_published_facebook(
-            video_number, lang, content_mode
-        ):
-            print(f"  ⏭️  Facebook: already published")
+        if is_published_facebook(video_number, lang, content_mode):
+            log.info(f"  ⏭️  Facebook: already published")
         else:
             try:
                 publish_to_facebook(
@@ -1173,16 +1362,14 @@ def _do_publish(
                     video_number, lang,
                     "facebook", content_mode,
                 )
-                print(f"  📘 Facebook: published ✅")
+                log.info(f"  📘 Facebook: published ✅")
             except Exception as e:
-                print(f"  ❌ Facebook publish failed: {e}")
+                log.error(f"  ❌ Facebook publish failed: {e}")
 
-    # ── YouTube ───────────────────────────────────────────────────────────
+    # ── YouTube ───────────────────────────────────────────────
     if should_publish_yt:
-        if is_published_youtube(
-            video_number, lang, content_mode
-        ):
-            print(
+        if is_published_youtube(video_number, lang, content_mode):
+            log.info(
                 f"  ⏭️  YouTube: already published "
                 f"[{content_mode}]"
             )
@@ -1199,16 +1386,16 @@ def _do_publish(
                     video_number, lang,
                     "youtube", content_mode,
                 )
-                print(
+                log.info(
                     f"  📺 YouTube: published ✅ "
                     f"[{content_mode}]"
                 )
             except Exception as e:
-                print(f"  ❌ YouTube publish failed: {e}")
+                log.error(f"  ❌ YouTube publish failed: {e}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ PROCESS ONE VIDEO
+# PROCESS ONE VIDEO
 # ═════════════════════════════════════════════════════════════════════════════
 
 def process_video(
@@ -1219,6 +1406,7 @@ def process_video(
     should_publish_yt: bool,
     content_mode:      str = "short",
 ) -> dict:
+    """معالجة فيديو واحد كاملاً."""
     num        = str(record["number"])
     title      = record["title"]
     lang       = args.lang
@@ -1229,41 +1417,41 @@ def process_video(
         "hook_keyword": title,
     }
 
-    print(f"\n{'═' * 65}")
-    print(
+    log.info(f"\n{'═' * 65}")
+    log.info(
         f"  🎬  Video #{num} ({lang.upper()}) "
         f"[{mode_label}]:  {title}"
     )
-    print(f"{'═' * 65}")
+    log.info(f"{'═' * 65}")
 
     out_base = str(
         Path(out_dir).resolve() /
         f"video_{num}_{lang}_{content_mode}"
     )
 
-    # ── 1. Parse tags ──────────────────────────────────────────────────────
+    # ── 1. Parse tags ────────────────────────────────────────
     content = _get_content_for_lang(record, lang)
     if not content:
-        print(f"  ❌ No content for #{num}")
+        log.error(f"  ❌ No content for #{num}")
         return result
 
-    print(
+    log.info(
         f"\n  🏷️  Parsing {lang.upper()} tags "
-        f"[{mode_label}]..."
+        f"[{mode_label}]"
     )
     tagged = process_tagged_content(content, lang=lang)
 
     if not tagged:
-        print(f"  ❌ No tagged content for #{num}")
+        log.error(f"  ❌ No tagged content for #{num}")
         return result
 
-    print(
+    log.info(
         f"  ✅ Parsed: {len(tagged)} sentences | "
         f"tags: "
-        f"{', '.join(s.get('raw_tag','?') for s in tagged)}"
+        f"{', '.join(s.get('raw_tag', '?') for s in tagged)}"
     )
 
-    # ── 2. AI Enrichment ───────────────────────────────────────────────────
+    # ── 2. AI Enrichment ─────────────────────────────────────
     try:
         ai_data = get_or_create_ai_data(
             record       = record,
@@ -1274,7 +1462,7 @@ def process_video(
             content      = content,
         )
     except AIEnrichmentError as e:
-        print(f"\n  ⛔ AI enrichment failed: {e}")
+        log.error(f"\n  ⛔ AI enrichment failed: {e}")
         return result
 
     tagged = _rebuild_text_with_tag(
@@ -1284,31 +1472,26 @@ def process_video(
     hook_keyword = ai_data.get("hook_keyword", "") or title
     result["hook_keyword"] = hook_keyword
 
-    # ── 3. Build script data ───────────────────────────────────────────────
+    # ── 3. Build script data ─────────────────────────────────
     script_data = _build_script_data(
         record, lang, ai_data, tagged, content_mode
     )
+
     if not script_data:
-        print("  ❌ Cannot build script data")
+        log.error("  ❌ Cannot build script data")
         return result
 
-    print(
+    log.info(
         f"  📊 Final sentences: "
         f"{len(script_data['sentences'])} [{mode_label}]"
     )
 
-    if (
-        script_data.get("custom_hook") and
-        content_mode == "short"
-    ):
-        print(
-            f"  🪝 Hook: "
-            f"'{script_data['custom_hook']}'"
-        )
+    if script_data.get("custom_hook") and content_mode == "short":
+        log.info(f"  🪝 Hook: '{script_data['custom_hook']}'")
 
     street_desc = ai_data.get("street_description", "")
     if street_desc:
-        print(
+        log.info(
             f"  📝 Street Description: "
             f"{len(street_desc)} chars"
         )
@@ -1322,28 +1505,29 @@ def process_video(
         content_mode = content_mode,
     )
 
-    # ── 4. Script-only ─────────────────────────────────────────────────────
+    # ── 4. Script-only mode ──────────────────────────────────
     if args.script_only:
         print_tags_summary(tagged, lang=lang)
         return result
 
-    # ── 5. Audio-only ──────────────────────────────────────────────────────
+    # ── 5. Audio-only mode ───────────────────────────────────
     if args.no_video:
-        print(f"\n  🎵 Audio only [{mode_label}]...")
+        log.info(f"\n  🎵 Audio only [{mode_label}]")
         try:
             produce_full_audio(
                 script_data, out_base, content_mode
             )
         except Exception as e:
-            print(f"  ❌ Audio error: {e}")
+            log.error(f"  ❌ Audio error: {e}")
         return result
 
+    # ── 6. Full pipeline ─────────────────────────────────────
     mark_render_start(num, lang, content_mode)
 
     try:
-        # ── STEP A: Audio ─────────────────────────────────────────────────
-        print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP A: Full audio [{mode_label}]")
+        # STEP A: Audio
+        log.info(f"\n  {'─' * 55}")
+        log.info(f"  ✅ STEP A: Full audio [{mode_label}]")
         audio_path, clean_voice_path, real_dur = (
             produce_full_audio(
                 script_data  = script_data,
@@ -1354,9 +1538,9 @@ def process_video(
             )
         )
 
-        # ── STEP B: WhisperX ──────────────────────────────────────────────
-        print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP B: WhisperX [{mode_label}]")
+        # STEP B: WhisperX
+        log.info(f"\n  {'─' * 55}")
+        log.info(f"  ✅ STEP B: WhisperX [{mode_label}]")
         aligned, whisper_sentences = run_whisperx(
             clean_voice_path = clean_voice_path,
             out_base         = out_base,
@@ -1369,12 +1553,13 @@ def process_video(
 
         aligned = _inject_tags_into_aligned(aligned, tagged)
 
-        # ── STEP C: Clip plan + videos ────────────────────────────────────
-        print(f"\n  {'─'*55}")
-        print(
+        # STEP C: Clip plan + videos
+        log.info(f"\n  {'─' * 55}")
+        log.info(
             f"  ✅ STEP C: Clip plan + videos "
             f"[{mode_label}]"
         )
+
         clip_keywords, clip_durations = _build_clip_plan(
             script_data  = script_data,
             ai_data      = ai_data,
@@ -1401,11 +1586,12 @@ def process_video(
 
         result["video_paths"] = [str(p) for p in video_paths]
 
-        # ── STEP D: Background video ──────────────────────────────────────
-        print(f"\n  {'─'*55}")
-        print(
+        # STEP D: Background video
+        log.info(f"\n  {'─' * 55}")
+        log.info(
             f"  ✅ STEP D: Background video [{mode_label}]"
         )
+
         bg_video = produce_bg_video(
             video_paths    = video_paths,
             audio_path     = audio_path,
@@ -1417,11 +1603,12 @@ def process_video(
             content_mode   = content_mode,
         )
 
-        # ── STEP E: Words overlay ─────────────────────────────────────────
-        print(f"\n  {'─'*55}")
-        print(
+        # STEP E: Words overlay
+        log.info(f"\n  {'─' * 55}")
+        log.info(
             f"  ✅ STEP E: Words overlay [{mode_label}]"
         )
+
         final_video = render_words_overlay(
             bg_video     = bg_video,
             audio_path   = audio_path,
@@ -1432,13 +1619,11 @@ def process_video(
             content_mode = content_mode,
         )
 
-        # ── STEP E2: Facebook vertical (Long فقط) ────────────────────────
+        # STEP E2: Facebook vertical (Long فقط)
         fb_vertical = None
         if content_mode == "long" and should_publish_fb:
-            print(f"\n  {'─'*55}")
-            print(
-                "  ✅ STEP E2: Facebook vertical version"
-            )
+            log.info(f"\n  {'─' * 55}")
+            log.info("  ✅ STEP E2: Facebook vertical version")
             fb_vertical = produce_fb_vertical_version(
                 script_data    = script_data,
                 audio_path     = audio_path,
@@ -1448,24 +1633,27 @@ def process_video(
                 out_base       = out_base,
             )
 
-        # ── Export (short فقط) ───────────────────────────────────────────
+        # Export (short فقط)
         export_formats = (
-            [] if args.no_export
+            []
+            if args.no_export
             else [
                 f.strip()
                 for f in args.formats.split(",")
                 if f.strip()
             ]
         )
+
         if export_formats and content_mode == "short":
             export_all(
                 str(final_video), out_base, export_formats
             )
 
-        # ── حفظ في DB ─────────────────────────────────────────────────────
+        # حفظ في DB
         fb_path = (
             str(fb_vertical)
-            if fb_vertical else str(final_video)
+            if fb_vertical
+            else str(final_video)
         )
         yt_path = str(final_video)
 
@@ -1476,9 +1664,10 @@ def process_video(
             yt_path = yt_path,
         )
 
-        # ── STEP F: Publish ───────────────────────────────────────────────
-        print(f"\n  {'─'*55}")
-        print(f"  ✅ STEP F: Publishing [{mode_label}]")
+        # STEP F: Publish
+        log.info(f"\n  {'─' * 55}")
+        log.info(f"  ✅ STEP F: Publishing [{mode_label}]")
+
         _do_publish(
             video_path        = str(final_video),
             record            = record,
@@ -1492,11 +1681,8 @@ def process_video(
             yt_video_path     = yt_path,
         )
 
-        mb = (
-            final_video.stat().st_size / 1_048_576
-            if final_video.exists() else 0
-        )
-        print(
+        mb = _file_size_mb(final_video)
+        log.info(
             f"\n  ✅ Video #{num} ({lang.upper()}) "
             f"[{mode_label}] → "
             f"{final_video.name} ({mb:.1f} MB)"
@@ -1504,208 +1690,316 @@ def process_video(
 
     except Exception as e:
         mark_render_failed(num, lang, str(e), content_mode)
-        print(f"\n  ❌ Failed [{mode_label}]: {e}")
+        log.error(f"\n  ❌ Failed [{mode_label}]: {e}")
         traceback.print_exc()
 
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MAIN
+# THUMBNAIL GENERATION
 # ═════════════════════════════════════════════════════════════════════════════
 
-def main() -> None:
-    args         = parse_args()
-    content_mode = args.content_mode
-    init_db()
+def _generate_thumbnails(
+    valid:          list[dict],
+    video_results:  dict[str, dict],
+    args:           argparse.Namespace,
+    content_mode:   str,
+) -> None:
+    """توليد thumbnails لجميع الفيديوهات."""
+    thumbnail_queue: list[tuple[str, str]] = []
 
-    # ── أوامر الإدارة ──────────────────────────────────────────────────────
-    if args.show_ai_cache is not None:
-        show_ai_cache(
-            args.show_ai_cache
-            if args.show_ai_cache != "all" else None
+    for record in valid:
+        num       = record["number"]
+        out_base  = str(
+            Path(args.output_dir).resolve() /
+            f"video_{num}_{args.lang}_{content_mode}"
+        )
+        html_path = f"{out_base}_thumbnail.html"
+        png_path  = f"{out_base}_thumbnail.png"
+
+        if Path(png_path).exists():
+            continue
+
+        try:
+            vr           = video_results.get(str(num), {})
+            hook_keyword = vr.get("hook_keyword", record["title"])
+            video_paths  = vr.get("video_paths", [])
+
+            generate_thumbnail_html(
+                title        = record["title"],
+                lang         = args.lang,
+                output_path  = html_path,
+                keyword      = hook_keyword,
+                video_paths  = video_paths,
+                content_mode = content_mode,
+            )
+
+            thumbnail_queue.append((html_path, png_path))
+
+        except Exception as e:
+            log.warning(f"  ⚠️  Thumbnail HTML error: {e}")
+
+    if thumbnail_queue:
+        log.info(
+            f"\n🖼️  Rendering "
+            f"{len(thumbnail_queue)} thumbnail(s) "
+            f"[{content_mode.upper()}]"
+        )
+
+        try:
+            render_thumbnails_batch(
+                items        = thumbnail_queue,
+                content_mode = content_mode,
+            )
+        except Exception as e:
+            log.error(f"  ⚠️  Thumbnail render error: {e}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RESUME LOGIC
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _try_publish_existing(
+    record:          dict,
+    args:            argparse.Namespace,
+    content_mode:    str,
+    will_publish_fb: bool,
+    will_publish_yt: bool,
+) -> None:
+    """محاولة نشر فيديو موجود بالفعل."""
+    num     = record["number"]
+    lang    = args.lang
+    suffix  = f"_{content_mode}"
+
+    out_base = str(
+        Path(args.output_dir).resolve() /
+        f"video_{num}_{lang}_{content_mode}"
+    )
+    yt_path = f"{out_base}{suffix}_final.mp4"
+
+    fb_done = is_published_facebook(num, lang, content_mode)
+    yt_done = is_published_youtube(num, lang, content_mode)
+
+    if fb_done and yt_done:
+        log.info(
+            f"  ⏭️  #{num} [{content_mode.upper()}] "
+            f"already published on all platforms"
         )
         return
 
+    # تحميل AI cache
+    ai_data = get_ai_cache(
+        make_cache_key(str(num), lang, content_mode)
+    ) or {}
+
+    # للـ long نحاول إيجاد نسخة FB
+    fb_path = f"{out_base}_fb_short_final.mp4"
+    if not Path(fb_path).exists():
+        fb_path = yt_path
+
+    _do_publish(
+        video_path        = yt_path,
+        record            = record,
+        ai_data           = ai_data,
+        lang              = lang,
+        video_number      = str(num),
+        content_mode      = content_mode,
+        should_publish_fb = will_publish_fb and not fb_done,
+        should_publish_yt = will_publish_yt and not yt_done,
+        fb_video_path     = fb_path,
+        yt_video_path     = yt_path,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _handle_management_commands(
+    args: argparse.Namespace,
+) -> bool:
+    """معالجة أوامر الإدارة. يرجع True إذا تم تنفيذ أمر."""
+    # Show AI cache
+    if args.show_ai_cache is not None:
+        show_ai_cache(
+            args.show_ai_cache
+            if args.show_ai_cache != "all"
+            else None
+        )
+        return True
+
+    # Clear AI cache
     if args.clear_ai_cache is not None:
         count = (
             clear_ai_cache()
             if args.clear_ai_cache == "all"
             else clear_ai_cache(args.clear_ai_cache)
         )
-        print(f"  🗑️  Cleared {count} entries")
-        return
+        log.info(f"  🗑️  Cleared {count} entries")
+        return True
 
+    # Reset videos
     if args.reset_videos:
         _reset_used_videos()
         if not args.input_file:
-            return
+            return True
 
-    if not args.input_file:
-        print("❌ Error: input_file is required")
-        sys.exit(1)
+    return False
 
-    lang              = args.lang
-    will_publish_fb   = _should_publish_fb(args, content_mode)
-    will_publish_yt   = _should_publish_yt(args, lang)
 
-    print(f"\n{'═' * 62}")
-    print(
+def _print_header(
+    args:            argparse.Namespace,
+    will_publish_fb: bool,
+    will_publish_yt: bool,
+) -> None:
+    """طباعة header مع إعدادات التشغيل."""
+    log.info(f"\n{'═' * 62}")
+    log.info(
         f"  🚀  Video Generator — "
-        f"{lang.upper()} [{content_mode.upper()}]"
+        f"{args.lang.upper()} [{args.content_mode.upper()}]"
     )
-    print(f"{'═' * 62}")
-    print(f"  Input        : {args.input_file}")
-    print(f"  Language     : {lang.upper()}")
-    print(f"  Content Mode : {content_mode.upper()}")
-    print(f"  Output       : {args.output_dir}")
-    print(
+    log.info(f"{'═' * 62}")
+    log.info(f"  Input        : {args.input_file}")
+    log.info(f"  Language     : {args.lang.upper()}")
+    log.info(f"  Content Mode : {args.content_mode.upper()}")
+    log.info(f"  Output       : {args.output_dir}")
+    log.info(
         f"  Facebook     : "
         f"{'✅' if will_publish_fb else '❌'}"
     )
-    print(
+    log.info(
         f"  YouTube      : "
         f"{'✅' if will_publish_yt else '❌'}"
     )
-    print()
+    log.info("")
+
     print_db_summary()
 
-    # ── التحقق من credentials ──────────────────────────────────────────────
+
+def main() -> None:
+    """نقطة الدخول الرئيسية."""
+    args         = parse_args()
+    content_mode = args.content_mode
+
+    init_db()
+
+    # أوامر الإدارة
+    if _handle_management_commands(args):
+        return
+
+    # التحقق من input_file
+    if not args.input_file:
+        log.error("❌ Error: input_file is required")
+        sys.exit(1)
+
+    lang = args.lang
+
+    # تحديد ما يجب نشره
+    will_publish_fb = _should_publish_fb(args, content_mode)
+    will_publish_yt = _should_publish_yt(args, lang)
+
+    # طباعة الإعدادات
+    _print_header(args, will_publish_fb, will_publish_yt)
+
+    # التحقق من credentials
     if will_publish_fb:
-        print(f"\n📘 Checking Facebook credentials...")
+        log.info("\n📘 Checking Facebook credentials...")
         if not fb_check_credentials():
-            print("  ⚠️  FB credentials invalid — disabled")
+            log.warning("  ⚠️  FB credentials invalid — disabled")
             will_publish_fb = False
 
     if will_publish_yt:
-        print(
+        log.info(
             f"\n📺 Checking YouTube credentials "
             f"({lang.upper()})..."
         )
         if not yt_check_credentials(lang):
-            print("  ⚠️  YT credentials invalid — disabled")
+            log.warning("  ⚠️  YT credentials invalid — disabled")
             will_publish_yt = False
 
-    # ── قراءة السكريبتات ───────────────────────────────────────────────────
-    print(f"\n📖  Reading scripts...")
+    # قراءة السكريبتات
+    log.info("\n📖  Reading scripts...")
     try:
         all_scripts = read_scripts(args.input_file)
     except Exception as e:
-        print(f"❌  Cannot read: {e}")
+        log.error(f"❌  Cannot read: {e}")
         sys.exit(1)
 
     valid, errors = validate_scripts(all_scripts)
+
     for err in errors:
-        print(err)
+        log.warning(err)
+
     if not valid:
-        print("❌  No valid scripts")
+        log.error("❌  No valid scripts")
         sys.exit(1)
 
     print_scripts_summary(valid)
 
-    # ── Auto-next ──────────────────────────────────────────────────────────
+    # Auto-next
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
 
-        # ✅ auto-next يتتبع المنصتين معًا
         next_num = get_next_video_number(
             lang, available, content_mode
         )
 
         if next_num is None:
-            print(
+            log.info(
                 f"\n  🔄 All videos published! "
-                f"Looping [{content_mode.upper()}]..."
+                f"Looping [{content_mode.upper()}]"
             )
             reset_published_for_lang(lang, content_mode)
             next_num = str(valid[0]["number"])
 
-        print(
+        log.info(
             f"\n  🎯 Auto-next: #{next_num} "
             f"[{content_mode.upper()}]"
         )
+
         valid = [
             s for s in valid
             if str(s["number"]) == next_num
         ]
 
+    # Video number محدد
     elif args.video_number:
         valid = [
             s for s in valid
             if str(s["number"]) == str(args.video_number)
         ]
         if not valid:
-            print(
+            log.error(
                 f"❌  Video #{args.video_number} not found"
             )
             sys.exit(1)
 
+    # إنشاء مجلد الإخراج
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    success       = failed = 0
+    # معالجة الفيديوهات
+    success = 0
+    failed  = 0
     video_results: dict[str, dict] = {}
 
     for i, record in enumerate(valid, 1):
-        print(f"\n[{i}/{len(valid)}]")
+        log.info(f"\n[{i}/{len(valid)}]")
 
-        # ── Resume check ──────────────────────────────────────────────────
+        # Resume: إذا الفيديو موجود بالفعل
         if not args.force and is_render_done(
             record["number"], lang, content_mode
         ):
-            suffix   = f"_{content_mode}"
-            out_base = str(
-                Path(args.output_dir).resolve() /
-                f"video_{record['number']}_{lang}_{content_mode}"
+            _try_publish_existing(
+                record          = record,
+                args            = args,
+                content_mode    = content_mode,
+                will_publish_fb = will_publish_fb,
+                will_publish_yt = will_publish_yt,
             )
-            yt_path = f"{out_base}{suffix}_final.mp4"
-
-            fb_done = is_published_facebook(
-                record["number"], lang, content_mode
-            )
-            yt_done = is_published_youtube(
-                record["number"], lang, content_mode
-            )
-
-            if not fb_done or not yt_done:
-                ai_data = (
-                    get_ai_cache(
-                        make_cache_key(
-                            str(record["number"]),
-                            lang,
-                            content_mode,
-                        )
-                    ) or {}
-                )
-
-                # للـ long نحاول الحصول على نسخة FB
-                fb_path = f"{out_base}_fb_short_final.mp4"
-                if not Path(fb_path).exists():
-                    fb_path = yt_path
-
-                _do_publish(
-                    video_path        = yt_path,
-                    record            = record,
-                    ai_data           = ai_data,
-                    lang              = lang,
-                    video_number      = str(record["number"]),
-                    content_mode      = content_mode,
-                    should_publish_fb = (
-                        will_publish_fb and not fb_done
-                    ),
-                    should_publish_yt = (
-                        will_publish_yt and not yt_done
-                    ),
-                    fb_video_path     = fb_path,
-                    yt_video_path     = yt_path,
-                )
-            else:
-                print(
-                    f"  ⏭️  #{record['number']} "
-                    f"[{content_mode.upper()}] "
-                    f"already published on all platforms"
-                )
             continue
 
+        # معالجة جديدة
         try:
             result = process_video(
                 record            = record,
@@ -1717,70 +2011,33 @@ def main() -> None:
             )
             video_results[str(record["number"])] = result
             success += 1
+
         except KeyboardInterrupt:
-            print("\n⛔  Interrupted")
+            log.warning("\n⛔  Interrupted")
             break
+
         except Exception as e:
-            print(f"  ❌  Error: {e}")
+            log.error(f"  ❌  Error: {e}")
             traceback.print_exc()
             failed += 1
 
-    # ── Thumbnails ─────────────────────────────────────────────────────────
-    thumbnail_queue: list[tuple[str, str]] = []
+    # توليد thumbnails
+    _generate_thumbnails(
+        valid          = valid,
+        video_results  = video_results,
+        args           = args,
+        content_mode   = content_mode,
+    )
 
-    for record in valid:
-        out_base  = str(
-            Path(args.output_dir).resolve() /
-            f"video_{record['number']}_{lang}_{content_mode}"
-        )
-        html_path = f"{out_base}_thumbnail.html"
-        png_path  = f"{out_base}_thumbnail.png"
-
-        if not Path(png_path).exists():
-            try:
-                vr           = video_results.get(
-                    str(record["number"]), {}
-                )
-                hook_keyword = vr.get(
-                    "hook_keyword", record["title"]
-                )
-                video_paths  = vr.get("video_paths", [])
-
-                generate_thumbnail_html(
-                    title        = record["title"],
-                    lang         = lang,
-                    output_path  = html_path,
-                    keyword      = hook_keyword,
-                    video_paths  = video_paths,
-                    content_mode = content_mode,
-                )
-                thumbnail_queue.append((html_path, png_path))
-            except Exception as e:
-                print(f"  ⚠️  Thumbnail HTML error: {e}")
-
-    if thumbnail_queue:
-        print(
-            f"\n🖼️  Rendering "
-            f"{len(thumbnail_queue)} thumbnail(s) "
-            f"[{content_mode.upper()}]..."
-        )
-        try:
-            render_thumbnails_batch(
-                items        = thumbnail_queue,
-                content_mode = content_mode,
-            )
-        except Exception as e:
-            print(f"  ⚠️  Thumbnail render error: {e}")
-
-    # ── Final Summary ──────────────────────────────────────────────────────
-    print(f"\n{'═' * 62}")
-    print(
+    # ملخص نهائي
+    log.info(f"\n{'═' * 62}")
+    log.info(
         f"  ✅  Done ({lang.upper()}) "
         f"[{content_mode.upper()}] — "
         f"{success} success | {failed} failed"
     )
     print_db_summary()
-    print(f"{'═' * 62}\n")
+    log.info(f"{'═' * 62}\n")
 
 
 if __name__ == "__main__":
