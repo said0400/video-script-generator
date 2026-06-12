@@ -32,7 +32,9 @@ from db import (
     get_next_video_number, reset_published_for_lang,
     mark_video_published_for_lang,
     is_published_facebook, is_published_youtube,
+    is_fully_published,
     make_cache_key,
+    reset_used_videos,
 )
 from script_reader import (
     read_scripts, validate_scripts,
@@ -97,7 +99,7 @@ DURATION_LIMITS: dict[str, dict[str, int]] = {
 MIN_VALID_AUDIO_S = 5.0
 
 # Timeout للعمليات الفرعية
-FFMPEG_TIMEOUT = 300  # 5 دقائق
+FFMPEG_TIMEOUT = 300   # 5 دقائق
 RENDER_TIMEOUT = 1800  # 30 دقيقة
 
 # Logging setup
@@ -273,14 +275,7 @@ def _get_content_for_lang(record: dict, lang: str) -> str:
 
 def _reset_used_videos() -> int:
     """إعادة ضبط الفيديوهات المستخدمة."""
-    from db import _conn, _write_lock
-
-    with _write_lock:
-        with _conn() as c:
-            count = c.execute(
-                "DELETE FROM used_videos"
-            ).rowcount
-
+    count = reset_used_videos()
     log.info(f"  🗑️  Reset {count} used videos")
     return count
 
@@ -624,10 +619,10 @@ def _speed_up_audio(
 def produce_full_audio(
     script_data:  dict,
     output_base:  str,
-    content_mode: str                = "short",
+    content_mode: str                  = "short",
     aligned:      Optional[list[dict]] = None,
-    music_volume: float              = 0.12,
-    sfx_type:     str                = "swoosh",
+    music_volume: float                = 0.12,
+    sfx_type:     str                  = "swoosh",
 ) -> tuple[Path, Path, float]:
     """إنتاج الصوت الكامل (TTS + Music + SFX)."""
     tagged_sentences = script_data["tagged_sentences"]
@@ -1778,15 +1773,16 @@ def _try_publish_existing(
     )
     yt_path = f"{out_base}{suffix}_final.mp4"
 
-    fb_done = is_published_facebook(num, lang, content_mode)
-    yt_done = is_published_youtube(num, lang, content_mode)
-
-    if fb_done and yt_done:
+    # استخدام is_fully_published للتحقق
+    if is_fully_published(num, lang, content_mode):
         log.info(
             f"  ⏭️  #{num} [{content_mode.upper()}] "
             f"already published on all platforms"
         )
         return
+
+    fb_done = is_published_facebook(num, lang, content_mode)
+    yt_done = is_published_youtube(num, lang, content_mode)
 
     # تحميل AI cache
     ai_data = get_ai_cache(
