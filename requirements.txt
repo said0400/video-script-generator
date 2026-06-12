@@ -2,149 +2,68 @@
 # 📦 requirements.txt — Video Script Generator (2026 Edition)
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# 🆕 Major Upgrade:
-#   - Removed: WhisperX, pyannote.audio, omegaconf (replaced by stable-ts)
-#   - Latest versions for all libraries
-#   - No more HF_TOKEN requirement
-#   - Faster installation
+# ⚠️  Installed separately in GitHub Actions (BEFORE this file):
 #
-# Compatible with: Python 3.11+ on Linux (GitHub Actions)
-# Last updated  : 2026-01
+#   1. pip install --upgrade pip setuptools wheel
 #
-# ⚠️  Installed separately in GitHub Actions:
-#
-#   1. PyTorch CPU (modern version):
+#   2. PyTorch CPU:
 #      pip install torch==2.5.1 torchaudio==2.5.1 \
 #          --index-url https://download.pytorch.org/whl/cpu
 #
-#   2. FFmpeg (system package):
-#      sudo apt-get install -y ffmpeg
+#   3. openai-whisper (needed by stable-ts, requires setuptools):
+#      pip install setuptools wheel
+#      pip install openai-whisper==20240930 --no-build-isolation
 #
-#   3. Playwright Chromium:
-#      python -m playwright install chromium --with-deps
+#   4. pip install -r requirements.txt
 #
-# ✅ NO LONGER NEEDED:
-#   - WhisperX (replaced by stable-ts)
-#   - pyannote.audio (built into stable-ts)
-#   - pyannote.core
-#   - pyannote.pipeline
-#   - omegaconf (was for pyannote torch fix)
-#   - HF_TOKEN (not required)
+#   5. Playwright: python -m playwright install chromium --with-deps
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                       🤖 AI Services (Latest)                              ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
+# ── Build Tools (required for openai-whisper) ─────────────────────────────────
+setuptools>=75.0.0
 
-# ── Google Gemini (TTS + AI) ──────────────────────────────────────────────────
+
+# ── AI Services ───────────────────────────────────────────────────────────────
 google-genai==1.0.0
-
-
-# ── Groq (AI Enrichment) ──────────────────────────────────────────────────────
 groq==0.15.0
 
 
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                    🎤 Speech Recognition (NEW Stack)                       ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
-# ── stable-ts (Replaces WhisperX) ─────────────────────────────────────────────
-# ✨ Active maintenance
-# ✨ Built-in word-level alignment
-# ✨ No HF_TOKEN needed
-# ✨ Simpler API
+# ── Speech Recognition ───────────────────────────────────────────────────────
 stable-ts==2.18.3
-
-
-# ── faster-whisper (Backend for stable-ts) ───────────────────────────────────
-# Latest version, used internally by stable-ts
 faster-whisper==1.1.0
-
-
-# ── CTranslate2 (Inference engine) ────────────────────────────────────────────
 ctranslate2==4.5.0
 
 
-# ── Transformers (Latest stable) ──────────────────────────────────────────────
+# ── Transformers ──────────────────────────────────────────────────────────────
 transformers==4.48.0
 tokenizers==0.21.0
 huggingface_hub==0.27.1
 
 
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                       🎵 Audio Processing (Latest)                         ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
+# ── Audio Processing ─────────────────────────────────────────────────────────
 soundfile==0.12.1
 librosa==0.10.2.post1
 audioread==3.0.1
 scipy==1.14.1
 
 
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                       🧮 Numerical Computing                               ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
-# ── NumPy (Latest v2 — compatible with PyTorch 2.5) ──────────────────────────
+# ── Numerical ─────────────────────────────────────────────────────────────────
 numpy==2.2.0
 
 
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                       📄 File & Data Processing                            ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
-# ── Excel Reader ──────────────────────────────────────────────────────────────
+# ── File & Data ───────────────────────────────────────────────────────────────
 openpyxl==3.1.5
-
-
-# ── Data Processing ───────────────────────────────────────────────────────────
 pandas==2.2.3
-
-
-# ── NLP Tools ─────────────────────────────────────────────────────────────────
 nltk==3.9.1
 
 
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                       🌐 Network & Web                                     ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
-# ── HTTP Requests ─────────────────────────────────────────────────────────────
+# ── Network ──────────────────────────────────────────────────────────────────
 requests==2.32.3
-
-
-# ── Playwright (Thumbnail rendering) ─────────────────────────────────────────
-# Must match remotion/package.json version
 playwright==1.49.1
 
 
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                       🔧 Utilities                                         ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
+# ── Utilities ─────────────────────────────────────────────────────────────────
 tqdm==4.67.1
 more-itertools==10.5.0
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 🔧 Installation Order (recommended)
-# ══════════════════════════════════════════════════════════════════════════════
-#
-#   1. # Update pip
-#      pip install --upgrade pip setuptools wheel
-#
-#   2. # PyTorch CPU (modern)
-#      pip install torch==2.5.1 torchaudio==2.5.1 \
-#          --index-url https://download.pytorch.org/whl/cpu
-#
-#   3. # Main requirements
-#      pip install -r requirements.txt
-#
-#   4. # Playwright browser
-#      python -m playwright install chromium
-#
-#   ✅ DONE! No WhisperX, no pyannote, no HF_TOKEN needed
-#
-# ══════════════════════════════════════════════════════════════════════════════
