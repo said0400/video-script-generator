@@ -227,6 +227,7 @@ def init_db() -> None:
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Migrations بسيطة (ALTER TABLE)
+# ملاحظة: تم حذف "ALTER TABLE renders ADD COLUMN published" لأنه قديم
 SIMPLE_MIGRATIONS: list[str] = [
     "ALTER TABLE renders ADD COLUMN content_mode TEXT DEFAULT 'short'",
     "ALTER TABLE renders ADD COLUMN fb_path TEXT",
@@ -483,6 +484,18 @@ def get_used_count() -> int:
         "SELECT COUNT(*) FROM used_videos"
     ).fetchone()
     return row[0] if row else 0
+
+
+def reset_used_videos() -> int:
+    """
+    إعادة ضبط الفيديوهات المستخدمة.
+
+    Returns:
+        عدد الفيديوهات المحذوفة
+    """
+    with write_transaction() as c:
+        cursor = c.execute("DELETE FROM used_videos")
+        return cursor.rowcount
 
 
 # ═════════════════════════════════════════════════════════════════════════════
