@@ -1,0 +1,405 @@
+# .github/workflows/monitoring.yml
+name: 🤖 Monitoring & Maintenance
+
+on:
+  schedule:
+    # ── Health Check يومي 08:00 UTC ─────────────
+    - cron: "0 8 * * *"
+
+    # ── Retry Publish كل 6 ساعات ────────────────
+    - cron: "0 0,6,12,18 * * *"
+
+    # ── Analytics أسبوعي (الأحد 09:00 UTC) ──────
+    - cron: "0 9 * * 0"
+
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "ما الذي تريد تشغيله"
+        required: true
+        default: "health_check"
+        type: choice
+        options:
+          - "health_check"
+          - "retry_publish"
+          - "analytics"
+          - "all"
+
+      # ── Health Check options ─────────────────
+      health_check_target:
+        description: "🏥 Health Check: ما الذي تريد فحصه"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - "all"
+          - "database"
+          - "api_keys"
+          - "tokens"
+          - "storage"
+          - "publishing"
+          - "disk"
+
+      # ── Retry Publish options ────────────────
+      retry_lang:
+        description: "🔄 Retry: اللغة"
+        required: false
+        default: "all"
+        type: choice
+        options: ["all", "ar", "fr", "en"]
+
+      retry_mode:
+        description: "🔄 Retry: نوع المحتوى"
+        required: false
+        default: "all"
+        type: choice
+        options: ["all", "short", "long"]
+
+      retry_platform:
+        description: "🔄 Retry: المنصة"
+        required: false
+        default: "all"
+        type: choice
+        options: ["all", "facebook", "youtube"]
+
+      retry_dry_run:
+        description: "🔄 Retry: Dry run؟"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+      # ── Analytics options ────────────────────
+      analytics_period:
+        description: "📊 Analytics: الفترة"
+        required: false
+        default: "week"
+        type: choice
+        options: ["day", "week", "month", "all"]
+
+      analytics_lang:
+        description: "📊 Analytics: اللغة"
+        required: false
+        default: "all"
+        type: choice
+        options: ["all", "ar", "fr", "en"]
+
+concurrency:
+  group: monitoring
+  cancel-in-progress: false
+
+jobs:
+
+  # ═══════════════════════════════════════════════════════════════
+  # JOB 1: HEALTH CHECK (يومي 08:00)
+  # ═══════════════════════════════════════════════════════════════
+
+  health_check:
+    name: 🏥 Health Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    if: |
+      github.event.schedule == '0 8 * * *' ||
+      (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.task == 'health_check' ||
+         github.event.inputs.task == 'all'))
+
+    steps:
+
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install deps
+        run: pip install requests openpyxl
+
+      - name: 📥 Restore DB (AR)
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vsg-database-ar
+          if_no_artifact_found: ignore
+          search_artifacts: true
+
+      - name: 🏥 Run Health Check
+        env:
+          # API Keys
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
+          HF_TOKEN:          ${{ secrets.HF_TOKEN }}
+
+          # YouTube لكل لغة
+          YOUTUBE_CLIENT_ID_AR:     ${{ secrets.YOUTUBE_CLIENT_ID_AR }}
+          YOUTUBE_CLIENT_SECRET_AR: ${{ secrets.YOUTUBE_CLIENT_SECRET_AR }}
+          YOUTUBE_REFRESH_TOKEN_AR: ${{ secrets.YOUTUBE_REFRESH_TOKEN_AR }}
+          YOUTUBE_CLIENT_ID_FR:     ${{ secrets.YOUTUBE_CLIENT_ID_FR }}
+          YOUTUBE_CLIENT_SECRET_FR: ${{ secrets.YOUTUBE_CLIENT_SECRET_FR }}
+          YOUTUBE_REFRESH_TOKEN_FR: ${{ secrets.YOUTUBE_REFRESH_TOKEN_FR }}
+          YOUTUBE_CLIENT_ID_EN:     ${{ secrets.YOUTUBE_CLIENT_ID_EN }}
+          YOUTUBE_CLIENT_SECRET_EN: ${{ secrets.YOUTUBE_CLIENT_SECRET_EN }}
+          YOUTUBE_REFRESH_TOKEN_EN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_EN }}
+
+          # Facebook (نفحص العربي افتراضيًا)
+          FB_PAGE_ID:        ${{ secrets.FB_PAGE_ID_AR }}
+          FB_PAGE_TOKEN:     ${{ secrets.FB_PAGE_TOKEN_AR }}
+          CURRENT_LANG:      "ar"
+
+          # WhatsApp
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN:       ${{ secrets.GREEN_API_TOKEN }}
+          WHATSAPP_PHONE_NUMBER: ${{ secrets.WHATSAPP_PHONE_NUMBER }}
+        run: |
+          TARGET="${{ github.event.inputs.health_check_target || 'all' }}"
+
+          python health_check.py \
+            --check "$TARGET" \
+            --notify \
+            --no-fail
+
+
+  # ═══════════════════════════════════════════════════════════════
+  # JOB 2: RETRY PUBLISH (كل 6 ساعات)
+  # ═══════════════════════════════════════════════════════════════
+
+  retry_publish:
+    name: 🔄 Retry Failed Publishes
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    if: |
+      contains(github.event.schedule, '0,6,12,18') ||
+      (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.task == 'retry_publish' ||
+         github.event.inputs.task == 'all'))
+
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [ar, fr, en]
+
+    steps:
+
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install deps
+        run: pip install requests openpyxl
+
+      - name: 📥 Restore DB
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vsg-database-${{ matrix.lang }}
+          if_no_artifact_found: ignore
+          search_artifacts: true
+
+      - name: 🔄 Retry Publishes (${{ matrix.lang }})
+        env:
+          # Facebook لكل لغة
+          FB_PAGE_ID: ${{
+            matrix.lang == 'ar' && secrets.FB_PAGE_ID_AR ||
+            matrix.lang == 'fr' && secrets.FB_PAGE_ID_FR ||
+            secrets.FB_PAGE_ID_EN }}
+          FB_PAGE_TOKEN: ${{
+            matrix.lang == 'ar' && secrets.FB_PAGE_TOKEN_AR ||
+            matrix.lang == 'fr' && secrets.FB_PAGE_TOKEN_FR ||
+            secrets.FB_PAGE_TOKEN_EN }}
+
+          # YouTube لكل لغة
+          YOUTUBE_CLIENT_ID: ${{
+            matrix.lang == 'ar' && secrets.YOUTUBE_CLIENT_ID_AR ||
+            matrix.lang == 'fr' && secrets.YOUTUBE_CLIENT_ID_FR ||
+            secrets.YOUTUBE_CLIENT_ID_EN }}
+          YOUTUBE_CLIENT_SECRET: ${{
+            matrix.lang == 'ar' && secrets.YOUTUBE_CLIENT_SECRET_AR ||
+            matrix.lang == 'fr' && secrets.YOUTUBE_CLIENT_SECRET_FR ||
+            secrets.YOUTUBE_CLIENT_SECRET_EN }}
+          YOUTUBE_REFRESH_TOKEN: ${{
+            matrix.lang == 'ar' && secrets.YOUTUBE_REFRESH_TOKEN_AR ||
+            matrix.lang == 'fr' && secrets.YOUTUBE_REFRESH_TOKEN_FR ||
+            secrets.YOUTUBE_REFRESH_TOKEN_EN }}
+
+          # WhatsApp
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN:       ${{ secrets.GREEN_API_TOKEN }}
+          WHATSAPP_PHONE_NUMBER: ${{ secrets.WHATSAPP_PHONE_NUMBER }}
+        run: |
+          # تحديد الـ flags حسب inputs
+          LANG_INPUT="${{ github.event.inputs.retry_lang || 'all' }}"
+          MODE_INPUT="${{ github.event.inputs.retry_mode || 'all' }}"
+          PLATFORM_INPUT="${{ github.event.inputs.retry_platform || 'all' }}"
+          DRY_RUN_INPUT="${{ github.event.inputs.retry_dry_run || 'false' }}"
+
+          # إذا تشغيل يدوي ولغة محددة، تخطى اللغات الأخرى
+          if [ "$LANG_INPUT" != "all" ] && \
+             [ "$LANG_INPUT" != "${{ matrix.lang }}" ]; then
+            echo "⏭️  Skipping ${{ matrix.lang }} (not selected)"
+            exit 0
+          fi
+
+          FLAGS="--lang ${{ matrix.lang }}"
+
+          [ "$MODE_INPUT" != "all" ] && \
+            FLAGS="$FLAGS --content-mode $MODE_INPUT"
+
+          [ "$PLATFORM_INPUT" != "all" ] && \
+            FLAGS="$FLAGS --platform $PLATFORM_INPUT"
+
+          [ "$DRY_RUN_INPUT" = "true" ] && \
+            FLAGS="$FLAGS --dry-run"
+
+          python retry_publish.py $FLAGS
+
+      - name: 📤 Save DB
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsg-database-${{ matrix.lang }}
+          path: vsg.db
+          retention-days: 90
+          overwrite: true
+
+
+  # ═══════════════════════════════════════════════════════════════
+  # JOB 3: ANALYTICS (أسبوعي - الأحد 09:00)
+  # ═══════════════════════════════════════════════════════════════
+
+  analytics:
+    name: 📊 Analytics Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    if: |
+      github.event.schedule == '0 9 * * 0' ||
+      (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.task == 'analytics' ||
+         github.event.inputs.task == 'all'))
+
+    steps:
+
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install deps
+        run: pip install requests
+
+      - name: 📥 Restore DB (AR)
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vsg-database-ar
+          if_no_artifact_found: ignore
+          search_artifacts: true
+
+      - name: 📊 Run Analytics
+        env:
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN:       ${{ secrets.GREEN_API_TOKEN }}
+          WHATSAPP_PHONE_NUMBER: ${{ secrets.WHATSAPP_PHONE_NUMBER }}
+        run: |
+          PERIOD="${{ github.event.inputs.analytics_period || 'week' }}"
+          LANG="${{ github.event.inputs.analytics_lang || 'all' }}"
+
+          mkdir -p reports
+
+          python analytics.py \
+            --period "$PERIOD" \
+            --lang "$LANG" \
+            --format console \
+            --notify
+
+          python analytics.py \
+            --period "$PERIOD" \
+            --lang "$LANG" \
+            --format html \
+            --save "reports/analytics_$(date +%Y%m%d).html"
+
+      - name: 📤 Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analytics-reports-${{ github.run_number }}
+          path: reports/
+          retention-days: 90
+
+
+  # ═══════════════════════════════════════════════════════════════
+  # JOB 4: SUMMARY NOTIFICATION (بعد كل المهام)
+  # ═══════════════════════════════════════════════════════════════
+
+  notify_summary:
+    name: 📱 Send Summary
+    runs-on: ubuntu-latest
+    needs: [health_check, retry_publish, analytics]
+    if: always()
+    timeout-minutes: 5
+
+    steps:
+
+      - name: 📱 Notify Completion
+        env:
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN:       ${{ secrets.GREEN_API_TOKEN }}
+          WHATSAPP_PHONE_NUMBER: ${{ secrets.WHATSAPP_PHONE_NUMBER }}
+        run: |
+          # تحديد الحالة
+          HEALTH_STATUS="${{ needs.health_check.result }}"
+          RETRY_STATUS="${{ needs.retry_publish.result }}"
+          ANALYTICS_STATUS="${{ needs.analytics.result }}"
+
+          # بناء الرسالة
+          MESSAGE="🤖 Monitoring Complete\n\n"
+
+          if [ "$HEALTH_STATUS" != "skipped" ]; then
+            if [ "$HEALTH_STATUS" = "success" ]; then
+              MESSAGE+="✅ Health Check: passed\n"
+            else
+              MESSAGE+="⚠️ Health Check: $HEALTH_STATUS\n"
+            fi
+          fi
+
+          if [ "$RETRY_STATUS" != "skipped" ]; then
+            if [ "$RETRY_STATUS" = "success" ]; then
+              MESSAGE+="✅ Retry Publish: complete\n"
+            else
+              MESSAGE+="⚠️ Retry Publish: $RETRY_STATUS\n"
+            fi
+          fi
+
+          if [ "$ANALYTICS_STATUS" != "skipped" ]; then
+            if [ "$ANALYTICS_STATUS" = "success" ]; then
+              MESSAGE+="✅ Analytics: sent\n"
+            else
+              MESSAGE+="⚠️ Analytics: $ANALYTICS_STATUS\n"
+            fi
+          fi
+
+          # إرسال عبر Green-API
+          if [ -n "$GREEN_API_INSTANCE_ID" ] && \
+             [ -n "$GREEN_API_TOKEN" ] && \
+             [ -n "$WHATSAPP_PHONE_NUMBER" ]; then
+
+            CHAT_ID="${WHATSAPP_PHONE_NUMBER}@c.us"
+
+            curl -s -X POST \
+              "https://api.green-api.com/waInstance${GREEN_API_INSTANCE_ID}/sendMessage/${GREEN_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"chatId\": \"$CHAT_ID\",
+                \"message\": \"$MESSAGE\"
+              }"
+          fi
