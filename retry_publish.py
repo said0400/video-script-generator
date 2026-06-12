@@ -3,6 +3,7 @@
 
 Features:
   ✅ Find videos: rendered ✅ but not published ❌
+  ✅ Skip fully published videos (uses is_fully_published)
   ✅ Retry publishing without re-rendering
   ✅ Multi-platform support (Facebook + YouTube)
   ✅ Multi-language support (AR, FR, EN)
@@ -25,6 +26,7 @@ from db import (
     _conn,
     get_ai_cache,
     init_db,
+    is_fully_published,
     is_published_facebook,
     is_published_youtube,
     make_cache_key,
@@ -217,6 +219,10 @@ def _evaluate_video_needs(
 
     # فلتر video_number
     if video_number and num != str(video_number):
+        return None
+
+    # ✅ تخطي إذا منشور بالكامل على المنصتين
+    if is_fully_published(num, lang, mode):
         return None
 
     # المسارات
