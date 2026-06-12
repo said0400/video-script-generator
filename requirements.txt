@@ -1,25 +1,38 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# 📦 requirements.txt — Video Script Generator
+# 📦 requirements.txt — Video Script Generator (2026 Edition)
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# Compatible with: Python 3.11+ on Linux
-# Last verified : 2026-01
+# 🆕 Major Upgrade:
+#   - Removed: WhisperX, pyannote.audio (replaced by stable-ts)
+#   - Latest versions for all libraries
+#   - No more HF_TOKEN requirement
+#   - Faster installation
 #
-# 🎯 Strategy:
-#   - WhisperX dependencies: PINNED (compatibility critical)
-#   - Other libraries     : LATEST stable (safe to update)
+# Compatible with: Python 3.11+ on Linux (GitHub Actions)
+# Last updated  : 2026-01
 #
 # ⚠️  Installed separately in GitHub Actions:
-#   1. torch==2.1.2 torchaudio==2.1.2 (CPU only)
-#   2. whisperx from GitHub
-#   3. ffmpeg (system package)
-#   4. playwright chromium
+#
+#   1. PyTorch CPU (modern version):
+#      pip install torch==2.5.1 torchaudio==2.5.1 \
+#          --index-url https://download.pytorch.org/whl/cpu
+#
+#   2. FFmpeg (system package):
+#      sudo apt-get install -y ffmpeg
+#
+#   3. Playwright Chromium:
+#      python -m playwright install chromium --with-deps
+#
+# ✅ NO LONGER NEEDED:
+#   - WhisperX (replaced by stable-ts)
+#   - pyannote.audio (built into stable-ts)
+#   - HF_TOKEN (not required)
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                    🟢 LATEST — Safe to update                              ║
+# ║                       🤖 AI Services (Latest)                              ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
 # ── Google Gemini (TTS + AI) ──────────────────────────────────────────────────
@@ -30,75 +43,133 @@ google-genai==1.0.0
 groq==0.15.0
 
 
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                    🎤 Speech Recognition (NEW Stack)                       ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# ── stable-ts (Replaces WhisperX) ─────────────────────────────────────────────
+# ✨ Active maintenance
+# ✨ Built-in word-level alignment
+# ✨ No HF_TOKEN needed
+# ✨ Simpler API
+stable-ts==2.18.3
+
+
+# ── faster-whisper (Backend for stable-ts) ───────────────────────────────────
+# Latest version, used internally by stable-ts
+faster-whisper==1.1.0
+
+
+# ── CTranslate2 (Inference engine) ────────────────────────────────────────────
+ctranslate2==4.5.0
+
+
+# ── Transformers (Latest stable) ──────────────────────────────────────────────
+transformers==4.48.0
+tokenizers==0.21.0
+huggingface_hub==0.27.1
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🎵 Audio Processing (Latest)                         ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+soundfile==0.12.1
+librosa==0.10.2.post1
+audioread==3.0.1
+scipy==1.14.1
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🧮 Numerical Computing                               ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# ── NumPy (Latest v2 — compatible with PyTorch 2.5) ──────────────────────────
+numpy==2.2.0
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       📄 File & Data Processing                            ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 # ── Excel Reader ──────────────────────────────────────────────────────────────
 openpyxl==3.1.5
 
 
-# ── HTTP Requests ─────────────────────────────────────────────────────────────
-requests==2.32.3
-
-
-# ── Playwright (Thumbnail rendering) ─────────────────────────────────────────
-playwright==1.49.1
+# ── Data Processing ───────────────────────────────────────────────────────────
+pandas==2.2.3
 
 
 # ── NLP Tools ─────────────────────────────────────────────────────────────────
 nltk==3.9.1
 
 
-# ── Utilities ─────────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🌐 Network & Web                                     ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# ── HTTP Requests ─────────────────────────────────────────────────────────────
+requests==2.32.3
+
+
+# ── Playwright (Thumbnail rendering) ─────────────────────────────────────────
+# Must match remotion/package.json version
+playwright==1.49.1
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🔧 Utilities                                         ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 tqdm==4.67.1
 more-itertools==10.5.0
 
 
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║              🔴 PINNED — Required by WhisperX (DO NOT change)              ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
-# ── WhisperX Core Dependencies ────────────────────────────────────────────────
-# These versions are required by WhisperX for compatibility
-# Upgrading will BREAK alignment!
-
-faster-whisper==1.0.3
-ctranslate2==4.4.0
-transformers==4.44.2
-tokenizers==0.19.1
-huggingface_hub==0.24.7
-
-
-# ── PyAnnote (Word-level alignment) ───────────────────────────────────────────
-# ⚠️  Requires HF_TOKEN env var
-# v3.3.2 is the last version compatible with current WhisperX
-pyannote.audio==3.3.2
-pyannote.core==5.0.0
-pyannote.pipeline==3.0.1
-
-
-# ── OmegaConf (torch serialization fix) ──────────────────────────────────────
-omegaconf==2.3.0
+# ══════════════════════════════════════════════════════════════════════════════
+# 🔧 Installation Order (recommended)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+#   1. # Update pip
+#      pip install --upgrade pip setuptools wheel
+#
+#   2. # PyTorch CPU (modern)
+#      pip install torch==2.5.1 torchaudio==2.5.1 \
+#          --index-url https://download.pytorch.org/whl/cpu
+#
+#   3. # Main requirements
+#      pip install -r requirements.txt
+#
+#   4. # Playwright browser
+#      python -m playwright install chromium
+#
+#   ✅ DONE! No WhisperX, no pyannote, no HF_TOKEN needed
+#
+# ══════════════════════════════════════════════════════════════════════════════
 
 
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                  🟡 PARTIALLY PINNED — Audio Processing                    ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
-# ── Audio Processing ──────────────────────────────────────────────────────────
-soundfile==0.12.1
-librosa==0.10.2.post1
-audioread==3.0.1
-scipy==1.13.1
-
-
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║              🔴 PINNED — NumPy < 2.0 (torch 2.1 compatibility)             ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
-numpy>=1.24.0,<2.0.0
-
-
-# ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                  🟡 REQUIRED — Data Processing                             ║
-# ╚════════════════════════════════════════════════════════════════════════════╝
-
-# ── Pandas (required by WhisperX) ─────────────────────────────────────────────
-pandas==2.2.3
+# ══════════════════════════════════════════════════════════════════════════════
+# 📝 Migration Notes (WhisperX → stable-ts)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Old (WhisperX):
+#   import whisperx
+#   model        = whisperx.load_model("medium", device="cpu")
+#   result       = model.transcribe(audio)
+#   align_model  = whisperx.load_align_model(...)
+#   aligned      = whisperx.align(result, align_model, ...)
+#
+# New (stable-ts):
+#   import stable_whisper
+#   model  = stable_whisper.load_faster_whisper("medium", device="cpu")
+#   result = model.transcribe_stable(audio, language="ar", word_timestamps=True)
+#   # alignment built-in, no separate align model needed!
+#
+# Benefits:
+#   ✅ One library instead of two
+#   ✅ No pyannote.audio dependency
+#   ✅ No HF_TOKEN needed
+#   ✅ Active maintenance
+#   ✅ Better Arabic support
+#   ✅ Faster setup
+#
+# ══════════════════════════════════════════════════════════════════════════════
