@@ -3,7 +3,7 @@
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # 🆕 Major Upgrade:
-#   - Removed: WhisperX, pyannote.audio (replaced by stable-ts)
+#   - Removed: WhisperX, pyannote.audio, omegaconf (replaced by stable-ts)
 #   - Latest versions for all libraries
 #   - No more HF_TOKEN requirement
 #   - Faster installation
@@ -26,6 +26,9 @@
 # ✅ NO LONGER NEEDED:
 #   - WhisperX (replaced by stable-ts)
 #   - pyannote.audio (built into stable-ts)
+#   - pyannote.core
+#   - pyannote.pipeline
+#   - omegaconf (was for pyannote torch fix)
 #   - HF_TOKEN (not required)
 #
 # ══════════════════════════════════════════════════════════════════════════════
@@ -143,33 +146,5 @@ more-itertools==10.5.0
 #      python -m playwright install chromium
 #
 #   ✅ DONE! No WhisperX, no pyannote, no HF_TOKEN needed
-#
-# ══════════════════════════════════════════════════════════════════════════════
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 📝 Migration Notes (WhisperX → stable-ts)
-# ══════════════════════════════════════════════════════════════════════════════
-#
-# Old (WhisperX):
-#   import whisperx
-#   model        = whisperx.load_model("medium", device="cpu")
-#   result       = model.transcribe(audio)
-#   align_model  = whisperx.load_align_model(...)
-#   aligned      = whisperx.align(result, align_model, ...)
-#
-# New (stable-ts):
-#   import stable_whisper
-#   model  = stable_whisper.load_faster_whisper("medium", device="cpu")
-#   result = model.transcribe_stable(audio, language="ar", word_timestamps=True)
-#   # alignment built-in, no separate align model needed!
-#
-# Benefits:
-#   ✅ One library instead of two
-#   ✅ No pyannote.audio dependency
-#   ✅ No HF_TOKEN needed
-#   ✅ Active maintenance
-#   ✅ Better Arabic support
-#   ✅ Faster setup
 #
 # ══════════════════════════════════════════════════════════════════════════════
