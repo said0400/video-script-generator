@@ -212,7 +212,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--period",
         type    = str,
-        default = Period.DAY,
+        default = Period.DAY.value,
         choices = [p.value for p in Period],
     )
 
@@ -226,7 +226,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--format",
         type    = str,
-        default = OutputFormat.CONSOLE,
+        default = OutputFormat.CONSOLE.value,
         choices = [f.value for f in OutputFormat],
     )
 
@@ -252,10 +252,10 @@ def parse_args() -> argparse.Namespace:
 
 # Period labels
 PERIOD_LABELS: dict[str, str] = {
-    Period.DAY:   "Today",
-    Period.WEEK:  "Last 7 days",
-    Period.MONTH: "Last 30 days",
-    Period.ALL:   "All time",
+    Period.DAY.value:   "Today",
+    Period.WEEK.value:  "Last 7 days",
+    Period.MONTH.value: "Last 30 days",
+    Period.ALL.value:   "All time",
 }
 
 
@@ -263,16 +263,16 @@ def _get_date_range(period: str) -> tuple[str, str]:
     """تحديد نطاق التاريخ حسب الفترة."""
     now = datetime.now()
 
-    if period == Period.DAY:
+    if period == Period.DAY.value:
         start = now.replace(
             hour   = 0,
             minute = 0,
             second = 0,
             microsecond = 0,
         )
-    elif period == Period.WEEK:
+    elif period == Period.WEEK.value:
         start = now - timedelta(days=7)
-    elif period == Period.MONTH:
+    elif period == Period.MONTH.value:
         start = now - timedelta(days=30)
     else:  # ALL
         start = datetime(2020, 1, 1)
@@ -1248,10 +1248,10 @@ def _format_output(
     fmt:    str,
 ) -> str:
     """تنسيق التقرير حسب الـ format."""
-    if fmt == OutputFormat.JSON:
+    if fmt == OutputFormat.JSON.value:
         return json.dumps(report, indent=2, default=str)
 
-    if fmt == OutputFormat.HTML:
+    if fmt == OutputFormat.HTML.value:
         return build_html_report(report)
 
     return build_console_report(report)
