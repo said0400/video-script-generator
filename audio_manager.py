@@ -30,7 +30,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from sync import get_audio_duration
 
@@ -39,7 +39,7 @@ from sync import get_audio_duration
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Paths
-BASE_DIR = Path(__file__).parent.resolve()
+BASE_DIR  = Path(__file__).parent.resolve()
 MUSIC_DIR = BASE_DIR / "assets" / "music"
 SFX_DIR   = BASE_DIR / "sfx"
 
@@ -254,8 +254,10 @@ def _make_temp_path(
     return path
 
 
-def _safe_unlink(path) -> None:
+def _safe_unlink(path: Optional[Union[str, Path]]) -> None:
     """حذف ملف بأمان."""
+    if path is None:
+        return
     try:
         Path(path).unlink(missing_ok=True)
     except Exception:
@@ -974,11 +976,11 @@ def build_sfx_track(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _merge_two_tracks(
-    base_path:   str,
+    base_path:    str,
     overlay_path: str,
-    output_path: str,
-    duration:    float,
-    volume:      Optional[float] = None,
+    output_path:  str,
+    duration:     float,
+    volume:       Optional[float] = None,
 ) -> bool:
     """دمج track مع آخر."""
     if volume is not None:
