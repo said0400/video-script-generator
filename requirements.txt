@@ -1,79 +1,104 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# requirements.txt — Video Script Generator
+# 📦 requirements.txt — Video Script Generator
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# ⚠️  ملاحظات مهمة:
+# Compatible with: Python 3.11+ on Linux
+# Last verified : 2026-01
 #
-#   1. torch + torchaudio يُثبَّتان في GitHub Actions بشكل منفصل:
-#      pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# 🎯 Strategy:
+#   - WhisperX dependencies: PINNED (compatibility critical)
+#   - Other libraries     : LATEST stable (safe to update)
 #
-#   2. whisperx يُثبَّت من GitHub في GitHub Actions:
-#      pip install git+https://github.com/m-bain/whisperX.git
-#
-#   3. ffmpeg يُثبَّت كـ system package في GitHub Actions
-#
-#   4. لا تضع ffmpeg-python هنا — الكود يستخدم subprocess مباشرة
+# ⚠️  Installed separately in GitHub Actions:
+#   1. torch==2.1.2 torchaudio==2.1.2 (CPU only)
+#   2. whisperx from GitHub
+#   3. ffmpeg (system package)
+#   4. playwright chromium
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                    🟢 LATEST — Safe to update                              ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
 
 # ── Google Gemini (TTS + AI) ──────────────────────────────────────────────────
-google-genai>=0.8.0
+google-genai==1.0.0
 
 
 # ── Groq (AI Enrichment) ──────────────────────────────────────────────────────
-groq>=0.11.0
+groq==0.15.0
 
 
 # ── Excel Reader ──────────────────────────────────────────────────────────────
-openpyxl>=3.1.0
+openpyxl==3.1.5
 
 
 # ── HTTP Requests ─────────────────────────────────────────────────────────────
-requests>=2.31.0
+requests==2.32.3
 
 
-# ── Playwright (Thumbnail + Render) ───────────────────────────────────────────
-playwright>=1.44.0
+# ── Playwright (Thumbnail rendering) ─────────────────────────────────────────
+playwright==1.49.1
 
 
-# ── WhisperX Core Dependencies ────────────────────────────────────────────────
-# whisperx نفسه يُثبَّت في GitHub Actions من GitHub مباشرة
-# لكن هذه المكتبات يجب أن تكون هنا:
-
-faster-whisper>=1.2.0
-ctranslate2>=4.5.0
-transformers>=4.48.0
-tokenizers>=0.15.0
-huggingface_hub>=0.20.0
-
-
-# ── PyAnnote (Word-level alignment) ───────────────────────────────────────────
-# ⚠️  يحتاج HF_TOKEN في البيئة لتحميل النماذج
-pyannote.audio>=4.0.0
-pyannote.core>=5.0.0
-pyannote.pipeline>=3.0.1
-
-
-# ── OmegaConf (مطلوب لإصلاح torch serialization مع pyannote) ─────────────────
-omegaconf>=2.3.0
-
-
-# ── Audio Processing ──────────────────────────────────────────────────────────
-soundfile>=0.12.1
-librosa>=0.10.0
-audioread>=3.0.0
-scipy>=1.11.0
-
-
-# ── Numpy (متوافق مع WhisperX v3.8.x) ────────────────────────────────────────
-numpy>=2.1.0
-
-
-# ── NLP ───────────────────────────────────────────────────────────────────────
-nltk>=3.8.1
+# ── NLP Tools ─────────────────────────────────────────────────────────────────
+nltk==3.9.1
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
-tqdm>=4.65.0
-more-itertools>=9.1.0
+tqdm==4.67.1
+more-itertools==10.5.0
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║              🔴 PINNED — Required by WhisperX (DO NOT change)              ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# ── WhisperX Core Dependencies ────────────────────────────────────────────────
+# These versions are required by WhisperX for compatibility
+# Upgrading will BREAK alignment!
+
+faster-whisper==1.0.3
+ctranslate2==4.4.0
+transformers==4.44.2
+tokenizers==0.19.1
+huggingface_hub==0.24.7
+
+
+# ── PyAnnote (Word-level alignment) ───────────────────────────────────────────
+# ⚠️  Requires HF_TOKEN env var
+# v3.3.2 is the last version compatible with current WhisperX
+pyannote.audio==3.3.2
+pyannote.core==5.0.0
+pyannote.pipeline==3.0.1
+
+
+# ── OmegaConf (torch serialization fix) ──────────────────────────────────────
+omegaconf==2.3.0
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                  🟡 PARTIALLY PINNED — Audio Processing                    ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# ── Audio Processing ──────────────────────────────────────────────────────────
+soundfile==0.12.1
+librosa==0.10.2.post1
+audioread==3.0.1
+scipy==1.13.1
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║              🔴 PINNED — NumPy < 2.0 (torch 2.1 compatibility)             ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+numpy>=1.24.0,<2.0.0
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                  🟡 REQUIRED — Data Processing                             ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# ── Pandas (required by WhisperX) ─────────────────────────────────────────────
+pandas==2.2.3
