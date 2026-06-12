@@ -2,21 +2,13 @@
 # 📦 requirements.txt — Video Script Generator (2026 Edition)
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# ⚠️  Installed separately in GitHub Actions (BEFORE this file):
+# ⚠️  Installation order in GitHub Actions:
 #
 #   1. pip install --upgrade pip setuptools wheel
-#
-#   2. PyTorch CPU:
-#      pip install torch==2.5.1 torchaudio==2.5.1 \
-#          --index-url https://download.pytorch.org/whl/cpu
-#
-#   3. openai-whisper (needed by stable-ts, requires setuptools):
-#      pip install setuptools wheel
-#      pip install openai-whisper==20240930 --no-build-isolation
-#
+#   2. pip install torch==2.5.1 torchaudio==2.5.1 (CPU)
+#   3. pip install openai-whisper==20240930 --no-build-isolation
 #   4. pip install -r requirements.txt
-#
-#   5. Playwright: python -m playwright install chromium --with-deps
+#   5. python -m playwright install chromium --with-deps
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
