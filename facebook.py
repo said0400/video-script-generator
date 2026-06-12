@@ -1,8 +1,9 @@
 """
 facebook.py — Auto-publish videos to Facebook Pages
 ✨ يدعم 3 صفحات (AR, FR, EN)
-✨ الـ credentials تأتي من environment variables:
-   FB_PAGE_ID + FB_PAGE_TOKEN (يُمرران من workflow)
+✨ Short → Reel
+✨ Long  → Regular Video (بمقاس 9:16)
+✨ credentials من environment variables
 ✨ مسارات مطلقة
 """
 
@@ -17,12 +18,18 @@ import requests
 
 GRAPH_API = "https://graph.facebook.com/v19.0"
 
-# ── Video constraints ─────────────────────────────────────────────────────────
-MAX_FILE_MB    = 1024
-MIN_FILE_MB    = 0.5
-MIN_DURATION_S = 3.0
-MAX_DURATION_S = 90.0
-MAX_DESC_LEN   = 63206
+# ── Reel constraints ──────────────────────────────────────────────────────────
+REEL_MAX_DURATION_S = 90.0
+REEL_MIN_DURATION_S = 3.0
+
+# ── Regular Video constraints ─────────────────────────────────────────────────
+VIDEO_MAX_DURATION_S = 14400.0  # 4 ساعات
+VIDEO_MIN_DURATION_S = 1.0
+
+# ── File constraints ──────────────────────────────────────────────────────────
+MAX_FILE_MB  = 10240   # 10 GB
+MIN_FILE_MB  = 0.5
+MAX_DESC_LEN = 63206
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -30,26 +37,18 @@ MAX_DESC_LEN   = 63206
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_creds() -> tuple[str, str]:
-    """
-    يقرأ credentials من البيئة.
-    الـ workflow يمرر FB_PAGE_ID و FB_PAGE_TOKEN حسب اللغة.
-    """
     page_id = os.environ.get("FB_PAGE_ID", "").strip()
     token   = os.environ.get("FB_PAGE_TOKEN", "").strip()
 
     if not page_id or not token:
         raise RuntimeError(
             "Missing Facebook credentials.\n"
-            "  Set FB_PAGE_ID and FB_PAGE_TOKEN in workflow env.\n"
-            "  AR: FB_PAGE_ID_AR / FB_PAGE_TOKEN_AR\n"
-            "  FR: FB_PAGE_ID_FR / FB_PAGE_TOKEN_FR\n"
-            "  EN: FB_PAGE_ID_EN / FB_PAGE_TOKEN_EN"
+            "  Set FB_PAGE_ID and FB_PAGE_TOKEN in workflow env."
         )
     return page_id, token
 
 
 def credentials_available() -> bool:
-    """هل credentials موجودة في البيئة؟"""
     return bool(
         os.environ.get("FB_PAGE_ID",    "").strip() and
         os.environ.get("FB_PAGE_TOKEN", "").strip()
@@ -57,7 +56,6 @@ def credentials_available() -> bool:
 
 
 def check_credentials() -> bool:
-    """تحقق من صحة credentials مع Facebook API."""
     try:
         page_id, token = _get_creds()
         r = requests.get(
@@ -87,7 +85,6 @@ def check_credentials() -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _probe_video_duration(path: str) -> float:
-    """احصل على مدة الفيديو بالثواني."""
     try:
         r = subprocess.run(
             [
@@ -101,7 +98,7 @@ def _probe_video_duration(path: str) -> float:
             timeout=15,
         )
         return float(r.stdout.strip())
-    except (ValueError, subprocess.TimeoutExpired, FileNotFoundError):
+    except Exception:
         return 0.0
 
 
@@ -109,39 +106,41 @@ def _validate_video(
     video_path: str,
     as_reel:    bool = True,
 ) -> tuple[float, float]:
-    """تحقق شامل من الفيديو قبل الرفع."""
     path = Path(video_path).resolve()
 
     if not path.exists():
         raise FileNotFoundError(f"Video not found: {path}")
 
-    file_size = path.stat().st_size
-    mb        = file_size / 1_048_576
+    mb = path.stat().st_size / 1_048_576
 
     if mb > MAX_FILE_MB:
-        raise ValueError(
-            f"File too large: {mb:.0f} MB (max {MAX_FILE_MB} MB)"
-        )
-
+        raise ValueError(f"File too large: {mb:.0f} MB")
     if mb < MIN_FILE_MB:
-        raise ValueError(
-            f"File too small: {mb:.2f} MB (min {MIN_FILE_MB} MB)"
-        )
+        raise ValueError(f"File too small: {mb:.2f} MB")
 
     duration = _probe_video_duration(str(path))
     if duration <= 0:
         raise ValueError("Could not determine video duration")
 
     if as_reel:
-        if duration < MIN_DURATION_S:
+        if duration < REEL_MIN_DURATION_S:
             raise ValueError(
-                f"Video too short: {duration:.1f}s "
-                f"(min {MIN_DURATION_S}s)"
+                f"Reel too short: {duration:.1f}s "
+                f"(min {REEL_MIN_DURATION_S}s)"
             )
-        if duration > MAX_DURATION_S:
+        if duration > REEL_MAX_DURATION_S:
             raise ValueError(
-                f"Video too long: {duration:.1f}s "
-                f"(max {MAX_DURATION_S}s)"
+                f"Reel too long: {duration:.1f}s "
+                f"(max {REEL_MAX_DURATION_S}s)"
+            )
+    else:
+        if duration < VIDEO_MIN_DURATION_S:
+            raise ValueError(
+                f"Video too short: {duration:.1f}s"
+            )
+        if duration > VIDEO_MAX_DURATION_S:
+            raise ValueError(
+                f"Video too long: {duration:.1f}s"
             )
 
     return mb, duration
@@ -156,7 +155,6 @@ def build_caption(
     lang:       str = "ar",
     ai_caption: str = "",
 ) -> str:
-    """بناء الـ caption للنشر."""
     if ai_caption and ai_caption.strip():
         return ai_caption[:MAX_DESC_LEN]
 
@@ -170,7 +168,6 @@ def build_caption(
 
     cta   = cta_map.get(lang, cta_map["en"])
     parts = []
-
     if title:
         parts.append(title)
     parts.append(f"\n{cta}")
@@ -179,7 +176,7 @@ def build_caption(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# UPLOAD AS REEL
+# UPLOAD AS REEL (Short)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _upload_as_reel(
@@ -189,7 +186,6 @@ def _upload_as_reel(
     page_id:     str,
     token:       str,
 ) -> dict:
-    """رفع الفيديو كـ Reel."""
     path         = Path(video_path).resolve()
     mb, duration = _validate_video(str(path), as_reel=True)
     file_size    = path.stat().st_size
@@ -230,7 +226,7 @@ def _upload_as_reel(
         )
     r2.raise_for_status()
 
-    print("     [3/3] Publishing...")
+    print("     [3/3] Publishing Reel...")
 
     r3 = requests.post(
         f"{GRAPH_API}/{page_id}/video_reels",
@@ -248,17 +244,12 @@ def _upload_as_reel(
 
     result  = r3.json()
     post_id = result.get("id", video_id)
-
-    print(
-        f"  ✅ Reel published → "
-        f"https://www.facebook.com/permalink.php"
-        f"?story_fbid={post_id}&id={page_id}"
-    )
+    print(f"  ✅ Reel published → ID: {post_id}")
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# UPLOAD AS REGULAR VIDEO
+# UPLOAD AS REGULAR VIDEO (Long)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _upload_as_video(
@@ -268,11 +259,13 @@ def _upload_as_video(
     page_id:     str,
     token:       str,
 ) -> dict:
-    """رفع كـ فيديو عادي (fallback)."""
     path         = Path(video_path).resolve()
     mb, duration = _validate_video(str(path), as_reel=False)
 
-    print(f"  📤 Uploading as Video ({mb:.1f} MB, {duration:.1f}s)...")
+    print(
+        f"  📤 Uploading as Video "
+        f"({mb:.1f} MB, {duration:.1f}s)..."
+    )
 
     with open(str(path), "rb") as f:
         r = requests.post(
@@ -291,7 +284,7 @@ def _upload_as_video(
 
     result  = r.json()
     post_id = result.get("id")
-    print(f"  ✅ Video posted → ID: {post_id}")
+    print(f"  ✅ Video published → ID: {post_id}")
     return result
 
 
@@ -300,18 +293,25 @@ def _upload_as_video(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def publish_to_facebook(
-    video_path: str,
-    record:     dict,
-    lang:       str  = "ar",
-    as_reel:    bool = True,
-    retries:    int  = 3,
-    ai_caption: str  = "",
+    video_path:   str,
+    record:       dict,
+    lang:         str  = "ar",
+    as_reel:      bool = True,
+    retries:      int  = 3,
+    ai_caption:   str  = "",
+    content_mode: str  = "short",
 ) -> dict:
     """
     نشر فيديو على Facebook Page.
 
-    ✨ الـ credentials تأتي من البيئة (FB_PAGE_ID + FB_PAGE_TOKEN)
-    ✨ الـ workflow يمرر credentials الصفحة الصحيحة حسب اللغة
+    Args:
+        video_path:   مسار الفيديو
+        record:       بيانات الفيديو
+        lang:         اللغة
+        as_reel:      True للـ Short، False للـ Long
+        retries:      عدد المحاولات
+        ai_caption:   الوصف من AI
+        content_mode: short | long
     """
     path = Path(video_path).resolve()
 
@@ -324,28 +324,18 @@ def publish_to_facebook(
         record, lang=lang, ai_caption=ai_caption
     )
 
+    # Short → Reel | Long → Video
+    as_reel = (content_mode == "short")
+
     print(f"\n  📘 Publishing to Facebook...")
     print(f"     Title  : {title[:60]}")
-    print(f"     Lang   : {lang.upper()} | "
-          f"Type: {'Reel' if as_reel else 'Video'}")
+    print(
+        f"     Type   : "
+        f"{'Reel ⚡' if as_reel else 'Video 🎬'} "
+        f"[{content_mode.upper()}]"
+    )
+    print(f"     Lang   : {lang.upper()}")
     print(f"     Caption: {len(description)} chars")
-
-    # Pre-validation
-    try:
-        _validate_video(str(path), as_reel=as_reel)
-    except (ValueError, FileNotFoundError) as e:
-        if as_reel:
-            print(f"  ⚠️  Reel validation failed: {e}")
-            try:
-                _validate_video(str(path), as_reel=False)
-                print("  ↩️  Falling back to regular video...")
-                as_reel = False
-            except (ValueError, FileNotFoundError) as e2:
-                raise RuntimeError(
-                    f"Video validation failed: {e2}"
-                )
-        else:
-            raise RuntimeError(f"Video validation failed: {e}")
 
     last_error = None
     _as_reel   = as_reel
@@ -354,11 +344,13 @@ def publish_to_facebook(
         try:
             if _as_reel:
                 return _upload_as_reel(
-                    str(path), title, description, page_id, token
+                    str(path), title, description,
+                    page_id, token
                 )
             else:
                 return _upload_as_video(
-                    str(path), title, description, page_id, token
+                    str(path), title, description,
+                    page_id, token
                 )
 
         except requests.exceptions.HTTPError as e:
@@ -371,7 +363,9 @@ def publish_to_facebook(
             err_msg  = err_json.get(
                 "error", {}
             ).get("message", str(e))
-            err_code = err_json.get("error", {}).get("code", 0)
+            err_code = err_json.get(
+                "error", {}
+            ).get("code", 0)
             last_error = err_msg
 
             print(
@@ -379,14 +373,14 @@ def publish_to_facebook(
                 f"(code={err_code}): {err_msg[:100]}"
             )
 
-            # Token منتهي الصلاحية
+            # Token منتهي
             if err_code in (190, 102, 463, 467):
                 raise RuntimeError(
                     f"Facebook token expired (code={err_code}). "
                     "Please refresh FB_PAGE_TOKEN."
                 )
 
-            # Reel فشل → جرب فيديو عادي
+            # Reel فشل → جرب Video عادي
             if _as_reel and attempt == 0:
                 print(
                     "  ↩️  Reel failed — "
@@ -397,10 +391,7 @@ def publish_to_facebook(
 
             if attempt < retries - 1:
                 wait = min(5 * (attempt + 1), 30)
-                print(
-                    f"  ↩️  Retrying in {wait}s... "
-                    f"[{attempt + 1}/{retries}]"
-                )
+                print(f"  ↩️  Retrying in {wait}s...")
                 time.sleep(wait)
 
         except requests.exceptions.Timeout:
@@ -414,9 +405,7 @@ def publish_to_facebook(
 
         except Exception as e:
             last_error = str(e)
-            print(
-                f"  ⚠️  Error [{attempt + 1}/{retries}]: {e}"
-            )
+            print(f"  ⚠️  Error [{attempt + 1}/{retries}]: {e}")
             if attempt < retries - 1:
                 time.sleep(5)
 
