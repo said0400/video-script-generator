@@ -1,50 +1,59 @@
-# .github/workflows/generate_en.yml
-name: 🇺🇸 English Videos (Auto + Manual)
+name: 🇺🇸 English Videos (Short + Long)
 
 on:
   schedule:
+    # ── 5 Short videos ─────────────────────────
     - cron: "0 13 * * *"
     - cron: "0 15 * * *"
     - cron: "0 17 * * *"
     - cron: "30 19 * * *"
     - cron: "0 22 * * *"
 
+    # ── 1 Long video ──────────────────────────
+    - cron: "0 23 * * *"
+
   workflow_dispatch:
     inputs:
+      content_mode:
+        description: "نوع المحتوى"
+        required: true
+        default: "short"
+        type: choice
+        options: ["short", "long"]
+
       video_number:
         description: "🎬 Video number (empty = auto next)"
         required: false
         default: ""
         type: string
+
       force:
         description: "⚡ Force re-render?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
+
       force_ai:
         description: "🤖 Force re-generate AI?"
         required: true
         default: "false"
         type: choice
         options: ["false", "true"]
+
       publish_fb:
         description: "📘 Publish to Facebook?"
         required: true
         default: "true"
         type: choice
         options: ["true", "false"]
+
       publish_yt:
         description: "📺 Publish to YouTube?"
         required: true
         default: "true"
         type: choice
         options: ["true", "false"]
-      formats:
-        description: "📐 Export formats"
-        required: true
-        default: "9x16"
-        type: string
 
 concurrency:
   group: video-en
@@ -54,21 +63,12 @@ jobs:
   generate_en:
     name: 🇺🇸 English Video
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
 
     steps:
 
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
-
-      - name: 🧹 Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force || true
-          df -h
 
       - name: 🐍 Setup Python 3.11
         uses: actions/setup-python@v5
@@ -79,17 +79,7 @@ jobs:
       - name: 🔧 Install system deps
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y \
-            ffmpeg libsndfile1 \
-            libatk-bridge2.0-0 libatk1.0-0 libcairo2 libcups2 \
-            libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
-            libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 \
-            libxcomposite1 libxdamage1 libxext6 libxfixes3 \
-            libxkbcommon0 libxrandr2 libxshmfence1 xvfb \
-            fonts-noto fonts-noto-core fonts-hosny-amiri \
-            fonts-sil-scheherazade || true
-          sudo apt-get install -y libasound2t64 libasound2-dev || \
-            sudo apt-get install -y libasound2 libasound2-dev || true
+          sudo apt-get install -y ffmpeg libsndfile1 xvfb
           sudo fc-cache -fv
 
       - name: 💾 Cache WhisperX models
@@ -99,50 +89,16 @@ jobs:
             ~/.cache/whisperx
             ~/.cache/huggingface
             ~/.cache/torch
-          key: whisperx-models-v6
-          restore-keys: whisperx-models-
+          key: whisperx-models-v7
 
-      - name: 💾 Cache PyTorch
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pytorch-cpu-v2-${{ runner.os }}-py3.11
-          restore-keys: pytorch-cpu-v2-
-
-      - name: 🔥 Install PyTorch (CPU only)
+      - name: 🔥 Install PyTorch (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install \
-            torch==2.1.2 \
-            torchaudio==2.1.2 \
+          pip install torch==2.1.2 torchaudio==2.1.2 \
             --index-url https://download.pytorch.org/whl/cpu
-
-      - name: 📦 Install WhisperX (no deps)
-        run: |
-          pip install git+https://github.com/m-bain/whisperX.git \
-            --no-deps
-          pip install \
-            faster-whisper==1.0.3 \
-            ctranslate2==4.4.0 \
-            pyannote.audio==3.3.2 \
-            pyannote.core==5.0.0 \
-            pyannote.pipeline==3.0.1 \
-            transformers==4.44.2 \
-            omegaconf==2.3.0 \
-            nltk==3.8.1 \
-            pandas==2.2.3
 
       - name: 📦 Install Python deps
         run: pip install -r requirements.txt
-
-      - name: 📥 Download NLTK data
-        run: |
-          python -c "
-          import nltk
-          nltk.download('punkt')
-          nltk.download('punkt_tab')
-          nltk.download('averaged_perceptron_tagger')
-          "
 
       - name: 🟢 Setup Node.js 20
         uses: actions/setup-node@v4
@@ -151,16 +107,10 @@ jobs:
 
       - name: 📦 Install Node deps
         working-directory: remotion
-        run: |
-          if [ -f "package-lock.json" ]; then npm ci
-          else npm install; fi
+        run: npm ci
 
-      - name: 🌐 Install Playwright Chromium (Python)
+      - name: 🌐 Install Playwright
         run: python -m playwright install chromium
-
-      - name: 🌐 Install Playwright Chromium (Node)
-        working-directory: remotion
-        run: npx playwright install chromium
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
@@ -172,41 +122,9 @@ jobs:
       - name: 🇺🇸 Generate + Publish English
         env:
           GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_API_KEY_1:  ${{ secrets.GEMINI_API_KEY_1 }}
-          GEMINI_API_KEY_2:  ${{ secrets.GEMINI_API_KEY_2 }}
-          GEMINI_API_KEY_3:  ${{ secrets.GEMINI_API_KEY_3 }}
-          GEMINI_API_KEY_4:  ${{ secrets.GEMINI_API_KEY_4 }}
-          GEMINI_API_KEY_5:  ${{ secrets.GEMINI_API_KEY_5 }}
-          GEMINI_API_KEY_6:  ${{ secrets.GEMINI_API_KEY_6 }}
-          GEMINI_API_KEY_7:  ${{ secrets.GEMINI_API_KEY_7 }}
-          GEMINI_API_KEY_8:  ${{ secrets.GEMINI_API_KEY_8 }}
-          GEMINI_API_KEY_9:  ${{ secrets.GEMINI_API_KEY_9 }}
-          GEMINI_API_KEY_10: ${{ secrets.GEMINI_API_KEY_10 }}
-          GEMINI_API_KEY_11: ${{ secrets.GEMINI_API_KEY_11 }}
-          GEMINI_API_KEY_12: ${{ secrets.GEMINI_API_KEY_12 }}
-          GEMINI_API_KEY_13: ${{ secrets.GEMINI_API_KEY_13 }}
-          GEMINI_API_KEY_14: ${{ secrets.GEMINI_API_KEY_14 }}
-          GEMINI_API_KEY_15: ${{ secrets.GEMINI_API_KEY_15 }}
-          GEMINI_API_KEY_16: ${{ secrets.GEMINI_API_KEY_16 }}
-          GEMINI_API_KEY_17: ${{ secrets.GEMINI_API_KEY_17 }}
-          GEMINI_API_KEY_18: ${{ secrets.GEMINI_API_KEY_18 }}
-          GEMINI_API_KEY_19: ${{ secrets.GEMINI_API_KEY_19 }}
-          GEMINI_API_KEY_20: ${{ secrets.GEMINI_API_KEY_20 }}
-          GEMINI_API_KEY_21: ${{ secrets.GEMINI_API_KEY_21 }}
-          GEMINI_API_KEY_22: ${{ secrets.GEMINI_API_KEY_22 }}
-          GEMINI_API_KEY_23: ${{ secrets.GEMINI_API_KEY_23 }}
-          GEMINI_API_KEY_24: ${{ secrets.GEMINI_API_KEY_24 }}
-          GEMINI_API_KEY_25: ${{ secrets.GEMINI_API_KEY_25 }}
-          GEMINI_API_KEY_26: ${{ secrets.GEMINI_API_KEY_26 }}
-          GEMINI_API_KEY_27: ${{ secrets.GEMINI_API_KEY_27 }}
-          GEMINI_API_KEY_28: ${{ secrets.GEMINI_API_KEY_28 }}
-          GEMINI_API_KEY_29: ${{ secrets.GEMINI_API_KEY_29 }}
-          PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
-          PIXABAY_API_KEY_1: ${{ secrets.PIXABAY_API_KEY_1 }}
-          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
-          PEXELS_API_KEY_1:  ${{ secrets.PEXELS_API_KEY_1 }}
           GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
-          GROQ_API_KEY_1:    ${{ secrets.GROQ_API_KEY_1 }}
+          PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
           HF_TOKEN:          ${{ secrets.HF_TOKEN }}
           FB_PAGE_ID:        ${{ secrets.FB_PAGE_ID_EN }}
           FB_PAGE_TOKEN:     ${{ secrets.FB_PAGE_TOKEN_EN }}
@@ -214,49 +132,52 @@ jobs:
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET_EN }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_EN }}
         run: |
-          FLAGS="--lang en --publish-fb --publish-yt --auto-next"
 
-          if [ -n "${{ github.event.inputs.video_number }}" ]; then
-            FLAGS="--lang en --publish-fb --publish-yt \
-              --video-number ${{ github.event.inputs.video_number }}"
+          MODE="short"
+          HOUR=$(date -u +"%H")
+
+          if [ "$HOUR" = "23" ]; then
+            MODE="long"
           fi
 
-          [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}"   = "true" ] && FLAGS="$FLAGS --force-ai"
+          if [ -n "${{ github.event.inputs.content_mode }}" ]; then
+            MODE="${{ github.event.inputs.content_mode }}"
+          fi
+
+          if [ "$MODE" = "long" ]; then
+            INPUT_FILE="scripts/videos_en_long.xlsx"
+            OUTPUT_DIR="output_long"
+          else
+            INPUT_FILE="scripts/videos_en.xlsx"
+            OUTPUT_DIR="output"
+          fi
+
+          FLAGS="--lang en --content-mode $MODE --auto-next"
+
+          [ "${{ github.event.inputs.force }}" = "true" ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}" = "true" ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && FLAGS="$FLAGS --publish-yt"
           [ "${{ github.event.inputs.publish_fb }}" = "false" ] && \
           [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="$FLAGS --no-publish"
 
-          python main.py "scripts/videos_en.xlsx" \
-            --output-dir output \
-            --formats "${{ github.event.inputs.formats || '9x16' }}" \
+          if [ -n "${{ github.event.inputs.video_number }}" ]; then
+            FLAGS="$FLAGS --video-number ${{ github.event.inputs.video_number }}"
+          fi
+
+          python main.py "$INPUT_FILE" \
+            --output-dir "$OUTPUT_DIR" \
             $FLAGS
 
-      - name: 📤 Upload final video
+      - name: 📤 Upload final videos
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: en-videos-${{ github.run_number }}
-          path: output/**/*_final.mp4
+          path: |
+            output/**/*_final.mp4
+            output_long/**/*_final.mp4
           retention-days: 7
-          if-no-files-found: ignore
-
-      - name: 📤 Upload subtitles
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: en-subtitles-${{ github.run_number }}
-          path: output/**/*.srt
-          retention-days: 30
-          if-no-files-found: ignore
-
-      - name: 📤 Upload thumbnails
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: en-thumbnails-${{ github.run_number }}
-          path: output/**/*.png
-          retention-days: 30
-          if-no-files-found: ignore
 
       - name: 📤 Save DB
         if: always()
