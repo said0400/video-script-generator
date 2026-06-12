@@ -8,6 +8,7 @@ Features:
   ✅ Tag-aware content processing
   ✅ Validation with detailed errors
   ✅ Pretty summary display
+  ✅ Robust error handling for corrupt files
 
 Supported file structures:
   - videos_ar.xlsx       (number, title, ar_content)
@@ -385,6 +386,17 @@ def _print_detected_columns(col_map: dict[str, int]) -> None:
     )
 
 
+def _row_has_data(row: Any) -> bool:
+    """التحقق إذا كان الصف يحتوي بيانات."""
+    if not row:
+        return False
+
+    return any(
+        cell is not None and str(cell).strip()
+        for cell in row
+    )
+
+
 def _process_rows(
     rows:    list,
     col_map: dict[str, int],
@@ -415,34 +427,40 @@ def _process_rows(
     return scripts
 
 
-def _row_has_data(row: Any) -> bool:
-    """التحقق إذا كان الصف يحتوي بيانات."""
-    if not row:
-        return False
-
-    return any(
-        cell is not None and str(cell).strip()
-        for cell in row
-    )
-
-
 def _read_excel(path: Path) -> list[dict]:
     """
     قراءة ملف Excel.
 
     Raises:
         ImportError: إذا openpyxl غير مثبت
+        RuntimeError: إذا الملف معطوب أو غير قابل للقراءة
     """
     try:
         import openpyxl
     except ImportError:
-        raise ImportError("Run: pip install openpyxl")
+        raise ImportError(
+            "openpyxl not installed. Run: pip install openpyxl"
+        )
 
-    wb   = openpyxl.load_workbook(path, data_only=True)
-    ws   = wb.active
-    rows = list(ws.iter_rows(values_only=True))
+    # محاولة فتح الملف
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception as e:
+        raise RuntimeError(
+            f"Cannot read Excel file '{path.name}': {e}"
+        )
+
+    # قراءة الـ active sheet
+    try:
+        ws   = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    except Exception as e:
+        raise RuntimeError(
+            f"Cannot read Excel rows from '{path.name}': {e}"
+        )
 
     if not rows:
+        log.warning(f"  ⚠️  Excel file is empty: {path.name}")
         return []
 
     # Headers
@@ -451,6 +469,11 @@ def _read_excel(path: Path) -> list[dict]:
         for c in rows[0]
     ]
 
+    if not any(headers):
+        raise RuntimeError(
+            f"Excel file has no valid headers: {path.name}"
+        )
+
     col_map = _detect_columns(headers)
     _print_detected_columns(col_map)
 
@@ -458,19 +481,49 @@ def _read_excel(path: Path) -> list[dict]:
 
 
 def _read_csv(path: Path) -> list[dict]:
-    """قراءة ملف CSV."""
-    with open(path, encoding="utf-8-sig", newline="") as f:
-        reader  = csv.reader(f)
-        headers = next(reader, [])
+    """
+    قراءة ملف CSV.
 
-        if not headers:
-            return []
+    Raises:
+        RuntimeError: إذا الملف معطوب أو غير قابل للقراءة
+    """
+    try:
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            reader  = csv.reader(f)
+            headers = next(reader, [])
 
-        col_map = _detect_columns(headers)
-        _print_detected_columns(col_map)
+            if not headers:
+                log.warning(
+                    f"  ⚠️  CSV file is empty: {path.name}"
+                )
+                return []
 
-        # تحويل reader لـ list للمعالجة
-        rows = list(reader)
+            if not any(h.strip() for h in headers):
+                raise RuntimeError(
+                    f"CSV file has no valid headers: "
+                    f"{path.name}"
+                )
+
+            col_map = _detect_columns(headers)
+            _print_detected_columns(col_map)
+
+            # تحويل reader لـ list للمعالجة
+            rows = list(reader)
+
+    except UnicodeDecodeError as e:
+        raise RuntimeError(
+            f"Cannot decode CSV '{path.name}' as UTF-8: {e}"
+        )
+
+    except csv.Error as e:
+        raise RuntimeError(
+            f"CSV parsing error in '{path.name}': {e}"
+        )
+
+    except Exception as e:
+        raise RuntimeError(
+            f"Cannot read CSV file '{path.name}': {e}"
+        )
 
     # CSV لا يحتاج skip_first لأننا قرأنا headers بالفعل
     scripts: list[dict] = []
@@ -503,11 +556,15 @@ def read_scripts(file_path: str) -> list[dict]:
         FileNotFoundError: إذا الملف غير موجود
         ValueError:        إذا الصيغة غير مدعومة
         ImportError:       إذا openpyxl غير مثبت (للـ Excel)
+        RuntimeError:      إذا الملف معطوب
     """
     path = Path(file_path).resolve()
 
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
+
+    if not path.is_file():
+        raise FileNotFoundError(f"Not a file: {path}")
 
     ext = path.suffix.lower()
 
