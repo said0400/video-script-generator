@@ -1,48 +1,200 @@
 """
-srt.py — Generate SRT subtitle files from alignment data.
-✨ sentence-level SRT for upload
-✨ word-level SRT for karaoke effects
-✨ مسارات مطلقة
+📄 SRT Subtitle Generator
+
+Features:
+  ✅ Sentence-level SRT (for upload)
+  ✅ Word-level SRT (for karaoke effects)
+  ✅ Absolute paths
+  ✅ Min duration enforcement
+  ✅ UTF-8 encoding
 """
 
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
-# حد أدنى لمدة الجملة والكلمة في ملف SRT
-_MIN_SENTENCE_DUR = 0.5   # ثانية
-_MIN_WORD_DUR     = 0.08  # ثانية
+# ═════════════════════════════════════════════════════════════════════════════
+# CONSTANTS
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Minimum durations (seconds)
+MIN_SENTENCE_DURATION = 0.5
+MIN_WORD_DURATION     = 0.08
+
+# Default fallback durations
+DEFAULT_SENTENCE_DURATION = 3.0
+DEFAULT_WORD_DURATION     = 0.4
+
+# Time conversion
+MS_PER_SECOND = 1000
+MS_PER_MINUTE = 60_000
+MS_PER_HOUR   = 3_600_000
+
+# Logging
+logging.basicConfig(
+    level  = logging.INFO,
+    format = "%(message)s",
+)
+log = logging.getLogger(__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TIMESTAMP
+# DATA CLASSES
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _ts(seconds: float) -> str:
-    """Seconds → SRT timestamp HH:MM:SS,mmm"""
-    seconds  = max(0.0, seconds)
-    total_ms = int(seconds * 1000)
-    h        = total_ms // 3_600_000
-    m        = (total_ms % 3_600_000) // 60_000
-    s        = (total_ms % 60_000)    // 1_000
-    ms       = total_ms % 1_000
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+@dataclass(frozen=True)
+class SubtitleEntry:
+    """مدخل واحد في ملف SRT."""
+    index: int
+    start: float
+    end:   float
+    text:  str
+
+    def to_srt_block(self) -> list[str]:
+        """تحويل لـ SRT block (4 lines)."""
+        return [
+            str(self.index),
+            f"{_format_timestamp(self.start)} --> "
+            f"{_format_timestamp(self.end)}",
+            self.text,
+            "",
+        ]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TIMESTAMP FORMATTING
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _format_timestamp(seconds: float) -> str:
+    """
+    تحويل ثوانٍ إلى SRT timestamp.
+
+    Format: HH:MM:SS,mmm
+
+    Examples:
+        >>> _format_timestamp(3.5)
+        "00:00:03,500"
+        >>> _format_timestamp(3661.25)
+        "01:01:01,250"
+    """
+    safe_seconds = max(0.0, seconds)
+    total_ms     = int(safe_seconds * MS_PER_SECOND)
+
+    hours        = total_ms // MS_PER_HOUR
+    minutes      = (total_ms % MS_PER_HOUR) // MS_PER_MINUTE
+    secs         = (total_ms % MS_PER_MINUTE) // MS_PER_SECOND
+    milliseconds = total_ms % MS_PER_SECOND
+
+    return (
+        f"{hours:02d}:{minutes:02d}:"
+        f"{secs:02d},{milliseconds:03d}"
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DURATION HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _ensure_min_duration(
+    start:        float,
+    end:          float,
+    min_duration: float,
+) -> tuple[float, float]:
+    """
+    ضمان أن المدة لا تقل عن الحد الأدنى.
+
+    Returns:
+        (start, end) معدلة
+    """
+    safe_start = max(0.0, start)
+
+    # إذا end <= start أو المدة قصيرة جداً
+    if end <= safe_start or (end - safe_start) < min_duration:
+        return safe_start, safe_start + min_duration
+
+    return safe_start, end
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# FILE WRITING
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _write_srt_file(
+    entries:     list[SubtitleEntry],
+    output_path: str,
+) -> Optional[Path]:
+    """
+    كتابة entries إلى ملف SRT.
+
+    Returns:
+        Path للملف أو None إذا entries فارغة
+    """
+    if not entries:
+        return None
+
+    path  = Path(output_path).resolve()
+    lines = []
+
+    for entry in entries:
+        lines.extend(entry.to_srt_block())
+
+    path.write_text(
+        "\n".join(lines),
+        encoding = "utf-8",
+    )
+
+    return path
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SENTENCE-LEVEL SRT
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _extract_sentence_entries(
+    aligned: list[dict],
+) -> list[SubtitleEntry]:
+    """استخراج subtitle entries من aligned (مستوى الجملة)."""
+    entries: list[SubtitleEntry] = []
+
+    for idx, item in enumerate(aligned, start=1):
+        sentence = item.get("sentence", "").strip()
+        if not sentence:
+            continue
+
+        raw_start = float(item.get("start", 0.0))
+        raw_end   = float(item.get(
+            "end",
+            raw_start + DEFAULT_SENTENCE_DURATION,
+        ))
+
+        start, end = _ensure_min_duration(
+            raw_start, raw_end,
+            MIN_SENTENCE_DURATION,
+        )
+
+        entries.append(SubtitleEntry(
+            index = len(entries) + 1,
+            start = start,
+            end   = end,
+            text  = sentence,
+        ))
+
+    return entries
+
+
 def generate_srt(
     aligned:     list[dict],
     output_path: str,
-) -> Path | None:
+) -> Optional[Path]:
     """
-    Sentence-level SRT — one subtitle per sentence.
+    توليد SRT على مستوى الجملة (للرفع كترجمة).
 
     Args:
         aligned:     [{sentence, start, end, words:[...]}, ...]
-        output_path: مسار ملف الـ SRT
+        output_path: مسار ملف SRT
 
     Returns:
         Path للملف أو None إذا فشل
@@ -50,37 +202,19 @@ def generate_srt(
     if not aligned:
         return None
 
-    path  = Path(output_path).resolve()
-    lines = []
-    idx   = 1
+    entries = _extract_sentence_entries(aligned)
 
-    for item in aligned:
-        sentence = item.get("sentence", "").strip()
-        if not sentence:
-            continue
-
-        start = max(0.0, float(item.get("start", 0.0)))
-        end   = float(item.get("end", start + 3.0))
-
-        # ضمان أن end > start بحد أدنى معقول
-        if end <= start:
-            end = start + _MIN_SENTENCE_DUR
-        elif end - start < _MIN_SENTENCE_DUR:
-            end = start + _MIN_SENTENCE_DUR
-
-        lines += [
-            str(idx),
-            f"{_ts(start)} --> {_ts(end)}",
-            sentence,
-            "",
-        ]
-        idx += 1
-
-    if not lines:
+    if not entries:
         return None
 
-    path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"  📄 SRT ({idx - 1} subtitles) → {path.name}")
+    path = _write_srt_file(entries, output_path)
+
+    if path:
+        log.info(
+            f"  📄 SRT ({len(entries)} subtitles) → "
+            f"{path.name}"
+        )
+
     return path
 
 
@@ -88,17 +222,51 @@ def generate_srt(
 # WORD-LEVEL SRT
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _extract_word_entries(
+    aligned: list[dict],
+) -> list[SubtitleEntry]:
+    """استخراج subtitle entries من aligned (مستوى الكلمة)."""
+    entries: list[SubtitleEntry] = []
+
+    for item in aligned:
+        for word_data in item.get("words", []):
+            word = word_data.get("word", "").strip()
+            if not word:
+                continue
+
+            raw_start = float(word_data.get("start", 0.0))
+            raw_end   = float(word_data.get(
+                "end",
+                raw_start + DEFAULT_WORD_DURATION,
+            ))
+
+            start, end = _ensure_min_duration(
+                raw_start, raw_end,
+                MIN_WORD_DURATION,
+            )
+
+            entries.append(SubtitleEntry(
+                index = len(entries) + 1,
+                start = start,
+                end   = end,
+                text  = word,
+            ))
+
+    return entries
+
+
 def generate_word_srt(
     aligned:     list[dict],
     output_path: str,
-) -> Path | None:
+) -> Optional[Path]:
     """
-    Word-level SRT — each word appears individually (karaoke style).
-    Upload as closed captions for maximum engagement.
+    توليد SRT على مستوى الكلمة (Karaoke style).
+
+    استخدم للـ closed captions للحصول على تفاعل أكبر.
 
     Args:
         aligned:     [{sentence, start, end, words:[...]}, ...]
-        output_path: مسار ملف الـ SRT
+        output_path: مسار ملف SRT
 
     Returns:
         Path للملف أو None إذا فشل
@@ -106,36 +274,17 @@ def generate_word_srt(
     if not aligned:
         return None
 
-    path    = Path(output_path).resolve()
-    lines   = []
-    counter = 1
+    entries = _extract_word_entries(aligned)
 
-    for item in aligned:
-        for wd in item.get("words", []):
-            word = wd.get("word", "").strip()
-            if not word:
-                continue
-
-            start = max(0.0, float(wd.get("start", 0.0)))
-            end   = float(wd.get("end", start + 0.4))
-
-            # ضمان أن end > start بحد أدنى معقول
-            if end <= start:
-                end = start + _MIN_WORD_DUR
-            elif end - start < _MIN_WORD_DUR:
-                end = start + _MIN_WORD_DUR
-
-            lines += [
-                str(counter),
-                f"{_ts(start)} --> {_ts(end)}",
-                word,
-                "",
-            ]
-            counter += 1
-
-    if counter == 1:
+    if not entries:
         return None
 
-    path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"  📄 Word SRT ({counter - 1} words) → {path.name}")
+    path = _write_srt_file(entries, output_path)
+
+    if path:
+        log.info(
+            f"  📄 Word SRT ({len(entries)} words) → "
+            f"{path.name}"
+        )
+
     return path
