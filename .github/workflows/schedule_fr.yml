@@ -1,199 +1,338 @@
-name: 🇸🇦 Arabic Videos (Short + Long)
+# ══════════════════════════════════════════════════════════════════════════════
+# 🇫🇷 French Videos Generator (Short + Long)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Schedule (UTC):
+#   - 5 short videos: 10:00, 12:05, 16:30, 18:00, 21:00
+#   - 1 long video:   22:30
+#
+# Manual triggers via workflow_dispatch with custom parameters.
+#
+# Updates (2026):
+#   ✅ stable-ts replaces WhisperX (no HF_TOKEN needed)
+#   ✅ PyTorch 2.5.1 (modern CPU version)
+#   ✅ NumPy 2.x compatible
+#   ✅ Faster cache strategy
+#   ✅ npm ci for reproducible builds
+#
+# ══════════════════════════════════════════════════════════════════════════════
+
+name: 🇫🇷 French Videos (Short + Long)
 
 on:
   schedule:
-    # ── 5 Short videos ─────────────────────────
-    - cron: "0 9 * * *"
-    - cron: "0 11 * * *"
-    - cron: "0 14 * * *"
-    - cron: "0 17 * * *"
-    - cron: "0 20 * * *"
+    # ── 5 Short videos ─────────────────────────────────────────────────────
+    - cron: "0 10 * * *"
+    - cron: "5 12 * * *"
+    - cron: "30 16 * * *"
+    - cron: "0 18 * * *"
+    - cron: "0 21 * * *"
 
-    # ── 1 Long video ──────────────────────────
-    - cron: "0 22 * * *"
+    # ── 1 Long video ──────────────────────────────────────────────────────
+    - cron: "30 22 * * *"
 
   workflow_dispatch:
     inputs:
       content_mode:
         description: "نوع المحتوى"
-        required: true
-        default: "short"
-        type: choice
-        options: ["short", "long"]
+        required:    true
+        default:     "short"
+        type:        choice
+        options:     ["short", "long"]
 
       video_number:
         description: "🎬 Video number (empty = auto next)"
-        required: false
-        default: ""
-        type: string
+        required:    false
+        default:     ""
+        type:        string
 
       force:
         description: "⚡ Force re-render?"
-        required: true
-        default: "false"
-        type: choice
-        options: ["false", "true"]
+        required:    true
+        default:     "false"
+        type:        choice
+        options:     ["false", "true"]
 
       force_ai:
         description: "🤖 Force re-generate AI?"
-        required: true
-        default: "false"
-        type: choice
-        options: ["false", "true"]
+        required:    true
+        default:     "false"
+        type:        choice
+        options:     ["false", "true"]
 
       publish_fb:
         description: "📘 Publish to Facebook?"
-        required: true
-        default: "true"
-        type: choice
-        options: ["true", "false"]
+        required:    true
+        default:     "true"
+        type:        choice
+        options:     ["true", "false"]
 
       publish_yt:
         description: "📺 Publish to YouTube?"
-        required: true
-        default: "true"
-        type: choice
-        options: ["true", "false"]
+        required:    true
+        default:     "true"
+        type:        choice
+        options:     ["true", "false"]
 
 concurrency:
-  group: video-ar
+  group:              video-fr
   cancel-in-progress: false
 
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION:   "20"
+  TORCH_VERSION:  "2.5.1"
+
 jobs:
-  generate_ar:
-    name: 🇸🇦 Arabic Video
+  generate:
+    name:    🇫🇷 Generate French Video
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
     steps:
+
+      # ── Setup ──────────────────────────────────────────────────────────────
 
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
       - name: 🧹 Free disk space
         run: |
+          echo "💾 Before cleanup:"
+          df -h /
+
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force || true
-          df -h
 
-      - name: 🐍 Setup Python 3.11
+          echo ""
+          echo "💾 After cleanup:"
+          df -h /
+
+      # ── Python ─────────────────────────────────────────────────────────────
+
+      - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: 'pip'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache:          'pip'
 
-      - name: 🔧 Install system deps
+      - name: 🔧 Install system dependencies
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y ffmpeg libsndfile1 xvfb
+          sudo apt-get install -y \
+            ffmpeg \
+            libsndfile1 \
+            xvfb \
+            fonts-noto \
+            fonts-noto-core \
+            fonts-hosny-amiri \
+            fonts-sil-scheherazade
           sudo fc-cache -fv
 
-      - name: 💾 Cache WhisperX models
+      # ── Cache (stable-ts models) ───────────────────────────────────────────
+
+      - name: 💾 Cache stable-ts models
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cache/whisperx
+            ~/.cache/stable-ts
             ~/.cache/huggingface
             ~/.cache/torch
-          key: whisperx-models-v7
+            ~/.cache/whisper
+          key:          stable-ts-models-v2-${{ runner.os }}
+          restore-keys: stable-ts-models-
 
-      - name: 🔥 Install PyTorch (CPU)
+      # ── PyTorch (CPU) ──────────────────────────────────────────────────────
+
+      - name: 🔥 Install PyTorch ${{ env.TORCH_VERSION }} (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install torch==2.1.2 torchaudio==2.1.2 \
+          pip install \
+            torch==${{ env.TORCH_VERSION }} \
+            torchaudio==${{ env.TORCH_VERSION }} \
             --index-url https://download.pytorch.org/whl/cpu
 
-      - name: 📦 Install Python deps
+      # ── Python Dependencies ────────────────────────────────────────────────
+
+      - name: 📦 Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: 🟢 Setup Node.js 20
+      - name: ✅ Verify stable-ts installation
+        run: |
+          python -c "import stable_whisper; print('✅ stable-ts OK')"
+
+      # ── Node.js ────────────────────────────────────────────────────────────
+
+      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: ${{ env.NODE_VERSION }}
+          cache:        'npm'
+          cache-dependency-path: remotion/package-lock.json
 
-      - name: 📦 Install Node deps
+      - name: 📦 Install Node dependencies
         working-directory: remotion
         run: npm ci
 
-      - name: 🌐 Install Playwright
-        run: python -m playwright install chromium
+      # ── Playwright ─────────────────────────────────────────────────────────
+
+      - name: 🌐 Install Playwright Chromium
+        run: |
+          python -m playwright install chromium --with-deps
+
+      # ── Restore Database ──────────────────────────────────────────────────
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
         with:
-          name: vsg-database-ar
+          name:                 vsg-database-fr
           if_no_artifact_found: ignore
-          search_artifacts: true
+          search_artifacts:     true
 
-      - name: 🇸🇦 Generate + Publish Arabic
+      # ── Main Generation ────────────────────────────────────────────────────
+
+      - name: 🇫🇷 Generate + Publish French
         env:
+          # ── AI Services ───────────────────────────────────────────────────
           GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+
+          # ── Stock Videos ──────────────────────────────────────────────────
           PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
           PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
-          HF_TOKEN:          ${{ secrets.HF_TOKEN }}
-          FB_PAGE_ID:        ${{ secrets.FB_PAGE_ID_AR }}
-          FB_PAGE_TOKEN:     ${{ secrets.FB_PAGE_TOKEN_AR }}
-          YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID_AR }}
-          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET_AR }}
-          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_AR }}
+
+          # ── Facebook ──────────────────────────────────────────────────────
+          FB_PAGE_ID:        ${{ secrets.FB_PAGE_ID_FR }}
+          FB_PAGE_TOKEN:     ${{ secrets.FB_PAGE_TOKEN_FR }}
+
+          # ── YouTube ───────────────────────────────────────────────────────
+          YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID_FR }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET_FR }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_FR }}
+
+          # ── WhatsApp Notifications ───────────────────────────────────────
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN:       ${{ secrets.GREEN_API_TOKEN }}
+          WHATSAPP_PHONE_NUMBER: ${{ secrets.WHATSAPP_PHONE_NUMBER }}
+
+          # ── Telegram (Optional Backup) ───────────────────────────────────
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+
+          # ── Context for health checks ────────────────────────────────────
+          CURRENT_LANG:      "fr"
+
         run: |
-
-          # تحديد mode تلقائيًا حسب التوقيت
+          # ── Determine content mode ────────────────────────────────────────
           MODE="short"
-          HOUR=$(date -u +"%H")
 
-          if [ "$HOUR" = "22" ]; then
+          # Auto-determine from schedule (22:30 = long)
+          HOUR=$(date -u +"%H")
+          MINUTE=$(date -u +"%M")
+
+          if [ "$HOUR" = "22" ] && [ "$MINUTE" -ge 30 ]; then
             MODE="long"
           fi
 
-          # إذا تشغيل يدوي
+          # Manual override
           if [ -n "${{ github.event.inputs.content_mode }}" ]; then
             MODE="${{ github.event.inputs.content_mode }}"
           fi
 
+          # ── Set input/output paths ────────────────────────────────────────
           if [ "$MODE" = "long" ]; then
-            INPUT_FILE="scripts/videos_ar_long.xlsx"
+            INPUT_FILE="scripts/videos_fr_long.xlsx"
             OUTPUT_DIR="output_long"
           else
-            INPUT_FILE="scripts/videos_ar.xlsx"
+            INPUT_FILE="scripts/videos_fr.xlsx"
             OUTPUT_DIR="output"
           fi
 
-          FLAGS="--lang ar --content-mode $MODE --auto-next"
+          # ── Build flags ───────────────────────────────────────────────────
+          FLAGS="--lang fr --content-mode $MODE --auto-next"
 
-          [ "${{ github.event.inputs.force }}" = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}" = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && FLAGS="$FLAGS --publish-yt"
-          [ "${{ github.event.inputs.publish_fb }}" = "false" ] && \
-          [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="$FLAGS --no-publish"
+          # Force flags
+          [ "${{ github.event.inputs.force }}" = "true" ] && \
+            FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}" = "true" ] && \
+            FLAGS="$FLAGS --force-ai"
 
+          # Publishing flags
+          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && \
+            FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && \
+            FLAGS="$FLAGS --publish-yt"
+
+          # Disable all publishing
+          if [ "${{ github.event.inputs.publish_fb }}" = "false" ] && \
+             [ "${{ github.event.inputs.publish_yt }}" = "false" ]; then
+            FLAGS="$FLAGS --no-publish"
+          fi
+
+          # Specific video number
           if [ -n "${{ github.event.inputs.video_number }}" ]; then
             FLAGS="$FLAGS --video-number ${{ github.event.inputs.video_number }}"
           fi
 
+          # ── Print configuration ──────────────────────────────────────────
+          echo "════════════════════════════════════════════════════════"
+          echo "  🇫🇷 French Video Generation"
+          echo "════════════════════════════════════════════════════════"
+          echo "  Mode       : $MODE"
+          echo "  Input      : $INPUT_FILE"
+          echo "  Output     : $OUTPUT_DIR"
+          echo "  Hour (UTC) : $HOUR:$MINUTE"
+          echo "  Flags      : $FLAGS"
+          echo "════════════════════════════════════════════════════════"
+
+          # ── Run ───────────────────────────────────────────────────────────
           python main.py "$INPUT_FILE" \
             --output-dir "$OUTPUT_DIR" \
             $FLAGS
 
+      # ── Artifacts ──────────────────────────────────────────────────────────
+
       - name: 📤 Upload final videos
-        if: always()
+        if:   always()
         uses: actions/upload-artifact@v4
         with:
-          name: ar-videos-${{ github.run_number }}
+          name: fr-videos-${{ github.run_number }}
           path: |
             output/**/*_final.mp4
             output_long/**/*_final.mp4
-          retention-days: 7
+          retention-days:     7
+          if-no-files-found:  ignore
 
-      - name: 📤 Save DB
-        if: always()
+      - name: 📤 Upload thumbnails
+        if:   always()
         uses: actions/upload-artifact@v4
         with:
-          name: vsg-database-ar
-          path: vsg.db
+          name: fr-thumbnails-${{ github.run_number }}
+          path: |
+            output/**/*_thumbnail.png
+            output_long/**/*_thumbnail.png
+          retention-days:     30
+          if-no-files-found:  ignore
+
+      - name: 📤 Upload subtitles
+        if:   always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fr-subtitles-${{ github.run_number }}
+          path: |
+            output/**/*.srt
+            output_long/**/*.srt
+          retention-days:     30
+          if-no-files-found:  ignore
+
+      - name: 💾 Save Database
+        if:   always()
+        uses: actions/upload-artifact@v4
+        with:
+          name:           vsg-database-fr
+          path:           vsg.db
           retention-days: 90
-          overwrite: true
+          overwrite:      true
