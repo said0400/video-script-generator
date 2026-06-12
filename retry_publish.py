@@ -1,59 +1,68 @@
 """
-retry_publish.py — Smart Retry Publisher
-✨ يبحث عن فيديوهات:
-  - مرندرة ✅
-  - لم تُنشر ❌
-✨ يعيد محاولة النشر بدون إعادة الرندر
-✨ يدعم كل اللغات والمنصات
-✨ يدمج مع notifier.py للإشعارات
-✨ يدعم retry محدد أو عام
+🔄 Smart Retry Publisher
+
+Features:
+  ✅ Find videos: rendered ✅ but not published ❌
+  ✅ Retry publishing without re-rendering
+  ✅ Multi-platform support (Facebook + YouTube)
+  ✅ Multi-language support (AR, FR, EN)
+  ✅ Dry-run mode for testing
+  ✅ Notification integration
+  ✅ Detailed error tracking
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import traceback
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 from db import (
+    _conn,
+    get_ai_cache,
     init_db,
     is_published_facebook,
     is_published_youtube,
-    mark_video_published_for_lang,
-    get_ai_cache,
     make_cache_key,
-    get_pending_publish,
+    mark_video_published_for_lang,
     print_db_summary,
-    _conn,
 )
 from facebook import (
+    check_credentials as fb_check_credentials,
     publish_to_facebook,
-    credentials_available as fb_credentials_available,
-    check_credentials     as fb_check_credentials,
-)
-from youtube import (
-    publish_to_youtube,
-    credentials_available as yt_credentials_available,
-    check_credentials     as yt_check_credentials,
 )
 from notifier import (
-    notify_video_published,
-    notify_video_failed,
     notify_info,
-    notify_warning,
+    notify_video_failed,
+    notify_video_published,
 )
 from script_reader import read_scripts
+from youtube import publish_to_youtube
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
-LANGS = ["ar", "fr", "en"]
-MODES = ["short", "long"]
+# Supported values
+LANGS     = ("ar", "fr", "en")
+MODES     = ("short", "long")
+PLATFORMS = ("facebook", "youtube")
 
-# ملفات السكريبتات
-SCRIPT_FILES = {
+# Limits
+DEFAULT_LIMIT      = 10
+MAX_ERROR_LENGTH   = 200
+
+# Display
+SUMMARY_WIDTH      = 65
+SEPARATOR_WIDTH    = 55
+LIST_SEPARATOR     = 60
+
+# Script files mapping
+SCRIPT_FILES: dict[tuple[str, str], str] = {
     ("ar", "short"): "scripts/videos_ar.xlsx",
     ("fr", "short"): "scripts/videos_fr.xlsx",
     ("en", "short"): "scripts/videos_en.xlsx",
@@ -62,169 +71,236 @@ SCRIPT_FILES = {
     ("en", "long"):  "scripts/videos_en_long.xlsx",
 }
 
+# Logging
+logging.basicConfig(
+    level  = logging.INFO,
+    format = "%(message)s",
+)
+log = logging.getLogger(__name__)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DATA CLASSES
+# ═════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class PendingVideo:
+    """فيديو يحتاج إعادة نشر."""
+    video_number: str
+    lang:         str
+    content_mode: str
+    fb_path:      str
+    yt_path:      str
+    needs_fb:     bool
+    needs_yt:     bool
+    duration:     float = 0.0
+
+
+@dataclass
+class RetryResult:
+    """نتيجة محاولة retry."""
+    video_number: str
+    lang:         str
+    content_mode: str
+    fb_success:   bool       = False
+    yt_success:   bool       = False
+    errors:       list[str]  = field(default_factory=list)
+
+    def has_errors(self) -> bool:
+        return len(self.errors) > 0
+
+    def has_success(self) -> bool:
+        return self.fb_success or self.yt_success
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CLI
 # ═════════════════════════════════════════════════════════════════════════════
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments."""
     p = argparse.ArgumentParser(
-        description="🔄 Retry failed publishes",
-        formatter_class=argparse.RawTextHelpFormatter,
+        description     = "🔄 Retry failed publishes",
+        formatter_class = argparse.RawTextHelpFormatter,
     )
+
     p.add_argument(
         "--lang",
-        type=str,
-        default="all",
-        choices=["all", "ar", "fr", "en"],
-        help="اللغة (all = كل اللغات)",
+        type    = str,
+        default = "all",
+        choices = ["all", *LANGS],
+        help    = "اللغة (all = كل اللغات)",
     )
+
     p.add_argument(
         "--content-mode",
-        type=str,
-        default="all",
-        choices=["all", "short", "long"],
-        help="نوع المحتوى",
+        type    = str,
+        default = "all",
+        choices = ["all", *MODES],
+        help    = "نوع المحتوى",
     )
+
     p.add_argument(
         "--platform",
-        type=str,
-        default="all",
-        choices=["all", "facebook", "youtube"],
-        help="المنصة (all = كلتاهما)",
+        type    = str,
+        default = "all",
+        choices = ["all", *PLATFORMS],
+        help    = "المنصة",
     )
+
     p.add_argument(
         "--video-number",
-        type=str,
-        default=None,
-        help="رقم فيديو محدد",
+        type    = str,
+        default = None,
+        help    = "رقم فيديو محدد",
     )
+
     p.add_argument(
         "--dry-run",
-        action="store_true",
-        help="عرض فقط بدون نشر فعلي",
+        action = "store_true",
+        help   = "عرض فقط بدون نشر فعلي",
     )
+
     p.add_argument(
         "--limit",
-        type=int,
-        default=10,
-        help="حد أقصى للفيديوهات (افتراضي: 10)",
+        type    = int,
+        default = DEFAULT_LIMIT,
+        help    = f"حد أقصى (افتراضي: {DEFAULT_LIMIT})",
     )
+
     return p.parse_args()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# FIND VIDEOS TO RETRY
+# FIND PENDING VIDEOS
 # ═════════════════════════════════════════════════════════════════════════════
 
-def find_pending_videos(
-    lang:         str = "all",
-    content_mode: str = "all",
-    platform:     str = "all",
-    video_number: str | None = None,
+def _query_rendered_videos(
+    lang:         str,
+    content_mode: str,
 ) -> list[dict]:
+    """جلب الفيديوهات المرندرة من DB."""
+    rows = _conn().execute(
+        """SELECT video_number, lang, content_mode,
+                  output_path, fb_path, yt_path, duration_s
+           FROM renders
+           WHERE status        = 'done'
+             AND output_path   IS NOT NULL
+             AND lang          = ?
+             AND content_mode  = ?
+        """,
+        (lang, content_mode),
+    ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def _check_file_exists(path: Optional[str]) -> bool:
+    """التحقق من وجود ملف."""
+    return bool(path and Path(path).exists())
+
+
+def _evaluate_video_needs(
+    row:          dict,
+    platform:     str,
+    video_number: Optional[str],
+) -> Optional[PendingVideo]:
     """
-    يبحث عن فيديوهات تحتاج إعادة نشر.
+    تقييم احتياجات فيديو واحد.
 
     Returns:
-        list of {
-            "video_number": str,
-            "lang": str,
-            "content_mode": str,
-            "yt_path": str,
-            "fb_path": str,
-            "needs_fb": bool,
-            "needs_yt": bool,
-        }
+        PendingVideo أو None إذا لا يحتاج retry
     """
-    langs = LANGS if lang == "all" else [lang]
-    modes = MODES if content_mode == "all" else [content_mode]
+    num  = str(row["video_number"])
+    lang = row["lang"]
+    mode = row["content_mode"]
 
-    pending = []
+    # فلتر video_number
+    if video_number and num != str(video_number):
+        return None
 
-    for l in langs:
-        for m in modes:
-            # نجلب الفيديوهات المرندرة
-            rows = _conn().execute(
-                """SELECT video_number, lang, content_mode,
-                          output_path, fb_path, yt_path,
-                          duration_s
-                   FROM renders
-                   WHERE status        = 'done'
-                     AND output_path   IS NOT NULL
-                     AND lang          = ?
-                     AND content_mode  = ?
-                """,
-                (l, m),
-            ).fetchall()
+    # المسارات
+    fb_path = row["fb_path"] or row["output_path"]
+    yt_path = row["yt_path"] or row["output_path"]
+
+    # حالة النشر
+    fb_done = is_published_facebook(num, lang, mode)
+    yt_done = is_published_youtube(num, lang, mode)
+
+    # ما يحتاج نشر
+    needs_fb = (
+        not fb_done and
+        platform in ("all", "facebook")
+    )
+    needs_yt = (
+        not yt_done and
+        platform in ("all", "youtube")
+    )
+
+    if not (needs_fb or needs_yt):
+        return None
+
+    # التحقق من وجود الملفات
+    if needs_fb and not _check_file_exists(fb_path):
+        log.warning(
+            f"  ⚠️  FB file missing for "
+            f"#{num} ({lang.upper()}) [{mode}]"
+        )
+        needs_fb = False
+
+    if needs_yt and not _check_file_exists(yt_path):
+        log.warning(
+            f"  ⚠️  YT file missing for "
+            f"#{num} ({lang.upper()}) [{mode}]"
+        )
+        needs_yt = False
+
+    if not (needs_fb or needs_yt):
+        return None
+
+    return PendingVideo(
+        video_number = num,
+        lang         = lang,
+        content_mode = mode,
+        fb_path      = fb_path or "",
+        yt_path      = yt_path or "",
+        needs_fb     = needs_fb,
+        needs_yt     = needs_yt,
+        duration     = row.get("duration_s") or 0.0,
+    )
+
+
+def find_pending_videos(
+    lang:         str           = "all",
+    content_mode: str           = "all",
+    platform:     str           = "all",
+    video_number: Optional[str] = None,
+) -> list[PendingVideo]:
+    """
+    البحث عن فيديوهات تحتاج إعادة نشر.
+
+    Returns:
+        قائمة PendingVideo
+    """
+    target_langs = (
+        list(LANGS) if lang == "all" else [lang]
+    )
+    target_modes = (
+        list(MODES) if content_mode == "all" else [content_mode]
+    )
+
+    pending: list[PendingVideo] = []
+
+    for l in target_langs:
+        for m in target_modes:
+            rows = _query_rendered_videos(l, m)
 
             for row in rows:
-                num     = str(row["video_number"])
-
-                # فلتر video_number إذا محدد
-                if video_number and num != str(video_number):
-                    continue
-
-                fb_path = (
-                    row["fb_path"] or row["output_path"]
+                video = _evaluate_video_needs(
+                    row, platform, video_number,
                 )
-                yt_path = (
-                    row["yt_path"] or row["output_path"]
-                )
-
-                # تحقق من النشر لكل منصة
-                fb_done = is_published_facebook(num, l, m)
-                yt_done = is_published_youtube(num, l, m)
-
-                # تحديد ما يحتاج إعادة نشر
-                needs_fb = (
-                    not fb_done and
-                    (platform in ("all", "facebook"))
-                )
-                needs_yt = (
-                    not yt_done and
-                    (platform in ("all", "youtube"))
-                )
-
-                # فقط إذا كان هناك ما يحتاج نشر
-                if not (needs_fb or needs_yt):
-                    continue
-
-                # تحقق أن الفيديو موجود فعلياً
-                fb_exists = (
-                    Path(fb_path).exists() if fb_path else False
-                )
-                yt_exists = (
-                    Path(yt_path).exists() if yt_path else False
-                )
-
-                if needs_fb and not fb_exists:
-                    print(
-                        f"  ⚠️  FB file missing for "
-                        f"#{num} ({l.upper()}) [{m}]"
-                    )
-                    needs_fb = False
-
-                if needs_yt and not yt_exists:
-                    print(
-                        f"  ⚠️  YT file missing for "
-                        f"#{num} ({l.upper()}) [{m}]"
-                    )
-                    needs_yt = False
-
-                if not (needs_fb or needs_yt):
-                    continue
-
-                pending.append({
-                    "video_number": num,
-                    "lang":         l,
-                    "content_mode": m,
-                    "fb_path":      fb_path,
-                    "yt_path":      yt_path,
-                    "needs_fb":     needs_fb,
-                    "needs_yt":     needs_yt,
-                    "duration":     row["duration_s"] or 0,
-                })
+                if video:
+                    pending.append(video)
 
     return pending
 
@@ -237,12 +313,14 @@ def _load_record(
     video_number: str,
     lang:         str,
     content_mode: str,
-) -> dict | None:
+) -> Optional[dict]:
     """تحميل بيانات الفيديو من ملف السكريبتات."""
     script_file = SCRIPT_FILES.get((lang, content_mode))
 
     if not script_file or not Path(script_file).exists():
-        print(f"  ⚠️  Script file not found: {script_file}")
+        log.warning(
+            f"  ⚠️  Script file not found: {script_file}"
+        )
         return None
 
     try:
@@ -251,158 +329,351 @@ def _load_record(
             if str(s["number"]) == str(video_number):
                 return s
     except Exception as e:
-        print(f"  ⚠️  Cannot read script: {e}")
+        log.warning(f"  ⚠️  Cannot read script: {e}")
 
     return None
+
+
+def _get_record_or_fallback(
+    video_number: str,
+    lang:         str,
+    content_mode: str,
+) -> dict:
+    """جلب record أو fallback بسيط."""
+    record = _load_record(video_number, lang, content_mode)
+
+    if record:
+        return record
+
+    return {
+        "number": video_number,
+        "title":  f"Video #{video_number}",
+    }
+
+
+def _get_street_description(
+    video_number: str,
+    lang:         str,
+    content_mode: str,
+) -> str:
+    """جلب street description من AI cache."""
+    ai_cache = get_ai_cache(
+        make_cache_key(video_number, lang, content_mode)
+    ) or {}
+
+    return ai_cache.get("street_description", "")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RETRY ONE PLATFORM
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _retry_facebook(
+    video:              PendingVideo,
+    record:             dict,
+    title:              str,
+    street_description: str,
+    result:             RetryResult,
+) -> None:
+    """محاولة نشر على Facebook."""
+    log.info("\n  📘 Publishing to Facebook...")
+
+    try:
+        publish_to_facebook(
+            video_path   = video.fb_path,
+            record       = record,
+            lang         = video.lang,
+            as_reel      = (video.content_mode == "short"),
+            ai_caption   = street_description or title,
+            content_mode = video.content_mode,
+        )
+
+        mark_video_published_for_lang(
+            video.video_number,
+            video.lang,
+            "facebook",
+            video.content_mode,
+        )
+
+        result.fb_success = True
+        log.info("  ✅ Facebook: published!")
+
+        notify_video_published(
+            video_number = video.video_number,
+            lang         = video.lang,
+            content_mode = video.content_mode,
+            platform     = "facebook",
+            title        = title,
+        )
+
+    except Exception as e:
+        error = str(e)[:MAX_ERROR_LENGTH]
+        result.errors.append(f"Facebook: {error}")
+        log.error(f"  ❌ Facebook failed: {error}")
+
+        notify_video_failed(
+            video_number = video.video_number,
+            lang         = video.lang,
+            content_mode = video.content_mode,
+            error        = error,
+            platform     = "facebook",
+        )
+
+
+def _retry_youtube(
+    video:              PendingVideo,
+    record:             dict,
+    title:              str,
+    street_description: str,
+    result:             RetryResult,
+) -> None:
+    """محاولة نشر على YouTube."""
+    log.info("\n  📺 Publishing to YouTube...")
+
+    try:
+        publish_to_youtube(
+            video_path         = video.yt_path,
+            record             = record,
+            lang               = video.lang,
+            street_description = street_description,
+            content_mode       = video.content_mode,
+        )
+
+        mark_video_published_for_lang(
+            video.video_number,
+            video.lang,
+            "youtube",
+            video.content_mode,
+        )
+
+        result.yt_success = True
+        log.info("  ✅ YouTube: published!")
+
+        notify_video_published(
+            video_number = video.video_number,
+            lang         = video.lang,
+            content_mode = video.content_mode,
+            platform     = "youtube",
+            title        = title,
+        )
+
+    except Exception as e:
+        error = str(e)[:MAX_ERROR_LENGTH]
+        result.errors.append(f"YouTube: {error}")
+        log.error(f"  ❌ YouTube failed: {error}")
+
+        notify_video_failed(
+            video_number = video.video_number,
+            lang         = video.lang,
+            content_mode = video.content_mode,
+            error        = error,
+            platform     = "youtube",
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # RETRY ONE VIDEO
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _print_retry_header(video: PendingVideo) -> None:
+    """طباعة header retry."""
+    separator = "─" * SEPARATOR_WIDTH
+
+    log.info(f"\n  {separator}")
+    log.info(
+        f"  🔄 Retry #{video.video_number} "
+        f"({video.lang.upper()}) "
+        f"[{video.content_mode.upper()}]"
+    )
+    log.info(f"  {separator}")
+
+
+def _print_dry_run(video: PendingVideo) -> None:
+    """طباعة معلومات dry run."""
+    if video.needs_fb:
+        log.info("  📘 [DRY RUN] Would publish to Facebook")
+        log.info(f"     File: {video.fb_path}")
+
+    if video.needs_yt:
+        log.info("  📺 [DRY RUN] Would publish to YouTube")
+        log.info(f"     File: {video.yt_path}")
+
+
 def retry_video(
-    video:   dict,
+    video:   PendingVideo,
     dry_run: bool = False,
-) -> dict:
+) -> RetryResult:
     """
     إعادة نشر فيديو واحد.
 
     Returns:
-        {
-            "video_number": str,
-            "lang": str,
-            "content_mode": str,
-            "fb_success": bool,
-            "yt_success": bool,
-            "errors": list,
-        }
+        RetryResult
     """
-    num          = video["video_number"]
-    lang         = video["lang"]
-    content_mode = video["content_mode"]
-
-    result = {
-        "video_number": num,
-        "lang":         lang,
-        "content_mode": content_mode,
-        "fb_success":   False,
-        "yt_success":   False,
-        "errors":       [],
-    }
-
-    print(f"\n  {'─'*55}")
-    print(
-        f"  🔄 Retry #{num} ({lang.upper()}) "
-        f"[{content_mode.upper()}]"
+    result = RetryResult(
+        video_number = video.video_number,
+        lang         = video.lang,
+        content_mode = video.content_mode,
     )
-    print(f"  {'─'*55}")
 
+    _print_retry_header(video)
+
+    # Dry run
     if dry_run:
-        if video["needs_fb"]:
-            print("  📘 [DRY RUN] Would publish to Facebook")
-            print(f"     File: {video['fb_path']}")
-        if video["needs_yt"]:
-            print("  📺 [DRY RUN] Would publish to YouTube")
-            print(f"     File: {video['yt_path']}")
+        _print_dry_run(video)
         return result
 
-    # تحميل البيانات من السكريبت
-    record = _load_record(num, lang, content_mode)
-    if not record:
-        # fallback: نستخدم بيانات بسيطة
-        record = {
-            "number": num,
-            "title":  f"Video #{num}",
-        }
-
-    title = record.get("title", f"Video #{num}")
-
-    # تحميل AI cache للحصول على description
-    ai_cache = get_ai_cache(
-        make_cache_key(num, lang, content_mode)
-    ) or {}
-    street_description = ai_cache.get(
-        "street_description", ""
+    # تحميل البيانات
+    record             = _get_record_or_fallback(
+        video.video_number,
+        video.lang,
+        video.content_mode,
+    )
+    title              = record.get(
+        "title", f"Video #{video.video_number}"
+    )
+    street_description = _get_street_description(
+        video.video_number,
+        video.lang,
+        video.content_mode,
     )
 
-    # ── Facebook ──────────────────────────────────────────────────────────
-    if video["needs_fb"]:
-        print(f"\n  📘 Publishing to Facebook...")
-        try:
-            publish_to_facebook(
-                video_path   = video["fb_path"],
-                record       = record,
-                lang         = lang,
-                as_reel      = (content_mode == "short"),
-                ai_caption   = street_description or title,
-                content_mode = content_mode,
-            )
-            mark_video_published_for_lang(
-                num, lang, "facebook", content_mode
-            )
-            result["fb_success"] = True
-            print(f"  ✅ Facebook: published!")
+    # Facebook
+    if video.needs_fb:
+        _retry_facebook(
+            video, record, title,
+            street_description, result,
+        )
 
-            notify_video_published(
-                video_number = num,
-                lang         = lang,
-                content_mode = content_mode,
-                platform     = "facebook",
-                title        = title,
-            )
-
-        except Exception as e:
-            error = str(e)[:200]
-            result["errors"].append(f"Facebook: {error}")
-            print(f"  ❌ Facebook failed: {error}")
-
-            notify_video_failed(
-                video_number = num,
-                lang         = lang,
-                content_mode = content_mode,
-                error        = error,
-                platform     = "facebook",
-            )
-
-    # ── YouTube ───────────────────────────────────────────────────────────
-    if video["needs_yt"]:
-        print(f"\n  📺 Publishing to YouTube...")
-        try:
-            publish_to_youtube(
-                video_path         = video["yt_path"],
-                record             = record,
-                lang               = lang,
-                street_description = street_description,
-                content_mode       = content_mode,
-            )
-            mark_video_published_for_lang(
-                num, lang, "youtube", content_mode
-            )
-            result["yt_success"] = True
-            print(f"  ✅ YouTube: published!")
-
-            notify_video_published(
-                video_number = num,
-                lang         = lang,
-                content_mode = content_mode,
-                platform     = "youtube",
-                title        = title,
-            )
-
-        except Exception as e:
-            error = str(e)[:200]
-            result["errors"].append(f"YouTube: {error}")
-            print(f"  ❌ YouTube failed: {error}")
-
-            notify_video_failed(
-                video_number = num,
-                lang         = lang,
-                content_mode = content_mode,
-                error        = error,
-                platform     = "youtube",
-            )
+    # YouTube
+    if video.needs_yt:
+        _retry_youtube(
+            video, record, title,
+            street_description, result,
+        )
 
     return result
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# DISPLAY
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _print_header(args: argparse.Namespace) -> None:
+    """طباعة header البرنامج."""
+    separator = "═" * SUMMARY_WIDTH
+
+    print(f"\n{separator}")
+    print("  🔄 Retry Publish System")
+    print(separator)
+    print(f"  Language     : {args.lang.upper()}")
+    print(f"  Content Mode : {args.content_mode.upper()}")
+    print(f"  Platform     : {args.platform.upper()}")
+    print(f"  Limit        : {args.limit}")
+    print(
+        f"  Dry Run      : "
+        f"{'YES' if args.dry_run else 'NO'}"
+    )
+
+    if args.video_number:
+        print(f"  Video Number : #{args.video_number}")
+
+    print(separator)
+
+
+def _print_pending_list(
+    pending: list[PendingVideo],
+) -> None:
+    """طباعة قائمة الفيديوهات المعلقة."""
+    print("\n  📝 Pending videos:")
+    print("  " + "─" * LIST_SEPARATOR)
+
+    for v in pending:
+        needs = []
+        if v.needs_fb:
+            needs.append("📘 FB")
+        if v.needs_yt:
+            needs.append("📺 YT")
+
+        print(
+            f"  #{v.video_number:>4} "
+            f"{v.lang.upper()} "
+            f"[{v.content_mode:>5}] "
+            f"→ {' + '.join(needs)}"
+        )
+
+    print("  " + "─" * LIST_SEPARATOR)
+
+
+def _print_summary(results: list[RetryResult]) -> None:
+    """طباعة الملخص النهائي."""
+    separator = "═" * SUMMARY_WIDTH
+
+    fb_success = sum(1 for r in results if r.fb_success)
+    yt_success = sum(1 for r in results if r.yt_success)
+    errors     = sum(1 for r in results if r.has_errors())
+
+    print(f"\n{separator}")
+    print("  📊 Retry Summary")
+    print(separator)
+    print(f"  📘 Facebook published: {fb_success}")
+    print(f"  📺 YouTube published : {yt_success}")
+    print(f"  ❌ With errors       : {errors}")
+    print(separator)
+
+    if errors > 0:
+        print("\n  ❌ Errors:")
+        for r in results:
+            if r.has_errors():
+                for err in r.errors:
+                    print(f"     #{r.video_number}: {err}")
+
+
+def _send_final_notification(
+    results: list[RetryResult],
+    dry_run: bool,
+) -> None:
+    """إرسال إشعار نهائي."""
+    if dry_run:
+        return
+
+    fb_success = sum(1 for r in results if r.fb_success)
+    yt_success = sum(1 for r in results if r.yt_success)
+    errors     = sum(1 for r in results if r.has_errors())
+
+    if not (fb_success or yt_success):
+        return
+
+    notify_info(
+        f"🔄 Retry complete!\n"
+        f"📘 Facebook: {fb_success}\n"
+        f"📺 YouTube:  {yt_success}\n"
+        f"❌ Errors:   {errors}",
+        skip_rate = True,
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CREDENTIALS CHECK
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _check_facebook_credentials(
+    pending: list[PendingVideo],
+) -> None:
+    """التحقق من Facebook credentials وتعطيل FB إذا فشلت."""
+    need_fb_check = any(v.needs_fb for v in pending)
+
+    if not need_fb_check:
+        return
+
+    print("\n  📘 Checking Facebook credentials...")
+
+    if not fb_check_credentials():
+        print(
+            "  ❌ Facebook credentials invalid! "
+            "Skipping FB."
+        )
+        for v in pending:
+            v.needs_fb = False
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -410,25 +681,14 @@ def retry_video(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
+    """نقطة الدخول الرئيسية."""
     args = parse_args()
     init_db()
 
-    print("\n" + "═" * 65)
-    print("  🔄 Retry Publish System")
-    print("═" * 65)
-    print(f"  Language     : {args.lang.upper()}")
-    print(f"  Content Mode : {args.content_mode.upper()}")
-    print(f"  Platform     : {args.platform.upper()}")
-    print(f"  Limit        : {args.limit}")
-    print(f"  Dry Run      : {'YES' if args.dry_run else 'NO'}")
-    if args.video_number:
-        print(f"  Video Number : #{args.video_number}")
-    print("═" * 65)
-
-    # عرض حالة DB
+    _print_header(args)
     print_db_summary()
 
-    # ── البحث عن فيديوهات تحتاج إعادة نشر ────────────────────────────────
+    # البحث
     print("\n  🔍 Searching for pending videos...")
 
     pending = find_pending_videos(
@@ -446,11 +706,11 @@ def main() -> None:
         )
         notify_info(
             "🔄 Retry: No pending videos",
-            silent=True,
+            silent = True,
         )
         return
 
-    # تطبيق الحد الأقصى
+    # تطبيق الحد
     if len(pending) > args.limit:
         print(
             f"\n  ⚠️  Found {len(pending)} pending — "
@@ -458,103 +718,46 @@ def main() -> None:
         )
         pending = pending[:args.limit]
     else:
-        print(f"\n  📋 Found {len(pending)} pending video(s)")
-
-    # ── عرض القائمة ──────────────────────────────────────────────────────
-    print("\n  📝 Pending videos:")
-    print("  " + "─" * 60)
-    for v in pending:
-        needs = []
-        if v["needs_fb"]:
-            needs.append("📘 FB")
-        if v["needs_yt"]:
-            needs.append("📺 YT")
-
         print(
-            f"  #{v['video_number']:>4} "
-            f"{v['lang'].upper()} "
-            f"[{v['content_mode']:>5}] "
-            f"→ {' + '.join(needs)}"
+            f"\n  📋 Found {len(pending)} pending video(s)"
         )
-    print("  " + "─" * 60)
+
+    # عرض القائمة
+    _print_pending_list(pending)
 
     if args.dry_run:
         print("\n  🔍 DRY RUN — No actual publishing\n")
 
-    # ── التحقق من credentials ────────────────────────────────────────────
+    # التحقق من credentials
     if not args.dry_run:
-        need_fb_check = any(v["needs_fb"] for v in pending)
-        need_yt_check = any(v["needs_yt"] for v in pending)
+        _check_facebook_credentials(pending)
 
-        if need_fb_check:
-            print("\n  📘 Checking Facebook credentials...")
-            if not fb_check_credentials():
-                print(
-                    "  ❌ Facebook credentials invalid! "
-                    "Skipping FB."
-                )
-                for v in pending:
-                    v["needs_fb"] = False
+    # إعادة النشر
+    results: list[RetryResult] = []
 
-        if need_yt_check:
-            # ملاحظة: YouTube credentials تختلف لكل لغة
-            print("\n  📺 YouTube credentials check skipped")
-            print(
-                "     (will be checked per-video during publish)"
-            )
-
-    # ── إعادة النشر ──────────────────────────────────────────────────────
-    results = []
     for i, video in enumerate(pending, 1):
         print(f"\n[{i}/{len(pending)}]")
 
         try:
-            r = retry_video(video, dry_run=args.dry_run)
-            results.append(r)
+            result = retry_video(
+                video,
+                dry_run = args.dry_run,
+            )
+            results.append(result)
+
         except KeyboardInterrupt:
             print("\n  ⛔ Interrupted by user")
             break
+
         except Exception as e:
             print(f"  ❌ Unexpected error: {e}")
             traceback.print_exc()
 
-    # ── الملخص النهائي ───────────────────────────────────────────────────
-    print("\n" + "═" * 65)
-    print("  📊 Retry Summary")
-    print("═" * 65)
-
-    total_fb_success = sum(
-        1 for r in results if r["fb_success"]
-    )
-    total_yt_success = sum(
-        1 for r in results if r["yt_success"]
-    )
-    total_errors = sum(
-        1 for r in results if r["errors"]
-    )
-
-    print(f"  📘 Facebook published: {total_fb_success}")
-    print(f"  📺 YouTube published : {total_yt_success}")
-    print(f"  ❌ With errors       : {total_errors}")
-    print("═" * 65)
-
-    if total_errors > 0:
-        print("\n  ❌ Errors:")
-        for r in results:
-            if r["errors"]:
-                num = r["video_number"]
-                for err in r["errors"]:
-                    print(f"     #{num}: {err}")
+    # الملخص
+    _print_summary(results)
 
     # إشعار نهائي
-    if not args.dry_run and (total_fb_success or total_yt_success):
-        notify_info(
-            f"🔄 Retry complete!\n"
-            f"📘 Facebook: {total_fb_success}\n"
-            f"📺 YouTube:  {total_yt_success}\n"
-            f"❌ Errors:   {total_errors}",
-            skip_rate=True,
-        )
+    _send_final_notification(results, args.dry_run)
 
     print()
 
