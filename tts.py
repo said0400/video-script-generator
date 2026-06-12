@@ -9,6 +9,7 @@ Features:
   ✅ Auto-retry on rate limits
   ✅ Truncation detection
   ✅ Thread-safe
+  ✅ Compatible with google-genai 1.0.0+
 """
 
 from __future__ import annotations
@@ -550,6 +551,68 @@ def _build_tts_config(voice_name: str) -> types.GenerateContentConfig:
     )
 
 
+def _extract_parts_from_chunk(chunk) -> list:
+    """
+    استخراج parts من chunk بطريقة متوافقة مع كل إصدارات google-genai.
+
+    يدعم:
+        - google-genai 0.x: chunk.parts
+        - google-genai 1.x: chunk.candidates[0].content.parts
+    """
+    # Pattern 1: Direct parts (older SDK / some responses)
+    if hasattr(chunk, 'parts') and chunk.parts:
+        return list(chunk.parts)
+
+    # Pattern 2: Via candidates (newer SDK 1.0.0+)
+    if hasattr(chunk, 'candidates') and chunk.candidates:
+        try:
+            candidates = chunk.candidates
+            if len(candidates) > 0:
+                candidate = candidates[0]
+
+                if hasattr(candidate, 'content') and candidate.content:
+                    content = candidate.content
+
+                    if hasattr(content, 'parts') and content.parts:
+                        return list(content.parts)
+        except (IndexError, AttributeError):
+            pass
+
+    # Pattern 3: Try text attribute (fallback)
+    if hasattr(chunk, 'text') and chunk.text:
+        return []
+
+    return []
+
+
+def _extract_audio_from_part(part) -> Optional[tuple[bytes, str]]:
+    """
+    استخراج بيانات الصوت من part واحد.
+
+    Returns:
+        (audio_data, mime_type) أو None
+    """
+    try:
+        # Standard inline_data check
+        if not hasattr(part, 'inline_data'):
+            return None
+
+        inline_data = part.inline_data
+        if inline_data is None:
+            return None
+
+        if not hasattr(inline_data, 'data') or not inline_data.data:
+            return None
+
+        data = inline_data.data
+        mime = getattr(inline_data, 'mime_type', None) or "audio/wav"
+
+        return (data, mime)
+
+    except (AttributeError, TypeError):
+        return None
+
+
 def _generate_audio_chunks(
     client:   genai.Client,
     prompt:   str,
@@ -557,6 +620,8 @@ def _generate_audio_chunks(
 ) -> list[tuple[bytes, str]]:
     """
     توليد الصوت من Gemini.
+
+    متوافق مع google-genai 0.x و 1.x.
 
     Returns:
         list of (audio_data, mime_type)
@@ -575,19 +640,17 @@ def _generate_audio_chunks(
         contents = contents,
         config   = config,
     ):
-        if not chunk.parts:
+        # استخراج parts بطريقة متوافقة
+        parts = _extract_parts_from_chunk(chunk)
+
+        if not parts:
             continue
 
-        part = chunk.parts[0]
-
-        if (
-            part.inline_data and
-            part.inline_data.data
-        ):
-            audio_chunks.append((
-                part.inline_data.data,
-                part.inline_data.mime_type,
-            ))
+        # استخراج الصوت من كل part
+        for part in parts:
+            audio = _extract_audio_from_part(part)
+            if audio:
+                audio_chunks.append(audio)
 
     return audio_chunks
 
