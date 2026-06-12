@@ -118,12 +118,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: remotion/package-lock.json
 
       - name: 📦 Install Node dependencies
         working-directory: remotion
-        run: npm ci
+        run: |
+          if [ -f "package-lock.json" ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: 🌐 Install Playwright Chromium
         run: python -m playwright install chromium --with-deps
