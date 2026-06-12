@@ -1,0 +1,77 @@
+# .github/workflows/retry_publish.yml
+name: 🔄 Retry Failed Publishes
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # كل 6 ساعات
+
+  workflow_dispatch:
+    inputs:
+      lang:
+        description: "اللغة"
+        type: choice
+        options: ["all", "ar", "fr", "en"]
+        default: "all"
+      content_mode:
+        description: "نوع المحتوى"
+        type: choice
+        options: ["all", "short", "long"]
+        default: "all"
+      platform:
+        description: "المنصة"
+        type: choice
+        options: ["all", "facebook", "youtube"]
+        default: "all"
+      dry_run:
+        description: "Dry run؟"
+        type: choice
+        options: ["false", "true"]
+        default: "false"
+
+concurrency:
+  group: retry-publish
+  cancel-in-progress: false
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: |
+          pip install requests openpyxl
+
+      - name: 📥 Restore DB
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vsg-database-ar
+          if_no_artifact_found: ignore
+
+      - name: 🔄 Retry Publishes
+        env:
+          FB_PAGE_ID:        ${{ secrets.FB_PAGE_ID_AR }}
+          FB_PAGE_TOKEN:     ${{ secrets.FB_PAGE_TOKEN_AR }}
+          YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID_AR }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET_AR }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_AR }}
+          GREEN_API_INSTANCE_ID: ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN:       ${{ secrets.GREEN_API_TOKEN }}
+          WHATSAPP_PHONE_NUMBER: ${{ secrets.WHATSAPP_PHONE_NUMBER }}
+        run: |
+          FLAGS=""
+          [ "${{ github.event.inputs.lang }}" != "all" ] && \
+            FLAGS="$FLAGS --lang ${{ github.event.inputs.lang }}"
+          [ "${{ github.event.inputs.content_mode }}" != "all" ] && \
+            FLAGS="$FLAGS --content-mode ${{ github.event.inputs.content_mode }}"
+          [ "${{ github.event.inputs.platform }}" != "all" ] && \
+            FLAGS="$FLAGS --platform ${{ github.event.inputs.platform }}"
+          [ "${{ github.event.inputs.dry_run }}" = "true" ] && \
+            FLAGS="$FLAGS --dry-run"
+
+          python retry_publish.py $FLAGS
