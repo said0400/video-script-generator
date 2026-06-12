@@ -1,19 +1,41 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# .gitignore — Video Script Generator
+# 🚫 .gitignore — Video Script Generator
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Updated for:
+#   ✅ stable-ts (replaced WhisperX)
+#   ✅ Long videos support
+#   ✅ Multi-format scripts
+#   ✅ Notifications log
+#
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-# ── Environment ───────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🔒 Secrets & Environment                             ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 .env
 .env.local
 .env.*.local
+.envrc
+*.env.bak
+
+# Notification rate limit cache
+.notify_rate_limit.json
 
 
-# ── Python ────────────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🐍 Python                                            ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# Bytecode
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyo
+
+# Build artifacts
 .Python
 .python-version
 pip-log.txt
@@ -23,94 +45,239 @@ pip-delete-this-directory.txt
 *.egg
 dist/
 build/
+develop-eggs/
+downloads/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.manifest
+*.spec
+
+# Testing & Linting
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+virtualenv/
 
 
-# ── Database ──────────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🗄️ Databases                                          ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
 
 
-# ── Audio / Video (ملفات مؤقتة) ──────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🎵 Audio & Video (temporary)                         ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 *.wav
 *.mp3
 *.ogg
 *.aac
+*.m4a
+*.flac
 *.mp4
 *.mov
 *.webm
-*.flac
+*.mkv
+*.avi
+*.opus
 
 
-# ── Images (مؤقتة) ────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🖼️ Images (temporary)                                 ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 *.png
 *.jpg
 *.jpeg
 *.gif
 *.webp
+*.bmp
+*.tiff
+*.svg
+*.ico
 
 
-# ── Output ────────────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       📁 Output Directories                                ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 output/
 output_*/
+output_long/
+reports/
+
+# Temp directories
 /tmp/vsg_*/
+tmp/
+temp/
+.tmp/
 
 
-# ── Node.js ───────────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🟢 Node.js                                           ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 node_modules/
 remotion/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 .npm
+.yarn-integrity
+.pnp.*
 
 
-# ── Manifests مؤقتة ───────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       📄 Manifests & Reports (temporary)                   ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 *_manifest.json
+*_thumbnail.html
+*_words.srt
 
 
-# ── OS ────────────────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       💻 OS Files                                          ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# macOS
 .DS_Store
 .DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
+.AppleDouble
+.LSOverride
+Icon
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
 ehthumbs.db
+ehthumbs_vista.db
 Thumbs.db
+Thumbs.db:encryptable
 desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
 
 
-# ── IDE ───────────────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       🛠️ IDEs & Editors                                     ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# VS Code
 .vscode/
+*.code-workspace
+
+# JetBrains (PyCharm, IntelliJ, etc.)
 .idea/
+*.iml
+*.ipr
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
 *.swp
 *.swo
-*~
+*.swn
+*.bak
+.netrwhist
+
+# Emacs
+\#*\#
+.\#*
+
+# Cursor
+.cursor/
 
 
-# ── Logs ──────────────────────────────────────────────────────────────────────
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       📝 Logs & Cache                                      ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
 *.log
 logs/
+notifications.log
 
-
-# ── Thumbnails HTML مؤقتة ─────────────────────────────────────────────────────
-*_thumbnail.html
-
-
-# ── WhisperX / HuggingFace cache (لا ترفعها) ─────────────────────────────────
+# Model caches (downloaded by stable-ts, transformers, etc.)
 .cache/
+~/.cache/
+.stable-ts/
+.transformers/
+.huggingface/
 
 
-# ── ما يجب الاحتفاظ به ────────────────────────────────────────────────────────
-# هذه الملفات يجب رفعها للمستودع:
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       ⚙️ Build & Distribution                              ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# Playwright
+playwright-report/
+test-results/
+
+
+# ╔════════════════════════════════════════════════════════════════════════════╗
+# ║                       ✅ Exceptions — Keep These Files                     ║
+# ╚════════════════════════════════════════════════════════════════════════════╝
+
+# Scripts (Excel files)
 !scripts/videos_ar.xlsx
 !scripts/videos_fr.xlsx
 !scripts/videos_en.xlsx
+!scripts/videos_ar_long.xlsx
+!scripts/videos_fr_long.xlsx
+!scripts/videos_en_long.xlsx
+
+# Directory placeholders
 !assets/music/.gitkeep
+!assets/music/motivation/.gitkeep
+!assets/music/cinematic/.gitkeep
 !assets/videos/.gitkeep
 !sfx/swoosh/.gitkeep
 !sfx/whoosh/.gitkeep
+!sfx/smart/.gitkeep
+!sfx/transitions/.gitkeep
+
+# Lock files for reproducible builds
 !remotion/package-lock.json
+!remotion/yarn.lock
