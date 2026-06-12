@@ -127,9 +127,21 @@ CTA_TEMPLATES: dict[str, str] = {
 # CREDENTIALS
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _read_creds_from_env() -> FacebookCreds:
+    """
+    قراءة Facebook credentials من البيئة.
+
+    لا يرفع exception (للاستخدام مع credentials_available).
+    """
+    return FacebookCreds(
+        page_id = os.environ.get("FB_PAGE_ID",    "").strip(),
+        token   = os.environ.get("FB_PAGE_TOKEN", "").strip(),
+    )
+
+
 def _get_creds() -> FacebookCreds:
     """
-    جلب Facebook credentials من البيئة.
+    جلب Facebook credentials من البيئة (مع validation).
 
     Returns:
         FacebookCreds
@@ -137,10 +149,7 @@ def _get_creds() -> FacebookCreds:
     Raises:
         RuntimeError: إذا credentials ناقصة
     """
-    creds = FacebookCreds(
-        page_id = os.environ.get("FB_PAGE_ID",    "").strip(),
-        token   = os.environ.get("FB_PAGE_TOKEN", "").strip(),
-    )
+    creds = _read_creds_from_env()
 
     if not creds.is_valid():
         raise RuntimeError(
@@ -153,9 +162,8 @@ def _get_creds() -> FacebookCreds:
 
 def credentials_available() -> bool:
     """التحقق من وجود credentials بدون رفع exception."""
-    page_id = os.environ.get("FB_PAGE_ID",    "").strip()
-    token   = os.environ.get("FB_PAGE_TOKEN", "").strip()
-    return bool(page_id and token)
+    creds = _read_creds_from_env()
+    return creds.is_valid()
 
 
 def check_credentials() -> bool:
