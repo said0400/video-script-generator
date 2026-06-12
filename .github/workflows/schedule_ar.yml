@@ -104,8 +104,9 @@ jobs:
 
       - name: 📦 Install openai-whisper (required by stable-ts)
         run: |
-          pip install setuptools wheel
+          pip install "setuptools<81.0.0" wheel
           pip install openai-whisper==20240930 --no-build-isolation
+          pip install --upgrade setuptools
 
       - name: 📦 Install Python dependencies
         run: pip install -r requirements.txt
