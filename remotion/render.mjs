@@ -339,7 +339,11 @@ function buildSentenceBoundaryMap() {
 
     for (let f = 0; f < config.flashFrames; f++) {
       const frame = endFr + f;
-      if (frame >= 0 && frame < totalFrames && map[frame] === null) {
+      if (
+        frame >= 0 &&
+        frame < totalFrames &&
+        map[frame] === null
+      ) {
         map[frame] = {
           tag,
           config,
@@ -355,7 +359,9 @@ function buildSentenceBoundaryMap() {
 
   console.log(`\n🎬 Sentence boundaries: ${boundaries.length}`);
   boundaries.forEach((b) =>
-    console.log(`   [${b.tag || "info"}] @ ${parseFloat(b.end).toFixed(3)}s`)
+    console.log(
+      `   [${b.tag || "info"}] @ ${parseFloat(b.end).toFixed(3)}s`
+    )
   );
 
   return map;
@@ -383,7 +389,9 @@ function buildClipPlan() {
     return plan;
   }
 
-  const totalClips    = Math.max(1, Math.floor(effectiveDuration / clip_duration));
+  const totalClips    = Math.max(
+    1, Math.floor(effectiveDuration / clip_duration)
+  );
   const actualClipDur = effectiveDuration / totalClips;
 
   const plan = Array.from({ length: totalClips }, (_, i) => ({
@@ -399,7 +407,9 @@ function buildClipPlan() {
 }
 
 function logClipPlan(plan) {
-  console.log(`\n📋 Clip plan: ${plan.length} clips [${content_mode.toUpperCase()}]`);
+  console.log(
+    `\n📋 Clip plan: ${plan.length} clips [${content_mode.toUpperCase()}]`
+  );
   plan.forEach((c) =>
     console.log(
       `   [${c.index + 1}] ${c.start.toFixed(2)}s → ` +
@@ -424,7 +434,10 @@ function buildWordList() {
       if (!w.word) continue;
       const start = parseFloat(w.start);
       const end   = parseFloat(w.end);
-      if (isNaN(start) || isNaN(end) || start < 0 || end <= start) continue;
+      if (
+        isNaN(start) || isNaN(end) ||
+        start < 0 || end <= start
+      ) continue;
 
       words.push({
         word:    w.word.trim(),
@@ -439,7 +452,10 @@ function buildWordList() {
   // ✅ Fallback: equal split
   if (words.length === 0 && sentences.length > 0) {
     console.log("⚠️  No word alignment — equal split fallback");
-    const allText = sentences.join(" ").split(/\s+/).filter(Boolean);
+    const allText = sentences
+      .join(" ")
+      .split(/\s+/)
+      .filter(Boolean);
     const perWord = effectiveDuration / Math.max(allText.length, 1);
 
     for (let i = 0; i < allText.length; i++) {
@@ -459,8 +475,14 @@ function buildWordList() {
   if (words.length > 0) {
     const first = words[0];
     const last  = words[words.length - 1];
-    console.log(`   [0]  ${first.start.toFixed(3)}s "${first.word}" [${first.tag}]`);
-    console.log(`   [-1] ${last.start.toFixed(3)}s "${last.word}" [${last.tag}]`);
+    console.log(
+      `   [0]  ${first.start.toFixed(3)}s ` +
+      `"${first.word}" [${first.tag}]`
+    );
+    console.log(
+      `   [-1] ${last.start.toFixed(3)}s ` +
+      `"${last.word}" [${last.tag}]`
+    );
   }
 
   return words;
@@ -611,14 +633,24 @@ function computeWordAnimation(progress, scaleMult) {
   }
   if (progress > 0.85) {
     const t = (progress - 0.85) / 0.15;
-    return { scale: 1.0 - t * 0.05, opacity: 1 - t * 0.3, translateY: 0 };
+    return {
+      scale:      1.0 - t * 0.05,
+      opacity:    1 - t * 0.3,
+      translateY: 0,
+    };
   }
   return { scale: scaleMult, opacity: 1.0, translateY: 0 };
 }
 
 function computeTransitionEffect(transitionState, globalFrame) {
   if (!transitionState) {
-    return { flashOpacity: 0, flashColor: "rgba(0,0,0,0)", shakeX: 0, shakeY: 0, transScale: 1.0 };
+    return {
+      flashOpacity: 0,
+      flashColor:   "rgba(0,0,0,0)",
+      shakeX:       0,
+      shakeY:       0,
+      transScale:   1.0,
+    };
   }
 
   const { config, progress: tp } = transitionState;
@@ -626,8 +658,7 @@ function computeTransitionEffect(transitionState, globalFrame) {
   let flashOpacity = tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
   flashOpacity = Math.max(0, Math.min(1, flashOpacity));
 
-  let shakeX = 0;
-  let shakeY = 0;
+  let shakeX = 0, shakeY = 0;
   if (config.shakeAmount > 0) {
     const shake = config.shakeAmount * (1 - tp);
     shakeX = Math.sin(globalFrame * 2.3) * shake;
@@ -639,7 +670,13 @@ function computeTransitionEffect(transitionState, globalFrame) {
     transScale = 1.0 + (config.scaleBoost - 1.0) * (1 - tp * 2);
   }
 
-  return { flashOpacity, flashColor: config.flashColor, shakeX, shakeY, transScale };
+  return {
+    flashOpacity,
+    flashColor: config.flashColor,
+    shakeX,
+    shakeY,
+    transScale,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -740,8 +777,10 @@ function buildHTMLShort({
   const trans        = computeTransitionEffect(transitionState, globalFrame);
   const baseFontSize = computeFontSize(word, ar, tagStyle.scaleMult, false);
 
-  const finalScale   = wordAnim.scale * trans.transScale * (isHookIntro ? hiScale : 1.0);
-  const finalOpacity = word ? wordAnim.opacity * (isHookIntro ? hiOpacity : 1.0) : 0;
+  const finalScale   =
+    wordAnim.scale * trans.transScale * (isHookIntro ? hiScale : 1.0);
+  const finalOpacity =
+    word ? wordAnim.opacity * (isHookIntro ? hiOpacity : 1.0) : 0;
 
   const wordTransform =
     `translate(-50%, calc(-50% + ${wordAnim.translateY.toFixed(1)}px)) ` +
@@ -761,7 +800,8 @@ function buildHTMLShort({
     ? `background:linear-gradient(135deg,#FF1744 0%,#D50000 100%);
        padding:24px 60px; border-radius:9999px;
        border:3px solid rgba(255,255,255,0.3);
-       box-shadow:0 0 60px rgba(255,23,68,0.8),0 0 120px rgba(255,23,68,0.4);`
+       box-shadow:0 0 60px rgba(255,23,68,0.8),
+                  0 0 120px rgba(255,23,68,0.4);`
     : `background:transparent;padding:0;`;
 
   const wordTextStyle = isPower
@@ -777,8 +817,9 @@ function buildHTMLShort({
        display:block; word-break:break-word;
        -webkit-text-stroke:${tagStyle.strokeWidth}px ${tagStyle.strokeColor};
        paint-order:stroke fill;
-       text-shadow:0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
-                   0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
+       text-shadow:
+         0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
+         0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
        filter:brightness(${tagStyle.brightness});`;
 
   return `<!DOCTYPE html>
@@ -786,41 +827,78 @@ function buildHTMLShort({
 <head><meta charset="UTF-8"/>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  html,body { width:${WIDTH}px; height:${HEIGHT}px; overflow:hidden; background:transparent; }
-  .ot { position:absolute; top:0; left:0; right:0; height:40%;
-    background:linear-gradient(to bottom,rgba(0,0,0,0.85) 0%,rgba(0,0,0,0.5) 50%,transparent 100%);
-    pointer-events:none; z-index:1; }
-  .ob { position:absolute; bottom:0; left:0; right:0; height:42%;
-    background:linear-gradient(to top,rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.45) 65%,transparent 100%);
-    pointer-events:none; z-index:1; }
-  .flash { position:absolute; inset:0; background:${trans.flashColor};
-    opacity:${trans.flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
-  .tc { position:absolute; top:410px; left:50%; width:92%; max-width:980px;
+  html,body {
+    width:${WIDTH}px; height:${HEIGHT}px;
+    overflow:hidden; background:transparent;
+  }
+  .ot {
+    position:absolute; top:0; left:0; right:0; height:40%;
+    background:linear-gradient(to bottom,
+      rgba(0,0,0,0.85) 0%,rgba(0,0,0,0.5) 50%,transparent 100%);
+    pointer-events:none; z-index:1;
+  }
+  .ob {
+    position:absolute; bottom:0; left:0; right:0; height:42%;
+    background:linear-gradient(to top,
+      rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.45) 65%,transparent 100%);
+    pointer-events:none; z-index:1;
+  }
+  .flash {
+    position:absolute; inset:0;
+    background:${trans.flashColor};
+    opacity:${trans.flashOpacity.toFixed(4)};
+    pointer-events:none; z-index:50;
+  }
+  .tc {
+    position:absolute; top:410px; left:50%;
+    width:92%; max-width:980px;
     direction:${titleDir}; text-align:center; z-index:30;
     transform:translateX(-50%) translateY(${titleAnim.translateY.toFixed(2)}px);
-    opacity:${titleAnim.opacity.toFixed(4)}; }
-  .tc::after { content:''; display:block; margin:16px auto 0; width:120px; height:4px;
-    border-radius:2px; background:linear-gradient(90deg,transparent,#FF1744,transparent);
-    opacity:${titleAnim.opacity.toFixed(4)}; }
-  .tt { font-family:${titleFont}; font-size:${titleFontSize}px; font-weight:900; color:#FFFFFF;
-    display:inline-flex; align-items:center; justify-content:center; gap:14px;
+    opacity:${titleAnim.opacity.toFixed(4)};
+  }
+  .tc::after {
+    content:''; display:block; margin:16px auto 0;
+    width:120px; height:4px; border-radius:2px;
+    background:linear-gradient(90deg,transparent,#FF1744,transparent);
+    opacity:${titleAnim.opacity.toFixed(4)};
+  }
+  .tt {
+    font-family:${titleFont}; font-size:${titleFontSize}px;
+    font-weight:900; color:#FFFFFF;
+    display:inline-flex; align-items:center;
+    justify-content:center; gap:14px;
     line-height:1.3; text-align:center; direction:${titleDir};
     -webkit-text-stroke:2px rgba(0,0,0,0.8); paint-order:stroke fill;
-    text-shadow:0 0 30px rgba(255,23,68,0.6),0 4px 20px rgba(0,0,0,0.9),2px 2px 0 rgba(0,0,0,0.8); }
+    text-shadow:
+      0 0 30px rgba(255,23,68,0.6),
+      0 4px 20px rgba(0,0,0,0.9),
+      2px 2px 0 rgba(0,0,0,0.8);
+  }
   .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
-  .hb { position:absolute; top:${titleArabic ? "290px" : "270px"}; left:50%;
+  .hb {
+    position:absolute;
+    top:${titleArabic ? "290px" : "270px"}; left:50%;
     transform:translateX(-50%);
-    background:linear-gradient(135deg,rgba(220,0,0,0.95),rgba(160,0,0,0.95));
-    color:#fff; font-family:${hookFont}; font-size:${hookAr ? "32px" : "28px"};
-    font-weight:900; padding:12px 38px; border-radius:9999px; z-index:25;
+    background:linear-gradient(
+      135deg,rgba(220,0,0,0.95),rgba(160,0,0,0.95));
+    color:#fff; font-family:${hookFont};
+    font-size:${hookAr ? "32px" : "28px"};
+    font-weight:900; padding:12px 38px;
+    border-radius:9999px; z-index:25;
     white-space:nowrap; direction:${hookDir};
     border:2px solid rgba(255,120,120,0.4);
-    box-shadow:0 0 50px rgba(220,0,0,0.7),0 8px 24px rgba(0,0,0,0.5); }
-  .wc { position:absolute; left:50%; top:54%;
+    box-shadow:
+      0 0 50px rgba(220,0,0,0.7),
+      0 8px 24px rgba(0,0,0,0.5);
+  }
+  .wc {
+    position:absolute; left:50%; top:54%;
     transform:${wordTransform};
     opacity:${finalOpacity.toFixed(4)};
     direction:${dir}; text-align:center; z-index:10;
-    width:95%; max-width:1020px; transform-origin:center center; }
+    width:95%; max-width:1020px;
+    transform-origin:center center;
+  }
   .wp { display:inline-block; ${powerContainerStyle} }
   .wt { ${wordTextStyle} }
 </style>
@@ -837,7 +915,9 @@ function buildHTMLShort({
     </div>
   </div>
   ${isHook ? `<div class="hb">${esc(hookText)}</div>` : ""}
-  ${word ? `<div class="wc"><div class="wp"><span class="wt">${esc(word)}</span></div></div>` : ""}
+  ${word
+    ? `<div class="wc"><div class="wp"><span class="wt">${esc(word)}</span></div></div>`
+    : ""}
 </body>
 </html>`;
 }
@@ -864,7 +944,7 @@ function buildHTMLLong({
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
-  const sentDir  = currentSentence ? getDir(currentSentence) : "ltr";
+  const sentDir  = currentSentence ? getDir(currentSentence)       : "ltr";
   const sentFont = currentSentence ? getFontFamily(currentSentence) : `"Noto Sans", sans-serif`;
 
   const tagStyle = getWordStyle(tag);
@@ -876,7 +956,8 @@ function buildHTMLLong({
     titleOpacity = (totalFrames - globalFrame) / OUTRO_FRAMES;
   }
 
-  let wordScale = tagStyle.scaleMult, wordOpacity = word ? 1.0 : 0;
+  let wordScale   = tagStyle.scaleMult;
+  let wordOpacity = word ? 1.0 : 0;
   if (word && progress < 0.15) {
     const t  = progress / 0.15;
     wordScale   = 0.6 + (1 - Math.pow(1 - t, 2)) * (tagStyle.scaleMult - 0.6);
@@ -885,7 +966,11 @@ function buildHTMLLong({
     wordOpacity = 1 - ((progress - 0.85) / 0.15) * 0.3;
   }
 
-  let flashOpacity = 0, flashColor = "rgba(0,0,0,0)", shakeX = 0, shakeY = 0;
+  let flashOpacity = 0;
+  let flashColor   = "rgba(0,0,0,0)";
+  let shakeX       = 0;
+  let shakeY       = 0;
+
   if (transitionState) {
     const { config, progress: tp } = transitionState;
     flashOpacity = tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
@@ -912,8 +997,9 @@ function buildHTMLLong({
     display:block; word-break:break-word;
     -webkit-text-stroke:${tagStyle.strokeWidth}px ${tagStyle.strokeColor};
     paint-order:stroke fill;
-    text-shadow:0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
-                0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
+    text-shadow:
+      0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
+      0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
     filter:brightness(${tagStyle.brightness});`;
 
   const subtitleHtml = currentSentence
@@ -934,41 +1020,78 @@ function buildHTMLLong({
 <head><meta charset="UTF-8"/>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  html,body { width:${WIDTH}px; height:${HEIGHT}px; overflow:hidden; background:transparent; }
-  .ot { position:absolute; top:0; left:0; right:0; height:35%;
+  html,body {
+    width:${WIDTH}px; height:${HEIGHT}px;
+    overflow:hidden; background:transparent;
+  }
+  .ot {
+    position:absolute; top:0; left:0; right:0; height:35%;
     background:linear-gradient(to bottom,rgba(0,0,0,0.8) 0%,transparent 100%);
-    pointer-events:none; z-index:1; }
-  .ob { position:absolute; bottom:0; left:0; right:0; height:38%;
-    background:linear-gradient(to top,rgba(0,0,0,0.92) 0%,rgba(0,0,0,0.5) 60%,transparent 100%);
-    pointer-events:none; z-index:1; }
-  .flash { position:absolute; inset:0; background:${flashColor};
-    opacity:${flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
-  .tc { position:absolute; top:28px;
+    pointer-events:none; z-index:1;
+  }
+  .ob {
+    position:absolute; bottom:0; left:0; right:0; height:38%;
+    background:linear-gradient(to top,
+      rgba(0,0,0,0.92) 0%,rgba(0,0,0,0.5) 60%,transparent 100%);
+    pointer-events:none; z-index:1;
+  }
+  .flash {
+    position:absolute; inset:0;
+    background:${flashColor};
+    opacity:${flashOpacity.toFixed(4)};
+    pointer-events:none; z-index:50;
+  }
+  .tc {
+    position:absolute; top:28px;
     ${titleDir === "rtl" ? "right:40px" : "left:40px"};
     direction:${titleDir};
     text-align:${titleDir === "rtl" ? "right" : "left"};
-    z-index:30; opacity:${titleOpacity.toFixed(4)}; }
-  .tt { font-family:${titleFont}; font-size:${titleFontSize}px; font-weight:900; color:#FFFFFF;
-    display:inline-flex; align-items:center; gap:10px; line-height:1.2; direction:${titleDir};
+    z-index:30; opacity:${titleOpacity.toFixed(4)};
+  }
+  .tt {
+    font-family:${titleFont}; font-size:${titleFontSize}px;
+    font-weight:900; color:#FFFFFF;
+    display:inline-flex; align-items:center;
+    gap:10px; line-height:1.2; direction:${titleDir};
     -webkit-text-stroke:1px rgba(0,0,0,0.8); paint-order:stroke fill;
-    text-shadow:0 0 20px rgba(255,23,68,0.5),0 2px 10px rgba(0,0,0,0.9); }
+    text-shadow:
+      0 0 20px rgba(255,23,68,0.5),
+      0 2px 10px rgba(0,0,0,0.9);
+  }
   .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
-  .tline { display:block; margin-top:8px; width:80px; height:3px; border-radius:2px; background:#FF1744; }
-  .wc { position:absolute; left:50%; top:46%;
+  .tline {
+    display:block; margin-top:8px; width:80px; height:3px;
+    border-radius:2px; background:#FF1744;
+  }
+  .wc {
+    position:absolute; left:50%; top:46%;
     transform:${wordTransform};
     opacity:${wordOpacity.toFixed(4)};
     direction:${dir}; text-align:center; z-index:10;
-    width:80%; max-width:1400px; transform-origin:center center; }
+    width:80%; max-width:1400px;
+    transform-origin:center center;
+  }
   .wt { ${wordTextStyle} }
-  .subtitle { position:absolute; bottom:48px; left:60px; right:60px;
+  .subtitle {
+    position:absolute; bottom:48px; left:60px; right:60px;
     direction:${sentDir}; text-align:center; z-index:20;
-    font-family:${sentFont}; font-size:${ar ? "34px" : "30px"};
-    font-weight:700; line-height:1.6; letter-spacing:${ar ? "0.5px" : "1px"}; }
-  .sw { color:rgba(255,255,255,0.65); -webkit-text-stroke:1px rgba(0,0,0,0.6);
-    paint-order:stroke fill; display:inline; }
-  .sh { color:#FFD700; -webkit-text-stroke:1px rgba(0,0,0,0.8);
+    font-family:${sentFont};
+    font-size:${ar ? "34px" : "30px"};
+    font-weight:700; line-height:1.6;
+    letter-spacing:${ar ? "0.5px" : "1px"};
+  }
+  .sw {
+    color:rgba(255,255,255,0.65);
+    -webkit-text-stroke:1px rgba(0,0,0,0.6);
     paint-order:stroke fill; display:inline;
-    text-shadow:0 0 20px rgba(255,215,0,0.8); font-weight:900; }
+  }
+  .sh {
+    color:#FFD700;
+    -webkit-text-stroke:1px rgba(0,0,0,0.8);
+    paint-order:stroke fill; display:inline;
+    text-shadow:0 0 20px rgba(255,215,0,0.8);
+    font-weight:900;
+  }
 </style>
 </head>
 <body>
@@ -983,8 +1106,12 @@ function buildHTMLLong({
     </div>
     <span class="tline"></span>
   </div>
-  ${word ? `<div class="wc"><span class="wt">${esc(word)}</span></div>` : ""}
-  ${subtitleHtml ? `<div class="subtitle">${subtitleHtml}</div>` : ""}
+  ${word
+    ? `<div class="wc"><span class="wt">${esc(word)}</span></div>`
+    : ""}
+  ${subtitleHtml
+    ? `<div class="subtitle">${subtitleHtml}</div>`
+    : ""}
 </body>
 </html>`;
 }
@@ -994,11 +1121,14 @@ function buildHTMLLong({
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function launchBrowser() {
-  const browser = await chromium.launch({ headless: true, args: BROWSER_ARGS });
+  const browser = await chromium.launch({
+    headless: true,
+    args:     BROWSER_ARGS,
+  });
   const context = await browser.newContext({
-    viewport: { width: WIDTH, height: HEIGHT },
+    viewport:          { width: WIDTH, height: HEIGHT },
     deviceScaleFactor: 1,
-    locale: "ar-SA",
+    locale:            "ar-SA",
   });
   const page = await context.newPage();
   return { browser, page };
@@ -1007,8 +1137,12 @@ async function launchBrowser() {
 async function warmupFonts(page, builder) {
   for (const [w, l] of [["مرحبا", "ar"], ["Hello", "en"]]) {
     const html = builder({
-      word: w, tag: "information", isPower: false,
-      isHook: false, globalFrame: TITLE_SLIDE_FRAMES, progress: 0.5,
+      word:        w,
+      tag:         "information",
+      isPower:     false,
+      isHook:      false,
+      globalFrame: TITLE_SLIDE_FRAMES,
+      progress:    0.5,
     });
     const p = join(TMP, `init_${l}.html`);
     writeFileSync(p, html, "utf-8");
@@ -1029,7 +1163,9 @@ function collectUniqueShortStates(frameStateMap, boundaryMap) {
     const ts   = boundaryMap[f] || null;
     const isHI = f < HOOK_INTRO_FRAMES;
     const hip  = isHI ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1) : 0;
-    const key  = isHI ? hookIntroKey(f) : stateKey(frameStateMap[f], f, ts);
+    const key  = isHI
+      ? hookIntroKey(f)
+      : stateKey(frameStateMap[f], f, ts);
 
     if (!unique.has(key)) {
       unique.set(key, {
@@ -1056,7 +1192,7 @@ async function renderAllPNGsShort(page, frameStateMap, boundaryMap) {
   await warmupFonts(page, buildHTMLShort);
 
   const cache = new Map();
-  let done = 0;
+  let done    = 0;
 
   for (const [key, s] of unique) {
     const html = buildHTMLShort(s);
@@ -1108,14 +1244,18 @@ function collectUniqueLongStates(frameStateMap, boundaryMap, sentenceMap) {
   return unique;
 }
 
-async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) {
-  const unique = collectUniqueLongStates(frameStateMap, boundaryMap, sentenceMap);
+async function renderAllPNGsLong(
+  page, frameStateMap, boundaryMap, sentenceMap
+) {
+  const unique = collectUniqueLongStates(
+    frameStateMap, boundaryMap, sentenceMap
+  );
   console.log(`\n📸 ${unique.size} unique states [LONG]`);
 
   await warmupFonts(page, buildHTMLLong);
 
   const cache = new Map();
-  let done = 0;
+  let done    = 0;
 
   for (const [key, s] of unique) {
     const html = buildHTMLLong(s);
@@ -1142,7 +1282,7 @@ async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) 
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildMotionFilter(duration, idx, isHookClip) {
-  const frames      = Math.ceil(duration * FPS);
+  const frames       = Math.ceil(duration * FPS);
   const scaleAndCrop =
     `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
     `crop=${WIDTH}:${HEIGHT},setsar=1`;
@@ -1153,7 +1293,8 @@ function buildMotionFilter(duration, idx, isHookClip) {
       `scale=w='trunc((iw*1.05)/2)*2':h='trunc((ih*1.05)/2)*2',` +
       `zoompan=z='1.02':` +
       `x='if(gte(on,1),x${panDir}0.2,iw/2-(iw/zoom/2))':` +
-      `y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`
     );
   }
 
@@ -1169,12 +1310,26 @@ function buildMotionFilter(duration, idx, isHookClip) {
   // Short: 4 motion types
   const zooms = [
     `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
-    `zoompan=z='min(zoom+0.0008,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    `zoompan=z='min(zoom+0.0008,1.3)':` +
+    `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
+    `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+
     `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
-    `zoompan=z='max(zoom-0.0008,1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-    scaleAndCrop,
-    scaleAndCrop,
+    `zoompan=z='max(zoom-0.0008,1.0)':` +
+    `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
+    `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+
+    `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
+    `zoompan=z='1.1':` +
+    `x='if(gte(x,iw/10),x-0.5,iw/10)':y='ih/2-(ih/zoom/2)':` +
+    `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+
+    `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
+    `zoompan=z='1.1':` +
+    `x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':y='ih/2-(ih/zoom/2)':` +
+    `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
   ];
+
   return zooms[idx % 4];
 }
 
@@ -1184,36 +1339,52 @@ function buildColorGrading(isHookClip) {
     : `eq=contrast=1.12:brightness=-0.02:saturation=0.88`;
 }
 
-function processBackground(videoPath, duration, outPath, idx, isHookClip = false) {
+function processBackground(
+  videoPath, duration, outPath, idx, isHookClip = false
+) {
   const d  = Math.max(duration, 0.5);
   const fi = Math.min(0.3, d * 0.08);
   const fo = Math.min(0.3, d * 0.08);
 
   const motionFilter = buildMotionFilter(d, idx, isHookClip);
   const grading      = buildColorGrading(isHookClip);
-  const vf = `${motionFilter},${grading},fade=t=in:st=0:d=${fi.toFixed(3)},fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
+
+  const vf =
+    `${motionFilter},${grading},` +
+    `fade=t=in:st=0:d=${fi.toFixed(3)},` +
+    `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
 
   const srcDur  = probeDuration(videoPath);
-  const loopArg = srcDur > 0 && srcDur < d + 0.5 ? ["-stream_loop", "-1"] : [];
+  const loopArg =
+    srcDur > 0 && srcDur < d + 0.5
+      ? ["-stream_loop", "-1"]
+      : [];
 
   let r = runFFmpeg([
     "-y", ...loopArg, "-i", videoPath,
-    "-t", d.toFixed(3), "-vf", vf,
-    "-r", String(FPS), "-c:v", "libx264",
-    "-preset", "fast", "-crf", isHookClip ? "16" : "18",
-    "-pix_fmt", "yuv420p", "-an", outPath,
+    "-t", d.toFixed(3),
+    "-vf", vf,
+    "-r", String(FPS),
+    "-c:v", "libx264", "-preset", "fast",
+    "-crf", isHookClip ? "16" : "18",
+    "-pix_fmt", "yuv420p", "-an",
+    outPath,
   ]);
 
+  // Fallback
   if (r.status !== 0) {
     const simple =
       `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1`;
     runFFmpeg([
       "-y", "-stream_loop", "-1", "-i", videoPath,
-      "-t", d.toFixed(3), "-vf", simple,
-      "-r", String(FPS), "-c:v", "libx264",
-      "-preset", "fast", "-crf", "21",
-      "-pix_fmt", "yuv420p", "-an", outPath,
+      "-t", d.toFixed(3),
+      "-vf", simple,
+      "-r", String(FPS),
+      "-c:v", "libx264", "-preset", "fast",
+      "-crf", "21",
+      "-pix_fmt", "yuv420p", "-an",
+      outPath,
     ]);
   }
 
@@ -1226,10 +1397,12 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
 
 function framesToMov(frameDir, outPath) {
   runFFmpeg([
-    "-y", "-framerate", String(FPS),
+    "-y",
+    "-framerate", String(FPS),
     "-i", `${frameDir}/frame_%06d.png`,
     "-vf", `scale=${WIDTH}:${HEIGHT},format=rgba`,
-    "-c:v", "png", "-an", outPath,
+    "-c:v", "png", "-an",
+    outPath,
   ]);
   return outPath;
 }
@@ -1239,31 +1412,43 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     "[1:v]format=rgba[cap];" +
     "[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]";
 
-  // ✅ المحاولة الأولى: صوت من BG video مباشرة
+  // ✅ المحاولة الأولى: صوت من BG video (mixed_audio)
   let r = runFFmpeg([
-    "-y", "-i", bgMp4, "-i", capMov,
+    "-y",
+    "-i", bgMp4,
+    "-i", capMov,
     "-filter_complex", overlayFilter,
-    "-map", "[out]", "-map", "0:a:0",
+    "-map", "[out]",
+    "-map", "0:a:0",
     "-c:v", "libx264", "-preset", "fast", "-crf", "19",
     "-c:a", "aac", "-b:a", "192k",
-    "-pix_fmt", "yuv420p", outPath,
+    "-pix_fmt", "yuv420p",
+    outPath,
   ]);
 
   // ✅ Fallback: صوت من ملف منفصل
   if (r.status !== 0 && audioPth) {
     console.log("  ⚠️  Using external audio fallback...");
     r = runFFmpeg([
-      "-y", "-i", bgMp4, "-i", capMov, "-i", audioPth,
+      "-y",
+      "-i", bgMp4,
+      "-i", capMov,
+      "-i", audioPth,
       "-filter_complex", overlayFilter,
-      "-map", "[out]", "-map", "2:a:0",
+      "-map", "[out]",
+      "-map", "2:a:0",
       "-c:v", "libx264", "-preset", "fast", "-crf", "19",
       "-c:a", "aac", "-b:a", "192k",
-      "-pix_fmt", "yuv420p", outPath,
+      "-pix_fmt", "yuv420p",
+      outPath,
     ]);
   }
 
   if (r.status !== 0) {
-    console.error("❌ overlayOnBg failed:", r.stderr?.toString().slice(-200));
+    console.error(
+      "❌ overlayOnBg failed:",
+      r.stderr?.toString().slice(-200)
+    );
   }
 
   return outPath;
@@ -1275,8 +1460,8 @@ function xfadeConcat(clips, durs) {
 
   const XFADE   = isLong ? 0.5 : 0.3;
   const filters = [];
-  let offset = 0;
-  let last   = "[0:v]";
+  let offset    = 0;
+  let last      = "[0:v]";
 
   for (let i = 1; i < clips.length; i++) {
     offset += durs[i - 1] - XFADE;
@@ -1285,20 +1470,24 @@ function xfadeConcat(clips, durs) {
     const out   = i === clips.length - 1 ? "[vout]" : `[v${i}]`;
     const trans = XFADE_TRANSITIONS[(i - 1) % XFADE_TRANSITIONS.length];
     filters.push(
-      `${last}[${i}:v]xfade=transition=${trans}:duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
+      `${last}[${i}:v]xfade=transition=${trans}:` +
+      `duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
     );
     last = out;
   }
 
   const outPath = join(TMP, "xfaded.mp4");
   const r = runFFmpeg([
-    "-y", ...clips.flatMap((p) => ["-i", p]),
+    "-y",
+    ...clips.flatMap((p) => ["-i", p]),
     "-filter_complex", filters.join(";"),
     "-map", "[vout]",
     "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-    "-pix_fmt", "yuv420p", "-an", outPath,
+    "-pix_fmt", "yuv420p", "-an",
+    outPath,
   ]);
 
+  // Fallback: simple concat
   if (r.status !== 0) {
     const lst = join(TMP, "list.txt");
     writeFileSync(lst, clips.map((p) => `file '${p}'`).join("\n"));
@@ -1316,7 +1505,9 @@ function xfadeConcat(clips, durs) {
 function mergeAudio(videoPath, audioPath, outPath) {
   const aDur = probeDuration(audioPath);
   const vDur = probeDuration(videoPath);
-  console.log(`🎵 Audio: ${aDur.toFixed(3)}s | Video: ${vDur.toFixed(3)}s`);
+  console.log(
+    `🎵 Audio: ${aDur.toFixed(3)}s | Video: ${vDur.toFixed(3)}s`
+  );
 
   let vid = videoPath;
   if (vDur < aDur - 0.3) {
@@ -1325,7 +1516,8 @@ function mergeAudio(videoPath, audioPath, outPath) {
       "-y", "-stream_loop", "-1", "-i", videoPath,
       "-t", aDur.toFixed(3),
       "-c:v", "libx264", "-preset", "fast", "-crf", "21",
-      "-pix_fmt", "yuv420p", "-an", looped,
+      "-pix_fmt", "yuv420p", "-an",
+      looped,
     ]);
     if (r.status === 0) vid = looped;
   }
@@ -1334,7 +1526,8 @@ function mergeAudio(videoPath, audioPath, outPath) {
     "-y", "-i", vid, "-i", audioPath,
     "-map", "0:v:0", "-map", "1:a:0",
     "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-    "-t", aDur.toFixed(3), outPath,
+    "-t", aDur.toFixed(3),
+    outPath,
   ]);
 
   console.log(`✅ Done → ${outPath}`);
@@ -1359,15 +1552,20 @@ async function handleBgOnlyMode() {
   const finalClips = [];
   const clipDurs   = [];
 
-  console.log(`📊 ${clipPlan.length} clips [${content_mode.toUpperCase()}]`);
+  console.log(
+    `📊 ${clipPlan.length} clips [${content_mode.toUpperCase()}]`
+  );
 
   for (const clip of clipPlan) {
     const { index, duration, videoPath, isHook } = clip;
     process.stdout.write(
-      `  [${index + 1}/${clipPlan.length}] ${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
+      `  [${index + 1}/${clipPlan.length}] ` +
+      `${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
     );
 
-    const bgMp4 = join(TMP, `bg_${String(index).padStart(3, "0")}.mp4`);
+    const bgMp4 = join(
+      TMP, `bg_${String(index).padStart(3, "0")}.mp4`
+    );
     processBackground(videoPath, duration, bgMp4, index, isHook);
     finalClips.push(bgMp4);
     clipDurs.push(duration);
@@ -1380,10 +1578,12 @@ async function handleBgOnlyMode() {
   console.log("🎵 Merging audio...");
   mergeAudio(dissolved, audio, outputPath);
 
-  console.log(`\n🎉 BG Video [${content_mode.toUpperCase()}] → ${outputPath}\n`);
+  console.log(
+    `\n🎉 BG Video [${content_mode.toUpperCase()}] → ${outputPath}\n`
+  );
 }
 
-// ✅ words_only — SHORT (الإصلاح الرئيسي)
+// ✅ words_only — SHORT
 async function handleWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
@@ -1399,7 +1599,9 @@ async function handleWordsOnlyMode() {
 
   try {
     console.log("🖼️  Rendering PNGs [SHORT]...");
-    const pngCache = await renderAllPNGsShort(page, frameStateMap, boundaryMap);
+    const pngCache = await renderAllPNGsShort(
+      page, frameStateMap, boundaryMap
+    );
     await browser.close();
     console.log(`✅ ${pngCache.size} PNGs\n`);
 
@@ -1407,7 +1609,9 @@ async function handleWordsOnlyMode() {
     mkdirSync(frameDir, { recursive: true });
 
     // ✅ emptyPng fallback
-    const emptyPng = pngCache.get("empty_n") || pngCache.get("intro_f0");
+    const emptyPng =
+      pngCache.get("empty_n") ||
+      pngCache.get("intro_f0");
 
     for (let f = 0; f < totalFrames; f++) {
       const ts   = boundaryMap[f] || null;
@@ -1417,7 +1621,10 @@ async function handleWordsOnlyMode() {
         : stateKey(frameStateMap[f], f, ts);
 
       const src  = pngCache.get(key) || emptyPng;
-      const dest = join(frameDir, `frame_${String(f).padStart(6, "0")}.png`);
+      const dest = join(
+        frameDir,
+        `frame_${String(f).padStart(6, "0")}.png`
+      );
       linkFrame(src, dest);
     }
 
@@ -1425,7 +1632,7 @@ async function handleWordsOnlyMode() {
     framesToMov(frameDir, capMov);
 
     console.log("🔧 Overlaying words on BG video [SHORT]...");
-    // ✅ bgVideoPath يحتوي mixed_audio → صوت صحيح → تزامن 100%
+    // ✅ bgVideoPath يحتوي mixed_audio → تزامن 100%
     overlayOnBg(bgVideoPath, capMov, audio, outputPath);
 
     console.log(`\n🎉 Final [SHORT] → ${outputPath}\n`);
@@ -1451,7 +1658,9 @@ async function handleLongWordsOnlyMode() {
 
   try {
     console.log("🖼️  Rendering PNGs [LONG]...");
-    const pngCache = await renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap);
+    const pngCache = await renderAllPNGsLong(
+      page, frameStateMap, boundaryMap, sentenceMap
+    );
     await browser.close();
     console.log(`✅ ${pngCache.size} PNGs [LONG]\n`);
 
@@ -1459,7 +1668,9 @@ async function handleLongWordsOnlyMode() {
     mkdirSync(frameDir, { recursive: true });
 
     // ✅ emptyPng fallback
-    const emptyPng = pngCache.get("long_empty_n_hold_") || [...pngCache.values()][0];
+    const emptyPng =
+      pngCache.get("long_empty_n_hold_") ||
+      [...pngCache.values()][0];
 
     for (let f = 0; f < totalFrames; f++) {
       const ts       = boundaryMap[f] || null;
@@ -1468,7 +1679,10 @@ async function handleLongWordsOnlyMode() {
       const key      = longStateKey(wordSt, ts, sentence);
 
       const src  = pngCache.get(key) || emptyPng;
-      const dest = join(frameDir, `frame_${String(f).padStart(6, "0")}.png`);
+      const dest = join(
+        frameDir,
+        `frame_${String(f).padStart(6, "0")}.png`
+      );
       linkFrame(src, dest);
     }
 
@@ -1497,7 +1711,9 @@ const MODE_HANDLERS = {
 };
 
 async function main() {
-  console.log(`\n🚀 Mode: ${mode} | Content: ${content_mode.toUpperCase()}\n`);
+  console.log(
+    `\n🚀 Mode: ${mode} | Content: ${content_mode.toUpperCase()}\n`
+  );
 
   const handler = MODE_HANDLERS[mode];
   if (!handler) {
