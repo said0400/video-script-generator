@@ -468,41 +468,36 @@ def render_words_overlay(bg_video, audio_path, aligned, sentences, script_data, 
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ MERGE FINAL VIDEO + AUDIO
+# ✅ MERGE FINAL VIDEO + AUDIO  ← تعديل 1: حذف -shortest
 # ═════════════════════════════════════════════════════════════════════════════
 
 def merge_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
     """
-    ✅ دمج الفيديو النهائي (مع الصوت النظيف) + الصوت الممزوج (موسيقى + SFX).
-    يستبدل الصوت في الفيديو بالصوت الممزوج.
+    دمج الفيديو + الصوت الممزوج.
+    لا يقص — يحافظ على مدة الفيديو.
     """
     log.info(f"\n  🔊 Merging final video + mixed audio...")
-
     audio_dur = get_audio_duration(str(audio_path))
     video_dur = get_audio_duration(str(video_path))
-
     log.info(f"     Video: {video_dur:.1f}s | Audio: {audio_dur:.1f}s")
 
     ok, err = _run_ffmpeg([
         "ffmpeg", "-y",
         "-i", str(video_path),
         "-i", str(audio_path),
-        "-map", "0:v:0",       # فيديو من الأول
-        "-map", "1:a:0",       # صوت من الثاني
-        "-c:v", "copy",        # لا إعادة ترميز الفيديو
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "copy",
         "-c:a", "aac",
         "-b:a", "192k",
-        "-shortest",           # أقصر مدة
         str(output_path),
     ])
 
     if not ok:
         log.warning(f"  ⚠️  Merge failed: {err[:100]}")
-        log.warning("  ↩️  Using video with original audio")
         return video_path
 
-    mb = _file_size_mb(output_path)
-    log.info(f"  ✅ Merged: {output_path.name} ({mb:.1f} MB)")
+    log.info(f"  ✅ Merged: {output_path.name} ({_file_size_mb(output_path):.1f} MB)")
     return output_path
 
 
@@ -606,7 +601,7 @@ def _do_publish(video_path, record, ai_data, lang, video_number, content_mode,
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ✅ PROCESS ONE VIDEO (الترتيب الجديد)
+# ✅ PROCESS ONE VIDEO  ← تعديل 2: STEP F + G
 # ═════════════════════════════════════════════════════════════════════════════
 
 def process_video(record, args, out_dir, should_publish_fb, should_publish_yt, content_mode="short"):
@@ -708,7 +703,7 @@ def process_video(record, args, out_dir, should_publish_fb, should_publish_yt, c
             out_base=out_base, content_mode=content_mode)
 
         # ═══════════════════════════════════════════════════════════════
-        # STEP F: Mix music + SFX
+        # STEP F: Mix music + SFX (ثم ضبط المدة)
         # ═══════════════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(f"  ✅ STEP F: Mix music + SFX [{ml}]")
@@ -716,8 +711,29 @@ def process_video(record, args, out_dir, should_publish_fb, should_publish_yt, c
             voice_path=clean_voice_path, script_data=script_data,
             output_base=out_base, aligned=aligned)
 
+        # ✅ ضمان أن الصوت الممزوج بنفس مدة الصوت النظيف
+        mixed_dur = get_audio_duration(str(mixed_audio))
+        clean_dur = get_audio_duration(str(clean_voice_path))
+        log.info(f"  📏 Clean: {clean_dur:.3f}s | Mixed: {mixed_dur:.3f}s")
+
+        if abs(mixed_dur - clean_dur) > 0.3:
+            fixed_audio = f"{out_base}_audio_fixed.aac"
+            log.info(f"  🔧 Fixing duration: {mixed_dur:.1f}s → {clean_dur:.1f}s")
+            ok, _ = _run_ffmpeg([
+                "ffmpeg", "-y",
+                "-i", str(mixed_audio),
+                "-t", f"{clean_dur:.3f}",
+                "-c:a", "aac", "-b:a", "192k",
+                fixed_audio,
+            ])
+            if ok and Path(fixed_audio).exists():
+                mixed_audio = Path(fixed_audio)
+                log.info(f"  ✅ Fixed: {get_audio_duration(str(mixed_audio)):.3f}s")
+            else:
+                log.warning("  ⚠️  Fix failed, using original mixed audio")
+
         # ═══════════════════════════════════════════════════════════════
-        # STEP G: دمج الفيديو النهائي + الصوت الممزوج
+        # STEP G: دمج الفيديو + الصوت الممزوج
         # ═══════════════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(f"  ✅ STEP G: Merge video + mixed audio [{ml}]")
