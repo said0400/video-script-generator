@@ -338,7 +338,6 @@ def _build_clip_plan(script_data, ai_data, aligned,
 
 
 def _build_temp_keywords(script_data, ai_data, content_mode):
-    """بناء keywords مؤقتة لجلب الفيديوهات (قبل WhisperX)."""
     vk = ai_data.get("visual_keywords", []) or []
     hk = (script_data.get("hook_keyword") or "").strip()
     keywords = []
@@ -354,7 +353,7 @@ def _build_temp_keywords(script_data, ai_data, content_mode):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP A: CLEAN VOICE (TTS + Trim + Speed)
+# STEP A: CLEAN VOICE
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _trim_silence(audio_path, output_path):
@@ -462,16 +461,12 @@ def produce_clean_voice(script_data, output_base, content_mode="short"):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP B: MIXED AUDIO (Voice + Music + SFX) ← مُقدَّم
+# STEP B: MIXED AUDIO
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_mixed_audio(voice_path, script_data, output_base,
                         aligned=None):
-    """
-    STEP B — ينتج الصوت الممزوج النهائي مبكراً.
-    يُستدعى قبل BG video لضمان أن الصوت في الفيديو
-    هو نفس الصوت الذي سيحلله WhisperX.
-    """
+    """STEP B — Mixed Audio مُقدَّم لضمان التزامن."""
     lang      = script_data.get("lang", "ar")
     real_dur  = get_audio_duration(str(voice_path))
     mixed_out = f"{output_base}_audio_mixed.aac"
@@ -507,8 +502,7 @@ def produce_mixed_audio(voice_path, script_data, output_base,
 def _extract_audio_from_video(video_path, output_path):
     """
     STEP E — استخراج الصوت من BG video.
-    WhisperX يحلل هذا الصوت = نفس ما يسمعه المشاهد.
-    ✅ تزامن 100% مضمون.
+    ✅ WhisperX يحلل نفس الصوت الموجود في الفيديو.
     """
     log.info(f"  🔊 Extracting audio from BG video...")
     ok, err = _run_ffmpeg([
@@ -533,28 +527,21 @@ def _extract_audio_from_video(video_path, output_path):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run_whisperx(audio_source, out_base, lang, script_sentences=None):
-    """
-    STEP F — يحلل الصوت المستخرج من BG video.
-    الصوت = mixed_audio الموجود في الفيديو → تزامن 100%.
-    يدعم ملفات mp4, wav, aac, إلخ.
-    """
+    """STEP F — WhisperX على الصوت المستخرج → تزامن 100%."""
     source_name = Path(str(audio_source)).name
     log.info(f"\n  🎤 WhisperX analyzing: {source_name}")
 
-    # تحويل إلى wav 16kHz مناسب لـ WhisperX
     whisper_input = f"{out_base}_whisper_input.wav"
     ok, _ = _run_ffmpeg([
         "ffmpeg", "-y", "-i", str(audio_source),
         "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-        "-vn",
-        whisper_input,
+        "-vn", whisper_input,
     ])
     if not ok:
         whisper_input = str(audio_source)
 
     transcript = extract_transcript_from_audio(whisper_input, lang=lang)
 
-    # تنظيف ملف مؤقت
     if whisper_input != str(audio_source):
         _safe_unlink(whisper_input)
 
@@ -565,7 +552,6 @@ def run_whisperx(audio_source, out_base, lang, script_sentences=None):
     aligned   = transcript["aligned"]
     sentences = transcript["sentences"]
 
-    # إعادة ربط على جمل السكريبت الأصلية
     if script_sentences:
         word_timestamps = [
             w for seg in transcript["aligned"]
@@ -617,7 +603,7 @@ def run_whisperx(audio_source, out_base, lang, script_sentences=None):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# RENDER (BG + Words)
+# RENDER
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _build_manifest(script_data, audio_path, video_paths, real_dur,
@@ -674,6 +660,15 @@ def _run_remotion_render(manifest_path, output_path):
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"Render timeout ({RENDER_TIMEOUT}s)")
+
+    # ✅ تشخيص — يساعد في معرفة المشكلة
+    log.info(f"\n{'─' * 55}")
+    log.info("[RENDER LOG]")
+    for line in r.stdout.splitlines():
+        log.info(f"  {line}")
+    log.info("[/RENDER LOG]")
+    log.info(f"{'─' * 55}")
+
     if r.returncode != 0:
         raise RuntimeError(f"Render failed:\n{r.stdout[-600:]}")
 
@@ -681,10 +676,7 @@ def _run_remotion_render(manifest_path, output_path):
 def produce_bg_video(video_paths, audio_path, real_dur, out_base,
                      script_data, has_hook, clip_durations,
                      content_mode="short"):
-    """
-    STEP D — رندر BG video مع mixed_audio مباشرة.
-    ✅ الصوت في الفيديو = الصوت النهائي الفعلي.
-    """
+    """STEP D — BG video مع mixed_audio مباشرة."""
     bg_mode = "bg_only" if content_mode == "short" else "long_bg_only"
     suffix  = f"_{content_mode}"
     manifest = _build_manifest(
@@ -714,8 +706,8 @@ def render_words_overlay(bg_video, audio_path, aligned, sentences,
                          script_data, out_base, content_mode="short"):
     """
     STEP H — رندر الكلمات فوق BG video.
-    audio_path = mixed_audio (نفس الصوت في BG video).
-    ✅ تزامن 100% — لا merge بعدها.
+    ✅ audio_path = mixed_audio = نفس الصوت في BG video.
+    ✅ لا merge بعدها.
     """
     audio_dur  = get_audio_duration(str(audio_path))
     words_mode = (
@@ -750,22 +742,17 @@ def render_words_overlay(bg_video, audio_path, aligned, sentences,
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# FACEBOOK VERTICAL (Long فقط — نسخة 9:16)
+# FACEBOOK VERTICAL
 # ═════════════════════════════════════════════════════════════════════════════
 
 def produce_fb_vertical_version(script_data, mixed_audio, aligned,
                                 video_paths, clip_durations, out_base):
-    """
-    STEP I — نسخة 9:16 للفيديو الطويل (Facebook).
-    ✅ تستخدم mixed_audio مباشرة في كل الخطوات.
-    ✅ WhisperX يحلل الصوت المستخرج من BG_fb → تزامن 100%.
-    """
+    """STEP I — نسخة 9:16 للفيديو الطويل."""
     try:
         log.info("\n  📱 Rendering Facebook vertical version (9:16)...")
 
         real_dur = get_audio_duration(str(mixed_audio))
 
-        # جلب فيديوهات portrait
         vid_dir_fb = str(
             Path(out_base).parent /
             f"{Path(out_base).name}_fb_videos"
@@ -786,23 +773,20 @@ def produce_fb_vertical_version(script_data, mixed_audio, aligned,
             content_mode          = "short",
         )
 
-        # ── BG 9:16 مع mixed_audio مباشرة ───────────────────────
         bg_fb = produce_bg_video(
-            video_paths   = fb_video_paths,
-            audio_path    = mixed_audio,       # ✅ mixed مباشرة
-            real_dur      = real_dur,
-            out_base      = f"{out_base}_fb",
-            script_data   = script_data,
-            has_hook      = False,
-            clip_durations= clip_durations,
-            content_mode  = "short",
+            video_paths    = fb_video_paths,
+            audio_path     = mixed_audio,
+            real_dur       = real_dur,
+            out_base       = f"{out_base}_fb",
+            script_data    = script_data,
+            has_hook       = False,
+            clip_durations = clip_durations,
+            content_mode   = "short",
         )
 
-        # ── استخراج الصوت من BG_fb ──────────────────────────────
         extracted_fb = f"{out_base}_fb_extracted.wav"
         _extract_audio_from_video(str(bg_fb), extracted_fb)
 
-        # ── WhisperX على الصوت المستخرج ─────────────────────────
         fb_aligned, fb_sentences = run_whisperx(
             audio_source     = extracted_fb,
             out_base         = f"{out_base}_fb",
@@ -818,10 +802,9 @@ def produce_fb_vertical_version(script_data, mixed_audio, aligned,
             script_data.get("tagged_sentences", []),
         )
 
-        # ── Words overlay 9:16 ──────────────────────────────────
         fb_final = render_words_overlay(
             bg_video     = bg_fb,
-            audio_path   = mixed_audio,        # ✅ نفس الصوت
+            audio_path   = mixed_audio,
             aligned      = fb_aligned,
             sentences    = fb_sentences,
             script_data  = script_data,
@@ -1115,7 +1098,7 @@ def process_video(record, args, out_dir, should_publish_fb,
 
     try:
         # ═══════════════════════════════════════════════════════
-        # STEP A: صوت نظيف (TTS + Trim + Speed)
+        # STEP A: صوت نظيف
         # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(f"  ✅ STEP A: Clean voice [{ml}]")
@@ -1126,8 +1109,7 @@ def process_video(record, args, out_dir, should_publish_fb,
         )
 
         # ═══════════════════════════════════════════════════════
-        # STEP B: Mixed Audio ← مُقدَّم لضمان التزامن
-        # الصوت النهائي الفعلي الذي سيسمعه المشاهد
+        # STEP B: Mixed Audio مُقدَّم
         # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(
@@ -1140,7 +1122,6 @@ def process_video(record, args, out_dir, should_publish_fb,
             output_base = out_base,
             aligned     = None,
         )
-        # تحديث real_dur من الصوت الممزوج الفعلي
         mixed_dur = get_audio_duration(str(mixed_audio))
         if mixed_dur >= MIN_VALID_AUDIO_S:
             real_dur = mixed_dur
@@ -1170,17 +1151,15 @@ def process_video(record, args, out_dir, should_publish_fb,
         result["video_paths"] = [str(p) for p in video_paths]
 
         # ═══════════════════════════════════════════════════════
-        # STEP D: BG video + mixed_audio مباشرة
-        # ✅ الصوت في الفيديو = الصوت النهائي الفعلي
+        # STEP D: BG video + mixed_audio
         # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(
-            f"  ✅ STEP D: Background video + "
-            f"mixed audio [{ml}]"
+            f"  ✅ STEP D: Background video + mixed audio [{ml}]"
         )
         bg_video = produce_bg_video(
             video_paths    = video_paths,
-            audio_path     = mixed_audio,      # ✅ mixed مباشرة
+            audio_path     = mixed_audio,
             real_dur       = real_dur,
             out_base       = out_base,
             script_data    = script_data,
@@ -1191,7 +1170,6 @@ def process_video(record, args, out_dir, should_publish_fb,
 
         # ═══════════════════════════════════════════════════════
         # STEP E: استخراج الصوت من BG video
-        # هذا الصوت = ما سيسمعه المشاهد فعلاً
         # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(
@@ -1204,7 +1182,6 @@ def process_video(record, args, out_dir, should_publish_fb,
 
         # ═══════════════════════════════════════════════════════
         # STEP F: WhisperX على الصوت المستخرج
-        # يحلل نفس الصوت الموجود في الفيديو → تزامن 100%
         # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(
@@ -1214,12 +1191,11 @@ def process_video(record, args, out_dir, should_publish_fb,
             f"  📎 Analyzing: {Path(extracted_audio).name}"
         )
         aligned, whisper_sentences = run_whisperx(
-            audio_source     = extracted_audio,  # ✅ الصوت المستخرج
+            audio_source     = extracted_audio,
             out_base         = out_base,
             lang             = lang,
             script_sentences = script_data["sentences"],
         )
-        # تنظيف الملف المؤقت
         _safe_unlink(extracted_audio)
 
         if not whisper_sentences:
@@ -1227,7 +1203,27 @@ def process_video(record, args, out_dir, should_publish_fb,
         aligned = _inject_tags_into_aligned(aligned, tagged)
 
         # ═══════════════════════════════════════════════════════
-        # STEP G: بناء clip plan من timestamps الحقيقية
+        # تشخيص: طباعة aligned للتحقق
+        # ═══════════════════════════════════════════════════════
+        log.info(f"\n  🔍 SYNC CHECK:")
+        log.info(f"     mixed_audio dur : {real_dur:.3f}s")
+        log.info(f"     bg_video dur    : {get_audio_duration(str(bg_video)):.3f}s")
+        if aligned:
+            log.info(f"     aligned[0] start: {aligned[0].get('start', 0):.3f}s")
+            log.info(f"     aligned[-1] end : {aligned[-1].get('end', 0):.3f}s")
+            log.info(f"     total words     : {sum(len(s.get('words',[])) for s in aligned)}")
+            # أول 3 كلمات
+            all_words = [w for s in aligned for w in s.get("words", [])]
+            log.info(f"     first 3 words:")
+            for w in all_words[:3]:
+                log.info(
+                    f"       {w.get('start',0):.3f}s → "
+                    f"{w.get('end',0):.3f}s  "
+                    f"'{w.get('word','?')}'"
+                )
+
+        # ═══════════════════════════════════════════════════════
+        # STEP G: Clip plan
         # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(f"  ✅ STEP G: Clip plan from WhisperX [{ml}]")
@@ -1241,14 +1237,12 @@ def process_video(record, args, out_dir, should_publish_fb,
 
         # ═══════════════════════════════════════════════════════
         # STEP H: Words overlay
-        # audio = mixed_audio (نفس الصوت في BG video)
-        # ✅ تزامن 100% — لا merge بعدها
         # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(f"  ✅ STEP H: Words overlay [{ml}]")
         video_with_words = render_words_overlay(
             bg_video     = bg_video,
-            audio_path   = mixed_audio,        # ✅ نفس الصوت
+            audio_path   = mixed_audio,
             aligned      = aligned,
             sentences    = whisper_sentences,
             script_data  = script_data,
@@ -1256,10 +1250,7 @@ def process_video(record, args, out_dir, should_publish_fb,
             content_mode = content_mode,
         )
 
-        # ═══════════════════════════════════════════════════════
-        # النهائي: نسخ الفيديو (لا merge مطلوب)
-        # render_words_overlay يحتوي الصوت الصحيح بالفعل
-        # ═══════════════════════════════════════════════════════
+        # نسخ الفيديو النهائي
         suffix       = f"_{content_mode}"
         final_output = Path(
             f"{out_base}{suffix}_published.mp4"
@@ -1272,7 +1263,7 @@ def process_video(record, args, out_dir, should_publish_fb,
         )
 
         # ═══════════════════════════════════════════════════════
-        # STEP I: Facebook vertical (Long فقط — نسخة 9:16)
+        # STEP I: Facebook vertical (Long فقط)
         # ═══════════════════════════════════════════════════════
         fb_vertical = None
         if content_mode == "long" and should_publish_fb:
@@ -1280,14 +1271,14 @@ def process_video(record, args, out_dir, should_publish_fb,
             log.info("  ✅ STEP I: Facebook vertical version (9:16)")
             fb_vertical = produce_fb_vertical_version(
                 script_data    = script_data,
-                mixed_audio    = mixed_audio,      # ✅ mixed مباشرة
+                mixed_audio    = mixed_audio,
                 aligned        = aligned,
                 video_paths    = video_paths,
                 clip_durations = clip_durations,
                 out_base       = out_base,
             )
 
-        # Export (short فقط)
+        # Export
         export_formats = (
             [] if args.no_export
             else [
@@ -1299,7 +1290,7 @@ def process_video(record, args, out_dir, should_publish_fb,
         if export_formats and content_mode == "short":
             export_all(str(final_video), out_base, export_formats)
 
-        # حفظ في DB
+        # DB
         fb_path = (
             str(fb_vertical) if fb_vertical
             else str(final_video)
