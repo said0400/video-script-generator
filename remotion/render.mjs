@@ -19,9 +19,7 @@ const manifestPath = process.argv[2];
 const outputPath   = process.argv[3];
 
 if (!manifestPath || !outputPath) {
-  console.error(
-    "Usage: node render.mjs <manifest.json> <output.mp4>"
-  );
+  console.error("Usage: node render.mjs <manifest.json> <output.mp4>");
   process.exit(1);
 }
 
@@ -56,10 +54,8 @@ const {
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Video specs
 const FPS = 30;
 
-// Dimensions
 const DIMENSIONS = {
   short: { width: 1080, height: 1920 },
   long:  { width: 1920, height: 1080 },
@@ -68,18 +64,15 @@ const DIMENSIONS = {
 const { width: WIDTH, height: HEIGHT } =
   DIMENSIONS[content_mode] || DIMENSIONS.short;
 
-// Mode flags
 const isLong  = content_mode === "long";
 const isShort = !isLong;
 
-// Animation frames
 const TITLE_SLIDE_FRAMES = Math.floor(0.6 * FPS);
 const HOOK_FRAMES        = Math.floor(3.0 * FPS);
 const HOOK_INTRO_FRAMES  = Math.floor(0.4 * FPS);
 const INTRO_FRAMES       = Math.floor(1.0 * FPS);
 const OUTRO_FRAMES       = Math.floor(1.0 * FPS);
 
-// Browser launch args
 const BROWSER_ARGS = [
   "--no-sandbox",
   "--disable-setuid-sandbox",
@@ -90,7 +83,6 @@ const BROWSER_ARGS = [
   "--lang=ar,fr,en",
 ];
 
-// xfade transitions
 const XFADE_TRANSITIONS = [
   "fade",
   "fadeblack",
@@ -148,7 +140,6 @@ const COLORS  = EMOTION_COLORS[emotion] || EMOTION_COLORS.default;
 // ═══════════════════════════════════════════════════════════════════════════
 
 const TAG_WORD_STYLES = {
-  // Original tags
   shock:        { colorWord: "#FFFFFF", colorGlow: "rgba(255,50,50,0.9)",    scaleMult: 1.30, glowSpread: 80, strokeColor: "rgba(255,0,0,0.8)",    strokeWidth: 5, brightness: 1.4  },
   urgency:      { colorWord: "#FF2200", colorGlow: "rgba(255,34,0,0.8)",     scaleMult: 1.20, glowSpread: 60, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.3  },
   intrigue:     { colorWord: "#FFD700", colorGlow: "rgba(255,215,0,0.7)",    scaleMult: 1.0,  glowSpread: 50, strokeColor: "rgba(0,0,0,0.95)",     strokeWidth: 4, brightness: 1.0  },
@@ -159,8 +150,6 @@ const TAG_WORD_STYLES = {
   desire:       { colorWord: "#FFB347", colorGlow: "rgba(255,179,71,0.7)",   scaleMult: 1.0,  glowSpread: 45, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.1  },
   calm:         { colorWord: "#80DEEA", colorGlow: "rgba(128,222,234,0.5)",  scaleMult: 0.85, glowSpread: 30, strokeColor: "rgba(0,0,0,0.85)",     strokeWidth: 3, brightness: 0.9  },
   information:  { colorWord: "#FFFFFF", colorGlow: "rgba(255,255,255,0.35)", scaleMult: 1.0,  glowSpread: 30, strokeColor: "rgba(0,0,0,0.95)",     strokeWidth: 4, brightness: 1.0  },
-
-  // Advanced tags
   pause:        { colorWord: "#B0BEC5", colorGlow: "rgba(176,190,197,0.4)",  scaleMult: 0.80, glowSpread: 25, strokeColor: "rgba(0,0,0,0.8)",      strokeWidth: 2, brightness: 0.85 },
   whisper:      { colorWord: "#CE93D8", colorGlow: "rgba(206,147,216,0.6)",  scaleMult: 0.88, glowSpread: 35, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 3, brightness: 0.9  },
   curiosity:    { colorWord: "#FFF176", colorGlow: "rgba(255,241,118,0.6)",  scaleMult: 1.02, glowSpread: 45, strokeColor: "rgba(0,0,0,0.9)",      strokeWidth: 4, brightness: 1.05 },
@@ -193,7 +182,6 @@ function getWordStyle(tag) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const TAG_TRANSITION = {
-  // Original tags
   shock:        { flashColor: "rgba(255,255,255,1.0)",  flashFrames: 9,  shakeAmount: 18, scaleBoost: 1.12 },
   urgency:      { flashColor: "rgba(220,0,0,0.85)",     flashFrames: 7,  shakeAmount: 12, scaleBoost: 1.08 },
   intrigue:     { flashColor: "rgba(0,0,0,0.6)",        flashFrames: 10, shakeAmount: 5,  scaleBoost: 1.04 },
@@ -204,8 +192,6 @@ const TAG_TRANSITION = {
   desire:       { flashColor: "rgba(255,100,180,0.4)",  flashFrames: 10, shakeAmount: 4,  scaleBoost: 1.03 },
   calm:         { flashColor: "rgba(100,200,255,0.2)",  flashFrames: 16, shakeAmount: 1,  scaleBoost: 1.0  },
   information:  { flashColor: "rgba(255,255,255,0.15)", flashFrames: 6,  shakeAmount: 0,  scaleBoost: 1.0  },
-
-  // Advanced tags
   pause:        { flashColor: "rgba(0,0,0,0.7)",        flashFrames: 18, shakeAmount: 0,  scaleBoost: 1.0  },
   whisper:      { flashColor: "rgba(100,0,150,0.4)",    flashFrames: 12, shakeAmount: 2,  scaleBoost: 1.02 },
   curiosity:    { flashColor: "rgba(255,241,118,0.4)",  flashFrames: 10, shakeAmount: 3,  scaleBoost: 1.03 },
@@ -228,9 +214,6 @@ const DEFAULT_TRANSITION = {
 // STRING HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * يزيل كل الأحرف غير الصالحة من أسماء الملفات
- */
 function safeKey(str, maxLen = 25) {
   return (str || "")
     .slice(0, maxLen * 2)
@@ -269,9 +252,7 @@ function getFontFamily(text) {
     : `"Noto Sans", "DejaVu Sans", sans-serif`;
 }
 
-function getDir(text) {
-  return isArabic(text) ? "rtl" : "ltr";
-}
+function getDir(text)  { return isArabic(text) ? "rtl" : "ltr"; }
 
 function getLang(text) {
   if (isArabic(text)) return "ar";
@@ -305,7 +286,7 @@ function runFFmpeg(args, options = {}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// COMPUTE EFFECTIVE DURATION
+// EFFECTIVE DURATION
 // ═══════════════════════════════════════════════════════════════════════════
 
 const realAudioDuration = probeDuration(audio);
@@ -314,8 +295,7 @@ const effectiveDuration =
 const totalFrames = Math.ceil(effectiveDuration * FPS);
 
 console.log(
-  `🎵 Audio: ${realAudioDuration.toFixed(3)}s | ` +
-  `Frames: ${totalFrames}`
+  `🎵 Audio: ${realAudioDuration.toFixed(3)}s | Frames: ${totalFrames}`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -324,10 +304,8 @@ console.log(
 
 function isPowerWord(w) {
   if (!power_words.length) return false;
-
   const n = normalizeWord(w);
   if (n.length < 2) return false;
-
   return power_words.some((pw) => {
     const p = normalizeWord(pw);
     return (
@@ -361,11 +339,7 @@ function buildSentenceBoundaryMap() {
 
     for (let f = 0; f < config.flashFrames; f++) {
       const frame = endFr + f;
-      if (
-        frame >= 0 &&
-        frame < totalFrames &&
-        map[frame] === null
-      ) {
+      if (frame >= 0 && frame < totalFrames && map[frame] === null) {
         map[frame] = {
           tag,
           config,
@@ -381,10 +355,7 @@ function buildSentenceBoundaryMap() {
 
   console.log(`\n🎬 Sentence boundaries: ${boundaries.length}`);
   boundaries.forEach((b) =>
-    console.log(
-      `   [${b.tag || "info"}] @ ` +
-      `${parseFloat(b.end).toFixed(3)}s`
-    )
+    console.log(`   [${b.tag || "info"}] @ ${parseFloat(b.end).toFixed(3)}s`)
   );
 
   return map;
@@ -395,7 +366,6 @@ function buildSentenceBoundaryMap() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildClipPlan() {
-  // Use provided clip_durations if available
   if (clip_durations && clip_durations.length > 0) {
     let offset = 0;
     const plan = clip_durations.map((dur, i) => {
@@ -409,16 +379,11 @@ function buildClipPlan() {
       offset += entry.duration;
       return entry;
     });
-
     logClipPlan(plan);
     return plan;
   }
 
-  // Fallback: equal distribution
-  const totalClips = Math.max(
-    1,
-    Math.floor(effectiveDuration / clip_duration)
-  );
+  const totalClips    = Math.max(1, Math.floor(effectiveDuration / clip_duration));
   const actualClipDur = effectiveDuration / totalClips;
 
   const plan = Array.from({ length: totalClips }, (_, i) => ({
@@ -434,16 +399,12 @@ function buildClipPlan() {
 }
 
 function logClipPlan(plan) {
-  console.log(
-    `\n📋 Clip plan: ${plan.length} clips ` +
-    `[${content_mode.toUpperCase()}]`
-  );
+  console.log(`\n📋 Clip plan: ${plan.length} clips [${content_mode.toUpperCase()}]`);
   plan.forEach((c) =>
     console.log(
       `   [${c.index + 1}] ${c.start.toFixed(2)}s → ` +
       `${(c.start + c.duration).toFixed(2)}s ` +
-      `(${c.duration.toFixed(2)}s)` +
-      `${c.isHook ? " 🔥" : ""}`
+      `(${c.duration.toFixed(2)}s)${c.isHook ? " 🔥" : ""}`
     )
   );
 }
@@ -455,25 +416,15 @@ function logClipPlan(plan) {
 function buildWordList() {
   const words = [];
 
-  // Extract from aligned data
   for (const seg of aligned) {
     if (!seg.words || seg.words.length === 0) continue;
     const segTag = seg.tag || "information";
 
     for (const w of seg.words) {
       if (!w.word) continue;
-
       const start = parseFloat(w.start);
       const end   = parseFloat(w.end);
-
-      if (
-        isNaN(start) ||
-        isNaN(end) ||
-        start < 0 ||
-        end <= start
-      ) {
-        continue;
-      }
+      if (isNaN(start) || isNaN(end) || start < 0 || end <= start) continue;
 
       words.push({
         word:    w.word.trim(),
@@ -485,15 +436,11 @@ function buildWordList() {
     }
   }
 
-  // Fallback: equal split from sentences
+  // ✅ Fallback: equal split
   if (words.length === 0 && sentences.length > 0) {
     console.log("⚠️  No word alignment — equal split fallback");
-    const allText = sentences
-      .join(" ")
-      .split(/\s+/)
-      .filter(Boolean);
-    const perWord =
-      effectiveDuration / Math.max(allText.length, 1);
+    const allText = sentences.join(" ").split(/\s+/).filter(Boolean);
+    const perWord = effectiveDuration / Math.max(allText.length, 1);
 
     for (let i = 0; i < allText.length; i++) {
       words.push({
@@ -512,14 +459,8 @@ function buildWordList() {
   if (words.length > 0) {
     const first = words[0];
     const last  = words[words.length - 1];
-    console.log(
-      `   [0]  ${first.start.toFixed(3)}s ` +
-      `"${first.word}" [${first.tag}]`
-    );
-    console.log(
-      `   [-1] ${last.start.toFixed(3)}s ` +
-      `"${last.word}" [${last.tag}]`
-    );
+    console.log(`   [0]  ${first.start.toFixed(3)}s "${first.word}" [${first.tag}]`);
+    console.log(`   [-1] ${last.start.toFixed(3)}s "${last.word}" [${last.tag}]`);
   }
 
   return words;
@@ -537,7 +478,6 @@ function buildFrameStateMap(words) {
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
 
-    // Advance to current word
     while (wi < words.length - 1 && t >= words[wi].end) {
       wi++;
     }
@@ -562,7 +502,7 @@ function buildFrameStateMap(words) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SENTENCE MAP (for LONG mode)
+// SENTENCE MAP (LONG mode)
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildSentenceMap() {
@@ -573,12 +513,8 @@ function buildSentenceMap() {
   const map = new Array(totalFrames).fill(null);
 
   for (const seg of aligned) {
-    const segStart = Math.floor(
-      parseFloat(seg.start || 0) * FPS
-    );
-    const segEnd = Math.ceil(
-      parseFloat(seg.end || 0) * FPS
-    );
+    const segStart = Math.floor(parseFloat(seg.start || 0) * FPS);
+    const segEnd   = Math.ceil(parseFloat(seg.end   || 0) * FPS);
     const sentence = seg.sentence || "";
 
     for (let f = segStart; f < segEnd && f < totalFrames; f++) {
@@ -597,14 +533,11 @@ function stateKey(state, globalFrame, transitionState) {
   if (globalFrame < INTRO_FRAMES) {
     return `intro_f${globalFrame}`;
   }
-
   if (globalFrame >= totalFrames - OUTRO_FRAMES) {
     return `outro_f${globalFrame}`;
   }
-
   if (transitionState) {
-    const pb =
-      transitionState.progress < 0.5 ? "in" : "out";
+    const pb = transitionState.progress < 0.5 ? "in" : "out";
     return (
       `tr_${transitionState.tag}_${pb}_` +
       `${safeKey(state ? state.word : "empty", 15)}_` +
@@ -616,8 +549,7 @@ function stateKey(state, globalFrame, transitionState) {
   if (!state) return `empty_${hook}`;
 
   const p      = state.progress;
-  const bucket =
-    p < 0.15 ? "pop" : p > 0.85 ? "fade" : "hold";
+  const bucket = p < 0.15 ? "pop" : p > 0.85 ? "fade" : "hold";
 
   return (
     `w_${safeKey(state.word, 15)}_${state.tag}_` +
@@ -631,8 +563,7 @@ function hookIntroKey(f) {
 
 function longStateKey(wordSt, ts, sentence) {
   const wordKey = wordSt
-    ? `${safeKey(wordSt.word, 15)}_` +
-      `${wordSt.tag}_${wordSt.isPower ? 1 : 0}`
+    ? `${safeKey(wordSt.word, 15)}_${wordSt.tag}_${wordSt.isPower ? 1 : 0}`
     : "empty";
 
   const sentKey = safeKey(sentence, 25);
@@ -643,11 +574,8 @@ function longStateKey(wordSt, ts, sentence) {
   let pBucket = "hold";
   if (wordSt) {
     pBucket =
-      wordSt.progress < 0.15
-        ? "pop"
-        : wordSt.progress > 0.85
-        ? "fade"
-        : "hold";
+      wordSt.progress < 0.15 ? "pop" :
+      wordSt.progress > 0.85 ? "fade" : "hold";
   }
 
   return `long_${wordKey}_${tKey}_${pBucket}_${sentKey}`;
@@ -658,29 +586,16 @@ function longStateKey(wordSt, ts, sentence) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function computeTitleAnimation(globalFrame) {
-  const isIntro = globalFrame < INTRO_FRAMES;
-  const isOutro = globalFrame >= totalFrames - OUTRO_FRAMES;
-
-  if (isIntro) {
+  if (globalFrame < INTRO_FRAMES) {
     const t = globalFrame / INTRO_FRAMES;
     const e = 1 - Math.pow(1 - t, 3);
-    return {
-      opacity:    e,
-      translateY: (1 - e) * -80,
-    };
+    return { opacity: e, translateY: (1 - e) * -80 };
   }
-
-  if (isOutro) {
-    const t =
-      (globalFrame - (totalFrames - OUTRO_FRAMES)) /
-      OUTRO_FRAMES;
+  if (globalFrame >= totalFrames - OUTRO_FRAMES) {
+    const t = (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
     const e = Math.pow(t, 2);
-    return {
-      opacity:    1 - e,
-      translateY: e * -60,
-    };
+    return { opacity: 1 - e, translateY: e * -60 };
   }
-
   return { opacity: 1.0, translateY: 0 };
 }
 
@@ -694,38 +609,21 @@ function computeWordAnimation(progress, scaleMult) {
       translateY: (1 - e) * 30,
     };
   }
-
   if (progress > 0.85) {
     const t = (progress - 0.85) / 0.15;
-    return {
-      scale:      1.0 - t * 0.05,
-      opacity:    1 - t * 0.3,
-      translateY: 0,
-    };
+    return { scale: 1.0 - t * 0.05, opacity: 1 - t * 0.3, translateY: 0 };
   }
-
-  return {
-    scale:      scaleMult,
-    opacity:    1.0,
-    translateY: 0,
-  };
+  return { scale: scaleMult, opacity: 1.0, translateY: 0 };
 }
 
 function computeTransitionEffect(transitionState, globalFrame) {
   if (!transitionState) {
-    return {
-      flashOpacity: 0,
-      flashColor:   "rgba(0,0,0,0)",
-      shakeX:       0,
-      shakeY:       0,
-      transScale:   1.0,
-    };
+    return { flashOpacity: 0, flashColor: "rgba(0,0,0,0)", shakeX: 0, shakeY: 0, transScale: 1.0 };
   }
 
   const { config, progress: tp } = transitionState;
 
-  let flashOpacity =
-    tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
+  let flashOpacity = tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
   flashOpacity = Math.max(0, Math.min(1, flashOpacity));
 
   let shakeX = 0;
@@ -741,17 +639,11 @@ function computeTransitionEffect(transitionState, globalFrame) {
     transScale = 1.0 + (config.scaleBoost - 1.0) * (1 - tp * 2);
   }
 
-  return {
-    flashOpacity,
-    flashColor: config.flashColor,
-    shakeX,
-    shakeY,
-    transScale,
-  };
+  return { flashOpacity, flashColor: config.flashColor, shakeX, shakeY, transScale };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FONT SIZE CALCULATION
+// FONT SIZE
 // ═══════════════════════════════════════════════════════════════════════════
 
 const SHORT_FONT_SIZES = [
@@ -774,14 +666,12 @@ const LONG_FONT_SIZES = [
 
 function computeFontSize(word, isAr, scaleMult, isLongMode) {
   if (!word) return 100;
-
-  const wlen   = word.length;
-  const table  = isLongMode ? LONG_FONT_SIZES : SHORT_FONT_SIZES;
-  const minFs  = isLongMode ? 48 : 60;
-  const maxFs  = isLongMode ? 160 : 220;
+  const wlen  = word.length;
+  const table = isLongMode ? LONG_FONT_SIZES : SHORT_FONT_SIZES;
+  const minFs = isLongMode ? 48 : 60;
+  const maxFs = isLongMode ? 160 : 220;
 
   let baseFontSize = isLongMode ? 80 : 100;
-
   for (const { maxLen, ar, en } of table) {
     if (wlen <= maxLen) {
       baseFontSize = isAr ? ar : en;
@@ -794,7 +684,7 @@ function computeFontSize(word, isAr, scaleMult, isLongMode) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HOOK DEFAULTS
+// HOOK TEXT
 // ═══════════════════════════════════════════════════════════════════════════
 
 const HOOK_DEFAULTS = {
@@ -826,111 +716,70 @@ function buildHTMLShort({
   isHookIntro       = false,
   hookIntroProgress = 0,
 }) {
-  // Language detection
   const ar       = word ? isArabic(word) : false;
   const dir      = word ? getDir(word) : "ltr";
-  const font     = word
-    ? getFontFamily(word)
-    : `"Noto Sans", sans-serif`;
+  const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
 
-  // Title styling
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
-  // Word style
-  const tagStyle = isPower ? POWER_STYLE : getWordStyle(tag);
-
-  // Title animation
+  const tagStyle  = isPower ? POWER_STYLE : getWordStyle(tag);
   const titleAnim = computeTitleAnimation(globalFrame);
-
-  // Word animation
-  const wordAnim = word
+  const wordAnim  = word
     ? computeWordAnimation(progress, tagStyle.scaleMult)
     : { scale: 1.0, opacity: 0, translateY: 0 };
 
-  // Hook intro animation
-  let hiScale   = 1.0;
-  let hiOpacity = 1.0;
+  let hiScale = 1.0, hiOpacity = 1.0;
   if (isHookIntro) {
     const e = 1 - Math.pow(1 - hookIntroProgress, 3);
     hiScale   = 1.4 - e * 0.4;
     hiOpacity = e;
   }
 
-  // Transition effect
-  const trans = computeTransitionEffect(
-    transitionState,
-    globalFrame
-  );
+  const trans        = computeTransitionEffect(transitionState, globalFrame);
+  const baseFontSize = computeFontSize(word, ar, tagStyle.scaleMult, false);
 
-  // Font size
-  const baseFontSize = computeFontSize(
-    word,
-    ar,
-    tagStyle.scaleMult,
-    false
-  );
+  const finalScale   = wordAnim.scale * trans.transScale * (isHookIntro ? hiScale : 1.0);
+  const finalOpacity = word ? wordAnim.opacity * (isHookIntro ? hiOpacity : 1.0) : 0;
 
-  // Final transforms
-  const finalScale =
-    wordAnim.scale *
-    trans.transScale *
-    (isHookIntro ? hiScale : 1.0);
-  const finalOpacity = word
-    ? wordAnim.opacity * (isHookIntro ? hiOpacity : 1.0)
-    : 0;
   const wordTransform =
-    `translate(-50%, calc(-50% + ` +
-    `${wordAnim.translateY.toFixed(1)}px)) ` +
-    `translate(${trans.shakeX.toFixed(2)}px, ` +
-    `${trans.shakeY.toFixed(2)}px) ` +
+    `translate(-50%, calc(-50% + ${wordAnim.translateY.toFixed(1)}px)) ` +
+    `translate(${trans.shakeX.toFixed(2)}px, ${trans.shakeY.toFixed(2)}px) ` +
     `scale(${finalScale.toFixed(4)})`;
 
-  // Hook text
   const hookText = getHookText();
   const hookAr   = isArabic(hookText);
   const hookDir  = hookAr ? "rtl" : "ltr";
   const hookFont = getFontFamily(hookText);
 
-  // Title sizes
   const titleArabic   = isArabic(display_title);
   const titleFontSize = titleArabic ? 52 : 46;
   const emojiSize     = titleArabic ? 56 : 50;
 
-  // Power container style
   const powerContainerStyle = isPower
-    ? `
-    background:linear-gradient(135deg,#FF1744 0%,#D50000 100%);
-    padding:24px 60px; border-radius:9999px;
-    border:3px solid rgba(255,255,255,0.3);
-    box-shadow:0 0 60px rgba(255,23,68,0.8),
-               0 0 120px rgba(255,23,68,0.4);
-  `
+    ? `background:linear-gradient(135deg,#FF1744 0%,#D50000 100%);
+       padding:24px 60px; border-radius:9999px;
+       border:3px solid rgba(255,255,255,0.3);
+       box-shadow:0 0 60px rgba(255,23,68,0.8),0 0 120px rgba(255,23,68,0.4);`
     : `background:transparent;padding:0;`;
 
-  // Word text style
   const wordTextStyle = isPower
-    ? `
-    font-family:${font}; font-size:${baseFontSize}px;
-    font-weight:900; color:#FFFFFF; line-height:1.15;
-    letter-spacing:${ar ? "1px" : "3px"};
-    display:block; word-break:break-word;
-    -webkit-text-stroke:${tagStyle.strokeWidth}px ${tagStyle.strokeColor};
-    paint-order:stroke fill;
-  `
-    : `
-    font-family:${font}; font-size:${baseFontSize}px;
-    font-weight:900; color:${tagStyle.colorWord}; line-height:1.15;
-    letter-spacing:${ar ? "1px" : "3px"};
-    display:block; word-break:break-word;
-    -webkit-text-stroke:${tagStyle.strokeWidth}px ${tagStyle.strokeColor};
-    paint-order:stroke fill;
-    text-shadow:
-      0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
-      0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
-    filter:brightness(${tagStyle.brightness});
-  `;
+    ? `font-family:${font}; font-size:${baseFontSize}px;
+       font-weight:900; color:#FFFFFF; line-height:1.15;
+       letter-spacing:${ar ? "1px" : "3px"};
+       display:block; word-break:break-word;
+       -webkit-text-stroke:${tagStyle.strokeWidth}px ${tagStyle.strokeColor};
+       paint-order:stroke fill;`
+    : `font-family:${font}; font-size:${baseFontSize}px;
+       font-weight:900; color:${tagStyle.colorWord}; line-height:1.15;
+       letter-spacing:${ar ? "1px" : "3px"};
+       display:block; word-break:break-word;
+       -webkit-text-stroke:${tagStyle.strokeWidth}px ${tagStyle.strokeColor};
+       paint-order:stroke fill;
+       text-shadow:0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
+                   0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
+       filter:brightness(${tagStyle.brightness});`;
 
   return `<!DOCTYPE html>
 <html lang="${langAttr}">
@@ -944,7 +793,8 @@ function buildHTMLShort({
   .ob { position:absolute; bottom:0; left:0; right:0; height:42%;
     background:linear-gradient(to top,rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.45) 65%,transparent 100%);
     pointer-events:none; z-index:1; }
-  .flash { position:absolute; inset:0; background:${trans.flashColor}; opacity:${trans.flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
+  .flash { position:absolute; inset:0; background:${trans.flashColor};
+    opacity:${trans.flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
   .tc { position:absolute; top:410px; left:50%; width:92%; max-width:980px;
     direction:${titleDir}; text-align:center; z-index:30;
     transform:translateX(-50%) translateY(${titleAnim.translateY.toFixed(2)}px);
@@ -993,79 +843,54 @@ function buildHTMLShort({
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HTML BUILDER — LONG (1920×1080)
+// HTML BUILDER — LONG
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTMLLong({
   word,
-  tag               = "information",
-  isPower           = false,
-  globalFrame       = 0,
-  progress          = 0.5,
-  transitionState   = null,
-  currentSentence   = "",
-  highlightedWord   = "",
+  tag             = "information",
+  isPower         = false,
+  globalFrame     = 0,
+  progress        = 0.5,
+  transitionState = null,
+  currentSentence = "",
+  highlightedWord = "",
 }) {
-  // Language detection
   const ar       = word ? isArabic(word) : false;
   const dir      = word ? getDir(word) : "ltr";
-  const font     = word
-    ? getFontFamily(word)
-    : `"Noto Sans", sans-serif`;
+  const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
 
-  // Title styling
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
-  // Sentence styling
-  const sentDir = currentSentence
-    ? getDir(currentSentence)
-    : "ltr";
-  const sentFont = currentSentence
-    ? getFontFamily(currentSentence)
-    : `"Noto Sans", sans-serif`;
+  const sentDir  = currentSentence ? getDir(currentSentence) : "ltr";
+  const sentFont = currentSentence ? getFontFamily(currentSentence) : `"Noto Sans", sans-serif`;
 
   const tagStyle = getWordStyle(tag);
 
-  // Title animation (simpler for long mode)
   let titleOpacity = 1.0;
   if (globalFrame < INTRO_FRAMES) {
     titleOpacity = globalFrame / INTRO_FRAMES;
   } else if (globalFrame >= totalFrames - OUTRO_FRAMES) {
-    titleOpacity =
-      (totalFrames - globalFrame) / OUTRO_FRAMES;
+    titleOpacity = (totalFrames - globalFrame) / OUTRO_FRAMES;
   }
 
-  // Word animation
-  let wordScale   = tagStyle.scaleMult;
-  let wordOpacity = word ? 1.0 : 0;
-
+  let wordScale = tagStyle.scaleMult, wordOpacity = word ? 1.0 : 0;
   if (word && progress < 0.15) {
-    const t = progress / 0.15;
-    wordScale =
-      0.6 +
-      (1 - Math.pow(1 - t, 2)) *
-        (tagStyle.scaleMult - 0.6);
+    const t  = progress / 0.15;
+    wordScale   = 0.6 + (1 - Math.pow(1 - t, 2)) * (tagStyle.scaleMult - 0.6);
     wordOpacity = Math.min(1, t * 3);
   } else if (word && progress > 0.85) {
     wordOpacity = 1 - ((progress - 0.85) / 0.15) * 0.3;
   }
 
-  // Transition effect (lighter shake for long)
-  let flashOpacity = 0;
-  let flashColor   = "rgba(0,0,0,0)";
-  let shakeX       = 0;
-  let shakeY       = 0;
-
+  let flashOpacity = 0, flashColor = "rgba(0,0,0,0)", shakeX = 0, shakeY = 0;
   if (transitionState) {
     const { config, progress: tp } = transitionState;
-
-    flashOpacity =
-      tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
+    flashOpacity = tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
     flashOpacity = Math.max(0, Math.min(1, flashOpacity));
     flashColor   = config.flashColor;
-
     if (config.shakeAmount > 0) {
       const shake = config.shakeAmount * 0.5 * (1 - tp);
       shakeX = Math.sin(globalFrame * 2.3) * shake;
@@ -1073,22 +898,13 @@ function buildHTMLLong({
     }
   }
 
-  // Font size
-  const baseFontSize = computeFontSize(
-    word,
-    ar,
-    tagStyle.scaleMult,
-    true
-  );
+  const baseFontSize = computeFontSize(word, ar, tagStyle.scaleMult, true);
 
-  // Word transform
   const wordTransform =
     `translate(-50%, -50%) ` +
-    `translate(${shakeX.toFixed(2)}px, ` +
-    `${shakeY.toFixed(2)}px) ` +
+    `translate(${shakeX.toFixed(2)}px, ${shakeY.toFixed(2)}px) ` +
     `scale(${wordScale.toFixed(4)})`;
 
-  // Word text style
   const wordTextStyle = `
     font-family:${font}; font-size:${baseFontSize}px;
     font-weight:900; color:${tagStyle.colorWord}; line-height:1.2;
@@ -1096,27 +912,19 @@ function buildHTMLLong({
     display:block; word-break:break-word;
     -webkit-text-stroke:${tagStyle.strokeWidth}px ${tagStyle.strokeColor};
     paint-order:stroke fill;
-    text-shadow:
-      0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
-      0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
-    filter:brightness(${tagStyle.brightness});
-  `;
+    text-shadow:0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
+                0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
+    filter:brightness(${tagStyle.brightness});`;
 
-  // Subtitle (highlighted words)
   const subtitleHtml = currentSentence
-    ? currentSentence
-        .split(/\s+/)
-        .map((w) => {
-          const isHighlighted =
-            normalizeWord(w) === normalizeWord(highlightedWord);
-          return isHighlighted
-            ? `<span class="sh">${esc(w)}</span>`
-            : `<span class="sw">${esc(w)}</span>`;
-        })
-        .join(" ")
+    ? currentSentence.split(/\s+/).map((w) => {
+        const isHL = normalizeWord(w) === normalizeWord(highlightedWord);
+        return isHL
+          ? `<span class="sh">${esc(w)}</span>`
+          : `<span class="sw">${esc(w)}</span>`;
+      }).join(" ")
     : "";
 
-  // Title sizes
   const titleArabic   = isArabic(display_title);
   const titleFontSize = titleArabic ? 36 : 32;
   const emojiSize     = titleArabic ? 38 : 34;
@@ -1133,14 +941,13 @@ function buildHTMLLong({
   .ob { position:absolute; bottom:0; left:0; right:0; height:38%;
     background:linear-gradient(to top,rgba(0,0,0,0.92) 0%,rgba(0,0,0,0.5) 60%,transparent 100%);
     pointer-events:none; z-index:1; }
-  .flash { position:absolute; inset:0; background:${flashColor}; opacity:${flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
-  .tc {
-    position:absolute; top:28px;
+  .flash { position:absolute; inset:0; background:${flashColor};
+    opacity:${flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
+  .tc { position:absolute; top:28px;
     ${titleDir === "rtl" ? "right:40px" : "left:40px"};
     direction:${titleDir};
     text-align:${titleDir === "rtl" ? "right" : "left"};
-    z-index:30; opacity:${titleOpacity.toFixed(4)};
-  }
+    z-index:30; opacity:${titleOpacity.toFixed(4)}; }
   .tt { font-family:${titleFont}; font-size:${titleFontSize}px; font-weight:900; color:#FFFFFF;
     display:inline-flex; align-items:center; gap:10px; line-height:1.2; direction:${titleDir};
     -webkit-text-stroke:1px rgba(0,0,0,0.8); paint-order:stroke fill;
@@ -1156,10 +963,11 @@ function buildHTMLLong({
   .subtitle { position:absolute; bottom:48px; left:60px; right:60px;
     direction:${sentDir}; text-align:center; z-index:20;
     font-family:${sentFont}; font-size:${ar ? "34px" : "30px"};
-    font-weight:700; line-height:1.6;
-    letter-spacing:${ar ? "0.5px" : "1px"}; }
-  .sw { color:rgba(255,255,255,0.65); -webkit-text-stroke:1px rgba(0,0,0,0.6); paint-order:stroke fill; display:inline; }
-  .sh { color:#FFD700; -webkit-text-stroke:1px rgba(0,0,0,0.8); paint-order:stroke fill; display:inline;
+    font-weight:700; line-height:1.6; letter-spacing:${ar ? "0.5px" : "1px"}; }
+  .sw { color:rgba(255,255,255,0.65); -webkit-text-stroke:1px rgba(0,0,0,0.6);
+    paint-order:stroke fill; display:inline; }
+  .sh { color:#FFD700; -webkit-text-stroke:1px rgba(0,0,0,0.8);
+    paint-order:stroke fill; display:inline;
     text-shadow:0 0 20px rgba(255,215,0,0.8); font-weight:900; }
 </style>
 </head>
@@ -1169,11 +977,9 @@ function buildHTMLLong({
   <div class="flash"></div>
   <div class="tc">
     <div class="tt">
-      ${
-        titleDir === "rtl"
-          ? `<span>${esc(display_title)}</span><span class="te">${emoji_left}</span>`
-          : `<span class="te">${emoji_left}</span><span>${esc(display_title)}</span>`
-      }
+      ${titleDir === "rtl"
+        ? `<span>${esc(display_title)}</span><span class="te">${emoji_left}</span>`
+        : `<span class="te">${emoji_left}</span><span>${esc(display_title)}</span>`}
     </div>
     <span class="tline"></span>
   </div>
@@ -1188,47 +994,27 @@ function buildHTMLLong({
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function launchBrowser() {
-  const browser = await chromium.launch({
-    headless: true,
-    args:     BROWSER_ARGS,
-  });
-
+  const browser = await chromium.launch({ headless: true, args: BROWSER_ARGS });
   const context = await browser.newContext({
-    viewport:          { width: WIDTH, height: HEIGHT },
+    viewport: { width: WIDTH, height: HEIGHT },
     deviceScaleFactor: 1,
-    locale:            "ar-SA",
+    locale: "ar-SA",
   });
-
   const page = await context.newPage();
-
-  return { browser, context, page };
+  return { browser, page };
 }
 
 async function warmupFonts(page, builder) {
-  const samples = [
-    ["مرحبا", "ar"],
-    ["Hello", "en"],
-  ];
-
-  for (const [w, l] of samples) {
+  for (const [w, l] of [["مرحبا", "ar"], ["Hello", "en"]]) {
     const html = builder({
-      word:        w,
-      tag:         "information",
-      isPower:     false,
-      isHook:      false,
-      globalFrame: TITLE_SLIDE_FRAMES,
-      progress:    0.5,
+      word: w, tag: "information", isPower: false,
+      isHook: false, globalFrame: TITLE_SLIDE_FRAMES, progress: 0.5,
     });
-
     const p = join(TMP, `init_${l}.html`);
     writeFileSync(p, html, "utf-8");
-
-    await page.goto(`file://${p}`, {
-      waitUntil: "networkidle",
-    });
+    await page.goto(`file://${p}`, { waitUntil: "networkidle" });
     await page.waitForTimeout(l === "ar" ? 1000 : 500);
   }
-
   console.log("✅ Fonts loaded");
 }
 
@@ -1240,19 +1026,15 @@ function collectUniqueShortStates(frameStateMap, boundaryMap) {
   const unique = new Map();
 
   for (let f = 0; f < frameStateMap.length; f++) {
-    const ts  = boundaryMap[f] || null;
+    const ts   = boundaryMap[f] || null;
     const isHI = f < HOOK_INTRO_FRAMES;
-    const hip = isHI
-      ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1)
-      : 0;
-    const key = isHI
-      ? hookIntroKey(f)
-      : stateKey(frameStateMap[f], f, ts);
+    const hip  = isHI ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1) : 0;
+    const key  = isHI ? hookIntroKey(f) : stateKey(frameStateMap[f], f, ts);
 
     if (!unique.has(key)) {
       unique.set(key, {
-        word:              frameStateMap[f]?.word ?? null,
-        tag:               frameStateMap[f]?.tag ?? "information",
+        word:              frameStateMap[f]?.word    ?? null,
+        tag:               frameStateMap[f]?.tag     ?? "information",
         isPower:           frameStateMap[f]?.isPower ?? false,
         isHook:            f < HOOK_FRAMES,
         globalFrame:       f,
@@ -1267,41 +1049,27 @@ function collectUniqueShortStates(frameStateMap, boundaryMap) {
   return unique;
 }
 
-async function renderAllPNGsShort(
-  page,
-  frameStateMap,
-  boundaryMap
-) {
-  const unique = collectUniqueShortStates(
-    frameStateMap,
-    boundaryMap
-  );
-
+async function renderAllPNGsShort(page, frameStateMap, boundaryMap) {
+  const unique = collectUniqueShortStates(frameStateMap, boundaryMap);
   console.log(`\n📸 ${unique.size} unique states [SHORT]`);
 
   await warmupFonts(page, buildHTMLShort);
 
   const cache = new Map();
-  let done    = 0;
+  let done = 0;
 
   for (const [key, s] of unique) {
     const html = buildHTMLShort(s);
     const hp   = join(TMP, `${key}.html`);
     writeFileSync(hp, html, "utf-8");
-
     await page.goto(`file://${hp}`, { waitUntil: "load" });
     await page.waitForTimeout(35);
 
     const pp = join(TMP, `${key}.png`);
-    await page.screenshot({
-      path:           pp,
-      type:           "png",
-      omitBackground: true,
-    });
+    await page.screenshot({ path: pp, type: "png", omitBackground: true });
 
     cache.set(key, pp);
     done++;
-
     if (done % 50 === 0 || done === unique.size) {
       process.stdout.write(`  ${done}/${unique.size} PNGs\n`);
     }
@@ -1314,30 +1082,25 @@ async function renderAllPNGsShort(
 // RENDER PNGs — LONG
 // ═══════════════════════════════════════════════════════════════════════════
 
-function collectUniqueLongStates(
-  frameStateMap,
-  boundaryMap,
-  sentenceMap
-) {
+function collectUniqueLongStates(frameStateMap, boundaryMap, sentenceMap) {
   const unique = new Map();
 
   for (let f = 0; f < frameStateMap.length; f++) {
     const ts       = boundaryMap[f] || null;
     const wordSt   = frameStateMap[f];
     const sentence = sentenceMap[f] || "";
-
-    const key = longStateKey(wordSt, ts, sentence);
+    const key      = longStateKey(wordSt, ts, sentence);
 
     if (!unique.has(key)) {
       unique.set(key, {
-        word:             wordSt?.word ?? null,
-        tag:              wordSt?.tag ?? "information",
-        isPower:          wordSt?.isPower ?? false,
-        globalFrame:      f,
-        progress:         wordSt?.progress ?? 0.5,
-        transitionState:  ts,
-        currentSentence:  sentence,
-        highlightedWord:  wordSt?.word ?? "",
+        word:            wordSt?.word    ?? null,
+        tag:             wordSt?.tag     ?? "information",
+        isPower:         wordSt?.isPower ?? false,
+        globalFrame:     f,
+        progress:        wordSt?.progress ?? 0.5,
+        transitionState: ts,
+        currentSentence: sentence,
+        highlightedWord: wordSt?.word ?? "",
       });
     }
   }
@@ -1345,43 +1108,27 @@ function collectUniqueLongStates(
   return unique;
 }
 
-async function renderAllPNGsLong(
-  page,
-  frameStateMap,
-  boundaryMap,
-  sentenceMap
-) {
-  const unique = collectUniqueLongStates(
-    frameStateMap,
-    boundaryMap,
-    sentenceMap
-  );
-
+async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) {
+  const unique = collectUniqueLongStates(frameStateMap, boundaryMap, sentenceMap);
   console.log(`\n📸 ${unique.size} unique states [LONG]`);
 
   await warmupFonts(page, buildHTMLLong);
 
   const cache = new Map();
-  let done    = 0;
+  let done = 0;
 
   for (const [key, s] of unique) {
     const html = buildHTMLLong(s);
     const hp   = join(TMP, `${key}.html`);
     writeFileSync(hp, html, "utf-8");
-
     await page.goto(`file://${hp}`, { waitUntil: "load" });
     await page.waitForTimeout(35);
 
     const pp = join(TMP, `${key}.png`);
-    await page.screenshot({
-      path:           pp,
-      type:           "png",
-      omitBackground: true,
-    });
+    await page.screenshot({ path: pp, type: "png", omitBackground: true });
 
     cache.set(key, pp);
     done++;
-
     if (done % 50 === 0 || done === unique.size) {
       process.stdout.write(`  ${done}/${unique.size} PNGs\n`);
     }
@@ -1394,41 +1141,41 @@ async function renderAllPNGsLong(
 // PROCESS BACKGROUND
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildMotionFilter(
-  duration,
-  idx,
-  isHookClip
-) {
+function buildMotionFilter(duration, idx, isHookClip) {
+  const frames      = Math.ceil(duration * FPS);
   const scaleAndCrop =
-    `scale=${WIDTH}:${HEIGHT}:` +
-    `force_original_aspect_ratio=increase,` +
+    `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
     `crop=${WIDTH}:${HEIGHT},setsar=1`;
 
   if (isLong) {
-    const frames = Math.ceil(duration * FPS);
     const panDir = idx % 2 === 0 ? "+" : "-";
     return (
-      `scale=w='trunc((iw*1.05)/2)*2':` +
-      `h='trunc((ih*1.05)/2)*2',` +
+      `scale=w='trunc((iw*1.05)/2)*2':h='trunc((ih*1.05)/2)*2',` +
       `zoompan=z='1.02':` +
       `x='if(gte(on,1),x${panDir}0.2,iw/2-(iw/zoom/2))':` +
-      `y='ih/2-(ih/zoom/2)':` +
-      `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`
+      `y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`
     );
   }
 
   if (isHookClip) {
-    const frames = Math.ceil(duration * FPS);
     return (
-      `scale=w='trunc((iw*1.2)/2)*2':` +
-      `h='trunc((ih*1.2)/2)*2',` +
+      `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
       `zoompan=z='if(eq(on,1),1.15,max(zoom-0.005,1.0))':` +
       `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
       `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`
     );
   }
 
-  return scaleAndCrop;
+  // Short: 4 motion types
+  const zooms = [
+    `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
+    `zoompan=z='min(zoom+0.0008,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
+    `zoompan=z='max(zoom-0.0008,1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
+    scaleAndCrop,
+    scaleAndCrop,
+  ];
+  return zooms[idx % 4];
 }
 
 function buildColorGrading(isHookClip) {
@@ -1437,71 +1184,36 @@ function buildColorGrading(isHookClip) {
     : `eq=contrast=1.12:brightness=-0.02:saturation=0.88`;
 }
 
-function processBackground(
-  videoPath,
-  duration,
-  outPath,
-  idx,
-  isHookClip = false
-) {
+function processBackground(videoPath, duration, outPath, idx, isHookClip = false) {
   const d  = Math.max(duration, 0.5);
   const fi = Math.min(0.3, d * 0.08);
   const fo = Math.min(0.3, d * 0.08);
 
-  const motionFilter = buildMotionFilter(
-    d,
-    idx,
-    isHookClip
-  );
-  const grading = buildColorGrading(isHookClip);
+  const motionFilter = buildMotionFilter(d, idx, isHookClip);
+  const grading      = buildColorGrading(isHookClip);
+  const vf = `${motionFilter},${grading},fade=t=in:st=0:d=${fi.toFixed(3)},fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
 
-  const vf =
-    `${motionFilter},${grading},` +
-    `fade=t=in:st=0:d=${fi.toFixed(3)},` +
-    `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
-
-  // Loop if source is too short
   const srcDur  = probeDuration(videoPath);
-  const loopArg =
-    srcDur > 0 && srcDur < d + 0.5
-      ? ["-stream_loop", "-1"]
-      : [];
+  const loopArg = srcDur > 0 && srcDur < d + 0.5 ? ["-stream_loop", "-1"] : [];
 
   let r = runFFmpeg([
-    "-y",
-    ...loopArg,
-    "-i", videoPath,
-    "-t", d.toFixed(3),
-    "-vf", vf,
-    "-r", String(FPS),
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", isHookClip ? "16" : "18",
-    "-pix_fmt", "yuv420p",
-    "-an",
-    outPath,
+    "-y", ...loopArg, "-i", videoPath,
+    "-t", d.toFixed(3), "-vf", vf,
+    "-r", String(FPS), "-c:v", "libx264",
+    "-preset", "fast", "-crf", isHookClip ? "16" : "18",
+    "-pix_fmt", "yuv420p", "-an", outPath,
   ]);
 
-  // Fallback to simpler filter if failed
   if (r.status !== 0) {
-    const scaleAndCrop =
-      `scale=${WIDTH}:${HEIGHT}:` +
-      `force_original_aspect_ratio=increase,` +
+    const simple =
+      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1`;
-
     runFFmpeg([
-      "-y",
-      "-stream_loop", "-1",
-      "-i", videoPath,
-      "-t", d.toFixed(3),
-      "-vf", scaleAndCrop,
-      "-r", String(FPS),
-      "-c:v", "libx264",
-      "-preset", "fast",
-      "-crf", "21",
-      "-pix_fmt", "yuv420p",
-      "-an",
-      outPath,
+      "-y", "-stream_loop", "-1", "-i", videoPath,
+      "-t", d.toFixed(3), "-vf", simple,
+      "-r", String(FPS), "-c:v", "libx264",
+      "-preset", "fast", "-crf", "21",
+      "-pix_fmt", "yuv420p", "-an", outPath,
     ]);
   }
 
@@ -1514,13 +1226,10 @@ function processBackground(
 
 function framesToMov(frameDir, outPath) {
   runFFmpeg([
-    "-y",
-    "-framerate", String(FPS),
+    "-y", "-framerate", String(FPS),
     "-i", `${frameDir}/frame_%06d.png`,
     "-vf", `scale=${WIDTH}:${HEIGHT},format=rgba`,
-    "-c:v", "png",
-    "-an",
-    outPath,
+    "-c:v", "png", "-an", outPath,
   ]);
   return outPath;
 }
@@ -1530,45 +1239,31 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     "[1:v]format=rgba[cap];" +
     "[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]";
 
-  // Try with audio from background
+  // ✅ المحاولة الأولى: صوت من BG video مباشرة
   let r = runFFmpeg([
-    "-y",
-    "-i", bgMp4,
-    "-i", capMov,
+    "-y", "-i", bgMp4, "-i", capMov,
     "-filter_complex", overlayFilter,
-    "-map", "[out]",
-    "-map", "0:a:0",
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", "19",
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-pix_fmt", "yuv420p",
-    outPath,
+    "-map", "[out]", "-map", "0:a:0",
+    "-c:v", "libx264", "-preset", "fast", "-crf", "19",
+    "-c:a", "aac", "-b:a", "192k",
+    "-pix_fmt", "yuv420p", outPath,
   ]);
 
-  // Fallback: use external audio
+  // ✅ Fallback: صوت من ملف منفصل
   if (r.status !== 0 && audioPth) {
+    console.log("  ⚠️  Using external audio fallback...");
     r = runFFmpeg([
-      "-y",
-      "-i", bgMp4,
-      "-i", capMov,
-      "-i", audioPth,
+      "-y", "-i", bgMp4, "-i", capMov, "-i", audioPth,
       "-filter_complex", overlayFilter,
-      "-map", "[out]",
-      "-map", "2:a:0",
-      "-c:v", "libx264",
-      "-preset", "fast",
-      "-crf", "19",
-      "-c:a", "aac",
-      "-b:a", "192k",
-      "-pix_fmt", "yuv420p",
-      outPath,
+      "-map", "[out]", "-map", "2:a:0",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "19",
+      "-c:a", "aac", "-b:a", "192k",
+      "-pix_fmt", "yuv420p", outPath,
     ]);
   }
 
   if (r.status !== 0) {
-    console.error("❌ overlayOnBg failed");
+    console.error("❌ overlayOnBg failed:", r.stderr?.toString().slice(-200));
   }
 
   return outPath;
@@ -1580,60 +1275,38 @@ function xfadeConcat(clips, durs) {
 
   const XFADE   = isLong ? 0.5 : 0.3;
   const filters = [];
-  let offset    = 0;
-  let last      = "[0:v]";
+  let offset = 0;
+  let last   = "[0:v]";
 
   for (let i = 1; i < clips.length; i++) {
     offset += durs[i - 1] - XFADE;
     if (offset < 0) offset = 0;
 
-    const out =
-      i === clips.length - 1 ? "[vout]" : `[v${i}]`;
-    const trans =
-      XFADE_TRANSITIONS[(i - 1) % XFADE_TRANSITIONS.length];
-
+    const out   = i === clips.length - 1 ? "[vout]" : `[v${i}]`;
+    const trans = XFADE_TRANSITIONS[(i - 1) % XFADE_TRANSITIONS.length];
     filters.push(
-      `${last}[${i}:v]xfade=transition=${trans}:` +
-      `duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
+      `${last}[${i}:v]xfade=transition=${trans}:duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
     );
     last = out;
   }
 
   const outPath = join(TMP, "xfaded.mp4");
-  const r       = runFFmpeg([
-    "-y",
-    ...clips.flatMap((p) => ["-i", p]),
+  const r = runFFmpeg([
+    "-y", ...clips.flatMap((p) => ["-i", p]),
     "-filter_complex", filters.join(";"),
     "-map", "[vout]",
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", "18",
-    "-pix_fmt", "yuv420p",
-    "-an",
-    outPath,
+    "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+    "-pix_fmt", "yuv420p", "-an", outPath,
   ]);
 
-  // Fallback: simple concat
   if (r.status !== 0) {
     const lst = join(TMP, "list.txt");
-    writeFileSync(
-      lst,
-      clips.map((p) => `file '${p}'`).join("\n")
-    );
-
+    writeFileSync(lst, clips.map((p) => `file '${p}'`).join("\n"));
     const raw = join(TMP, "raw.mp4");
-    spawnSync(
-      "ffmpeg",
-      [
-        "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", lst,
-        "-c", "copy",
-        raw,
-      ],
-      { stdio: "inherit" }
-    );
+    spawnSync("ffmpeg", [
+      "-y", "-f", "concat", "-safe", "0",
+      "-i", lst, "-c", "copy", raw,
+    ], { stdio: "inherit" });
     return raw;
   }
 
@@ -1643,46 +1316,25 @@ function xfadeConcat(clips, durs) {
 function mergeAudio(videoPath, audioPath, outPath) {
   const aDur = probeDuration(audioPath);
   const vDur = probeDuration(videoPath);
-
-  console.log(
-    `🎵 Audio: ${aDur.toFixed(3)}s | ` +
-    `Video: ${vDur.toFixed(3)}s`
-  );
+  console.log(`🎵 Audio: ${aDur.toFixed(3)}s | Video: ${vDur.toFixed(3)}s`);
 
   let vid = videoPath;
-
-  // Loop video if shorter than audio
   if (vDur < aDur - 0.3) {
     const looped = join(TMP, "looped.mp4");
-    const r      = runFFmpeg([
-      "-y",
-      "-stream_loop", "-1",
-      "-i", videoPath,
+    const r = runFFmpeg([
+      "-y", "-stream_loop", "-1", "-i", videoPath,
       "-t", aDur.toFixed(3),
-      "-c:v", "libx264",
-      "-preset", "fast",
-      "-crf", "21",
-      "-pix_fmt", "yuv420p",
-      "-an",
-      looped,
+      "-c:v", "libx264", "-preset", "fast", "-crf", "21",
+      "-pix_fmt", "yuv420p", "-an", looped,
     ]);
-
-    if (r.status === 0) {
-      vid = looped;
-    }
+    if (r.status === 0) vid = looped;
   }
 
   runFFmpeg([
-    "-y",
-    "-i", vid,
-    "-i", audioPath,
-    "-map", "0:v:0",
-    "-map", "1:a:0",
-    "-c:v", "copy",
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-t", aDur.toFixed(3),
-    outPath,
+    "-y", "-i", vid, "-i", audioPath,
+    "-map", "0:v:0", "-map", "1:a:0",
+    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+    "-t", aDur.toFixed(3), outPath,
   ]);
 
   console.log(`✅ Done → ${outPath}`);
@@ -1694,12 +1346,8 @@ function mergeAudio(videoPath, audioPath, outPath) {
 
 function linkFrame(src, dest) {
   if (!src) return;
-
-  try {
-    symlinkSync(src, dest);
-  } catch {
-    copyFileSync(src, dest);
-  }
+  try { symlinkSync(src, dest); }
+  catch { copyFileSync(src, dest); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1711,32 +1359,16 @@ async function handleBgOnlyMode() {
   const finalClips = [];
   const clipDurs   = [];
 
-  console.log(
-    `📊 ${clipPlan.length} clips ` +
-    `[${content_mode.toUpperCase()}]`
-  );
+  console.log(`📊 ${clipPlan.length} clips [${content_mode.toUpperCase()}]`);
 
   for (const clip of clipPlan) {
     const { index, duration, videoPath, isHook } = clip;
-
     process.stdout.write(
-      `  [${index + 1}/${clipPlan.length}] ` +
-      `${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
+      `  [${index + 1}/${clipPlan.length}] ${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
     );
 
-    const bgMp4 = join(
-      TMP,
-      `bg_${String(index).padStart(3, "0")}.mp4`
-    );
-
-    processBackground(
-      videoPath,
-      duration,
-      bgMp4,
-      index,
-      isHook
-    );
-
+    const bgMp4 = join(TMP, `bg_${String(index).padStart(3, "0")}.mp4`);
+    processBackground(videoPath, duration, bgMp4, index, isHook);
     finalClips.push(bgMp4);
     clipDurs.push(duration);
     process.stdout.write("✓\n");
@@ -1748,12 +1380,10 @@ async function handleBgOnlyMode() {
   console.log("🎵 Merging audio...");
   mergeAudio(dissolved, audio, outputPath);
 
-  console.log(
-    `\n🎉 BG Video [${content_mode.toUpperCase()}] → ` +
-    `${outputPath}\n`
-  );
+  console.log(`\n🎉 BG Video [${content_mode.toUpperCase()}] → ${outputPath}\n`);
 }
 
+// ✅ words_only — SHORT (الإصلاح الرئيسي)
 async function handleWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
@@ -1769,32 +1399,25 @@ async function handleWordsOnlyMode() {
 
   try {
     console.log("🖼️  Rendering PNGs [SHORT]...");
-    const pngCache = await renderAllPNGsShort(
-      page,
-      frameStateMap,
-      boundaryMap
-    );
-
+    const pngCache = await renderAllPNGsShort(page, frameStateMap, boundaryMap);
     await browser.close();
     console.log(`✅ ${pngCache.size} PNGs\n`);
 
-    // Build frame sequence
     const frameDir = join(TMP, "frames_words");
     mkdirSync(frameDir, { recursive: true });
-    const emptyPng = pngCache.get("empty_n");
+
+    // ✅ emptyPng fallback
+    const emptyPng = pngCache.get("empty_n") || pngCache.get("intro_f0");
 
     for (let f = 0; f < totalFrames; f++) {
-      const ts  = boundaryMap[f] || null;
+      const ts   = boundaryMap[f] || null;
       const isHI = f < HOOK_INTRO_FRAMES;
-      const key = isHI
+      const key  = isHI
         ? hookIntroKey(f)
         : stateKey(frameStateMap[f], f, ts);
 
       const src  = pngCache.get(key) || emptyPng;
-      const dest = join(
-        frameDir,
-        `frame_${String(f).padStart(6, "0")}.png`
-      );
+      const dest = join(frameDir, `frame_${String(f).padStart(6, "0")}.png`);
       linkFrame(src, dest);
     }
 
@@ -1802,16 +1425,16 @@ async function handleWordsOnlyMode() {
     framesToMov(frameDir, capMov);
 
     console.log("🔧 Overlaying words on BG video [SHORT]...");
+    // ✅ bgVideoPath يحتوي mixed_audio → صوت صحيح → تزامن 100%
     overlayOnBg(bgVideoPath, capMov, audio, outputPath);
 
     console.log(`\n🎉 Final [SHORT] → ${outputPath}\n`);
   } finally {
-    if (browser.isConnected?.()) {
-      await browser.close();
-    }
+    if (browser.isConnected?.()) await browser.close();
   }
 }
 
+// ✅ words_only — LONG
 async function handleLongWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
@@ -1828,32 +1451,24 @@ async function handleLongWordsOnlyMode() {
 
   try {
     console.log("🖼️  Rendering PNGs [LONG]...");
-    const pngCache = await renderAllPNGsLong(
-      page,
-      frameStateMap,
-      boundaryMap,
-      sentenceMap
-    );
-
+    const pngCache = await renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap);
     await browser.close();
     console.log(`✅ ${pngCache.size} PNGs [LONG]\n`);
 
-    // Build frame sequence
     const frameDir = join(TMP, "frames_long");
     mkdirSync(frameDir, { recursive: true });
+
+    // ✅ emptyPng fallback
+    const emptyPng = pngCache.get("long_empty_n_hold_") || [...pngCache.values()][0];
 
     for (let f = 0; f < totalFrames; f++) {
       const ts       = boundaryMap[f] || null;
       const wordSt   = frameStateMap[f];
       const sentence = sentenceMap[f] || "";
+      const key      = longStateKey(wordSt, ts, sentence);
 
-      const key = longStateKey(wordSt, ts, sentence);
-
-      const src  = pngCache.get(key);
-      const dest = join(
-        frameDir,
-        `frame_${String(f).padStart(6, "0")}.png`
-      );
+      const src  = pngCache.get(key) || emptyPng;
+      const dest = join(frameDir, `frame_${String(f).padStart(6, "0")}.png`);
       linkFrame(src, dest);
     }
 
@@ -1861,13 +1476,12 @@ async function handleLongWordsOnlyMode() {
     framesToMov(frameDir, capMov);
 
     console.log("🔧 Overlaying words on BG video [LONG]...");
+    // ✅ bgVideoPath يحتوي mixed_audio → تزامن 100%
     overlayOnBg(bgVideoPath, capMov, audio, outputPath);
 
     console.log(`\n🎉 Final [LONG] → ${outputPath}\n`);
   } finally {
-    if (browser.isConnected?.()) {
-      await browser.close();
-    }
+    if (browser.isConnected?.()) await browser.close();
   }
 }
 
@@ -1876,20 +1490,16 @@ async function handleLongWordsOnlyMode() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const MODE_HANDLERS = {
-  bg_only:          handleBgOnlyMode,
-  long_bg_only:     handleBgOnlyMode,
-  words_only:       handleWordsOnlyMode,
-  long_words_only:  handleLongWordsOnlyMode,
+  bg_only:         handleBgOnlyMode,
+  long_bg_only:    handleBgOnlyMode,
+  words_only:      handleWordsOnlyMode,
+  long_words_only: handleLongWordsOnlyMode,
 };
 
 async function main() {
-  console.log(
-    `\n🚀 Mode: ${mode} | ` +
-    `Content: ${content_mode.toUpperCase()}\n`
-  );
+  console.log(`\n🚀 Mode: ${mode} | Content: ${content_mode.toUpperCase()}\n`);
 
   const handler = MODE_HANDLERS[mode];
-
   if (!handler) {
     console.error(`❌ Unknown mode: ${mode}`);
     process.exit(1);
