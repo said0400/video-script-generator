@@ -295,7 +295,8 @@ const effectiveDuration =
 const totalFrames = Math.ceil(effectiveDuration * FPS);
 
 console.log(
-  `🎵 Audio: ${realAudioDuration.toFixed(3)}s | Frames: ${totalFrames}`
+  `🎵 Audio: ${realAudioDuration.toFixed(3)}s | ` +
+  `Frames: ${totalFrames}`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -389,7 +390,7 @@ function buildClipPlan() {
     return plan;
   }
 
-  const totalClips    = Math.max(
+  const totalClips = Math.max(
     1, Math.floor(effectiveDuration / clip_duration)
   );
   const actualClipDur = effectiveDuration / totalClips;
@@ -456,7 +457,8 @@ function buildWordList() {
       .join(" ")
       .split(/\s+/)
       .filter(Boolean);
-    const perWord = effectiveDuration / Math.max(allText.length, 1);
+    const perWord =
+      effectiveDuration / Math.max(allText.length, 1);
 
     for (let i = 0; i < allText.length; i++) {
       words.push({
@@ -484,6 +486,15 @@ function buildWordList() {
       `"${last.word}" [${last.tag}]`
     );
   }
+
+  // ✅ تشخيص: طباعة أول 5 كلمات مع timestamps
+  console.log("\n🔍 Word timestamps check:");
+  words.slice(0, 5).forEach((w, i) => {
+    console.log(
+      `   [${i}] ${w.start.toFixed(3)}s → ` +
+      `${w.end.toFixed(3)}s "${w.word}" [${w.tag}]`
+    );
+  });
 
   return words;
 }
@@ -520,6 +531,28 @@ function buildFrameStateMap(words) {
     `Coverage: ${covered}/${totalFrames} ` +
     `(${((covered / totalFrames) * 100).toFixed(1)}%)`
   );
+
+  // ✅ تشخيص: فحص أول 10 frames
+  console.log("\n🔍 Frame state check (first 10 frames):");
+  for (let f = 0; f < Math.min(10, totalFrames); f++) {
+    const t = f / FPS;
+    const s = map[f];
+    console.log(
+      `   frame[${f}] t=${t.toFixed(3)}s → ` +
+      (s ? `"${s.word}" [${s.tag}]` : "empty")
+    );
+  }
+
+  // ✅ تشخيص: أول frame فيه كلمة
+  const firstWordFrame = map.findIndex(Boolean);
+  if (firstWordFrame >= 0) {
+    console.log(
+      `\n✅ First word at frame ${firstWordFrame} ` +
+      `(t=${(firstWordFrame / FPS).toFixed(3)}s): ` +
+      `"${map[firstWordFrame].word}"`
+    );
+  }
+
   return map;
 }
 
@@ -614,7 +647,8 @@ function computeTitleAnimation(globalFrame) {
     return { opacity: e, translateY: (1 - e) * -80 };
   }
   if (globalFrame >= totalFrames - OUTRO_FRAMES) {
-    const t = (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
+    const t =
+      (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
     const e = Math.pow(t, 2);
     return { opacity: 1 - e, translateY: e * -60 };
   }
@@ -655,7 +689,8 @@ function computeTransitionEffect(transitionState, globalFrame) {
 
   const { config, progress: tp } = transitionState;
 
-  let flashOpacity = tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
+  let flashOpacity =
+    tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
   flashOpacity = Math.max(0, Math.min(1, flashOpacity));
 
   let shakeX = 0, shakeY = 0;
@@ -667,7 +702,8 @@ function computeTransitionEffect(transitionState, globalFrame) {
 
   let transScale = 1.0;
   if (config.scaleBoost > 1.0 && tp < 0.5) {
-    transScale = 1.0 + (config.scaleBoost - 1.0) * (1 - tp * 2);
+    transScale =
+      1.0 + (config.scaleBoost - 1.0) * (1 - tp * 2);
   }
 
   return {
@@ -755,7 +791,9 @@ function buildHTMLShort({
 }) {
   const ar       = word ? isArabic(word) : false;
   const dir      = word ? getDir(word) : "ltr";
-  const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
+  const font     = word
+    ? getFontFamily(word)
+    : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
 
   const titleDir  = getDir(display_title);
@@ -769,7 +807,7 @@ function buildHTMLShort({
 
   let hiScale = 1.0, hiOpacity = 1.0;
   if (isHookIntro) {
-    const e = 1 - Math.pow(1 - hookIntroProgress, 3);
+    const e   = 1 - Math.pow(1 - hookIntroProgress, 3);
     hiScale   = 1.4 - e * 0.4;
     hiOpacity = e;
   }
@@ -777,10 +815,13 @@ function buildHTMLShort({
   const trans        = computeTransitionEffect(transitionState, globalFrame);
   const baseFontSize = computeFontSize(word, ar, tagStyle.scaleMult, false);
 
-  const finalScale   =
-    wordAnim.scale * trans.transScale * (isHookIntro ? hiScale : 1.0);
-  const finalOpacity =
-    word ? wordAnim.opacity * (isHookIntro ? hiOpacity : 1.0) : 0;
+  const finalScale =
+    wordAnim.scale *
+    trans.transScale *
+    (isHookIntro ? hiScale : 1.0);
+  const finalOpacity = word
+    ? wordAnim.opacity * (isHookIntro ? hiOpacity : 1.0)
+    : 0;
 
   const wordTransform =
     `translate(-50%, calc(-50% + ${wordAnim.translateY.toFixed(1)}px)) ` +
@@ -938,14 +979,19 @@ function buildHTMLLong({
 }) {
   const ar       = word ? isArabic(word) : false;
   const dir      = word ? getDir(word) : "ltr";
-  const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
+  const font     = word
+    ? getFontFamily(word)
+    : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
 
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
 
-  const sentDir  = currentSentence ? getDir(currentSentence)       : "ltr";
-  const sentFont = currentSentence ? getFontFamily(currentSentence) : `"Noto Sans", sans-serif`;
+  const sentDir  = currentSentence
+    ? getDir(currentSentence) : "ltr";
+  const sentFont = currentSentence
+    ? getFontFamily(currentSentence)
+    : `"Noto Sans", sans-serif`;
 
   const tagStyle = getWordStyle(tag);
 
@@ -959,8 +1005,9 @@ function buildHTMLLong({
   let wordScale   = tagStyle.scaleMult;
   let wordOpacity = word ? 1.0 : 0;
   if (word && progress < 0.15) {
-    const t  = progress / 0.15;
-    wordScale   = 0.6 + (1 - Math.pow(1 - t, 2)) * (tagStyle.scaleMult - 0.6);
+    const t   = progress / 0.15;
+    wordScale = 0.6 +
+      (1 - Math.pow(1 - t, 2)) * (tagStyle.scaleMult - 0.6);
     wordOpacity = Math.min(1, t * 3);
   } else if (word && progress > 0.85) {
     wordOpacity = 1 - ((progress - 0.85) / 0.15) * 0.3;
@@ -983,7 +1030,9 @@ function buildHTMLLong({
     }
   }
 
-  const baseFontSize = computeFontSize(word, ar, tagStyle.scaleMult, true);
+  const baseFontSize = computeFontSize(
+    word, ar, tagStyle.scaleMult, true
+  );
 
   const wordTransform =
     `translate(-50%, -50%) ` +
@@ -1004,7 +1053,8 @@ function buildHTMLLong({
 
   const subtitleHtml = currentSentence
     ? currentSentence.split(/\s+/).map((w) => {
-        const isHL = normalizeWord(w) === normalizeWord(highlightedWord);
+        const isHL =
+          normalizeWord(w) === normalizeWord(highlightedWord);
         return isHL
           ? `<span class="sh">${esc(w)}</span>`
           : `<span class="sw">${esc(w)}</span>`;
@@ -1026,7 +1076,8 @@ function buildHTMLLong({
   }
   .ot {
     position:absolute; top:0; left:0; right:0; height:35%;
-    background:linear-gradient(to bottom,rgba(0,0,0,0.8) 0%,transparent 100%);
+    background:linear-gradient(to bottom,
+      rgba(0,0,0,0.8) 0%,transparent 100%);
     pointer-events:none; z-index:1;
   }
   .ob {
@@ -1053,15 +1104,16 @@ function buildHTMLLong({
     font-weight:900; color:#FFFFFF;
     display:inline-flex; align-items:center;
     gap:10px; line-height:1.2; direction:${titleDir};
-    -webkit-text-stroke:1px rgba(0,0,0,0.8); paint-order:stroke fill;
+    -webkit-text-stroke:1px rgba(0,0,0,0.8);
+    paint-order:stroke fill;
     text-shadow:
       0 0 20px rgba(255,23,68,0.5),
       0 2px 10px rgba(0,0,0,0.9);
   }
   .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
   .tline {
-    display:block; margin-top:8px; width:80px; height:3px;
-    border-radius:2px; background:#FF1744;
+    display:block; margin-top:8px; width:80px;
+    height:3px; border-radius:2px; background:#FF1744;
   }
   .wc {
     position:absolute; left:50%; top:46%;
@@ -1101,8 +1153,10 @@ function buildHTMLLong({
   <div class="tc">
     <div class="tt">
       ${titleDir === "rtl"
-        ? `<span>${esc(display_title)}</span><span class="te">${emoji_left}</span>`
-        : `<span class="te">${emoji_left}</span><span>${esc(display_title)}</span>`}
+        ? `<span>${esc(display_title)}</span>` +
+          `<span class="te">${emoji_left}</span>`
+        : `<span class="te">${emoji_left}</span>` +
+          `<span>${esc(display_title)}</span>`}
     </div>
     <span class="tline"></span>
   </div>
@@ -1162,7 +1216,9 @@ function collectUniqueShortStates(frameStateMap, boundaryMap) {
   for (let f = 0; f < frameStateMap.length; f++) {
     const ts   = boundaryMap[f] || null;
     const isHI = f < HOOK_INTRO_FRAMES;
-    const hip  = isHI ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1) : 0;
+    const hip  = isHI
+      ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1)
+      : 0;
     const key  = isHI
       ? hookIntroKey(f)
       : stateKey(frameStateMap[f], f, ts);
@@ -1202,7 +1258,11 @@ async function renderAllPNGsShort(page, frameStateMap, boundaryMap) {
     await page.waitForTimeout(35);
 
     const pp = join(TMP, `${key}.png`);
-    await page.screenshot({ path: pp, type: "png", omitBackground: true });
+    await page.screenshot({
+      path:           pp,
+      type:           "png",
+      omitBackground: true,
+    });
 
     cache.set(key, pp);
     done++;
@@ -1218,7 +1278,9 @@ async function renderAllPNGsShort(page, frameStateMap, boundaryMap) {
 // RENDER PNGs — LONG
 // ═══════════════════════════════════════════════════════════════════════════
 
-function collectUniqueLongStates(frameStateMap, boundaryMap, sentenceMap) {
+function collectUniqueLongStates(
+  frameStateMap, boundaryMap, sentenceMap
+) {
   const unique = new Map();
 
   for (let f = 0; f < frameStateMap.length; f++) {
@@ -1265,7 +1327,11 @@ async function renderAllPNGsLong(
     await page.waitForTimeout(35);
 
     const pp = join(TMP, `${key}.png`);
-    await page.screenshot({ path: pp, type: "png", omitBackground: true });
+    await page.screenshot({
+      path:           pp,
+      type:           "png",
+      omitBackground: true,
+    });
 
     cache.set(key, pp);
     done++;
@@ -1284,13 +1350,15 @@ async function renderAllPNGsLong(
 function buildMotionFilter(duration, idx, isHookClip) {
   const frames       = Math.ceil(duration * FPS);
   const scaleAndCrop =
-    `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
+    `scale=${WIDTH}:${HEIGHT}:` +
+    `force_original_aspect_ratio=increase,` +
     `crop=${WIDTH}:${HEIGHT},setsar=1`;
 
   if (isLong) {
     const panDir = idx % 2 === 0 ? "+" : "-";
     return (
-      `scale=w='trunc((iw*1.05)/2)*2':h='trunc((ih*1.05)/2)*2',` +
+      `scale=w='trunc((iw*1.05)/2)*2':` +
+      `h='trunc((ih*1.05)/2)*2',` +
       `zoompan=z='1.02':` +
       `x='if(gte(on,1),x${panDir}0.2,iw/2-(iw/zoom/2))':` +
       `y='ih/2-(ih/zoom/2)':` +
@@ -1300,7 +1368,8 @@ function buildMotionFilter(duration, idx, isHookClip) {
 
   if (isHookClip) {
     return (
-      `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
+      `scale=w='trunc((iw*1.2)/2)*2':` +
+      `h='trunc((ih*1.2)/2)*2',` +
       `zoompan=z='if(eq(on,1),1.15,max(zoom-0.005,1.0))':` +
       `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
       `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`
@@ -1321,12 +1390,14 @@ function buildMotionFilter(duration, idx, isHookClip) {
 
     `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
     `zoompan=z='1.1':` +
-    `x='if(gte(x,iw/10),x-0.5,iw/10)':y='ih/2-(ih/zoom/2)':` +
+    `x='if(gte(x,iw/10),x-0.5,iw/10)':` +
+    `y='ih/2-(ih/zoom/2)':` +
     `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
 
     `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
     `zoompan=z='1.1':` +
-    `x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':y='ih/2-(ih/zoom/2)':` +
+    `x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':` +
+    `y='ih/2-(ih/zoom/2)':` +
     `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
   ];
 
@@ -1371,10 +1442,10 @@ function processBackground(
     outPath,
   ]);
 
-  // Fallback
   if (r.status !== 0) {
     const simple =
-      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
+      `scale=${WIDTH}:${HEIGHT}:` +
+      `force_original_aspect_ratio=increase,` +
       `crop=${WIDTH}:${HEIGHT},setsar=1`;
     runFFmpeg([
       "-y", "-stream_loop", "-1", "-i", videoPath,
@@ -1467,8 +1538,10 @@ function xfadeConcat(clips, durs) {
     offset += durs[i - 1] - XFADE;
     if (offset < 0) offset = 0;
 
-    const out   = i === clips.length - 1 ? "[vout]" : `[v${i}]`;
-    const trans = XFADE_TRANSITIONS[(i - 1) % XFADE_TRANSITIONS.length];
+    const out   =
+      i === clips.length - 1 ? "[vout]" : `[v${i}]`;
+    const trans =
+      XFADE_TRANSITIONS[(i - 1) % XFADE_TRANSITIONS.length];
     filters.push(
       `${last}[${i}:v]xfade=transition=${trans}:` +
       `duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
@@ -1487,10 +1560,12 @@ function xfadeConcat(clips, durs) {
     outPath,
   ]);
 
-  // Fallback: simple concat
   if (r.status !== 0) {
     const lst = join(TMP, "list.txt");
-    writeFileSync(lst, clips.map((p) => `file '${p}'`).join("\n"));
+    writeFileSync(
+      lst,
+      clips.map((p) => `file '${p}'`).join("\n")
+    );
     const raw = join(TMP, "raw.mp4");
     spawnSync("ffmpeg", [
       "-y", "-f", "concat", "-safe", "0",
@@ -1608,7 +1683,6 @@ async function handleWordsOnlyMode() {
     const frameDir = join(TMP, "frames_words");
     mkdirSync(frameDir, { recursive: true });
 
-    // ✅ emptyPng fallback
     const emptyPng =
       pngCache.get("empty_n") ||
       pngCache.get("intro_f0");
@@ -1667,7 +1741,6 @@ async function handleLongWordsOnlyMode() {
     const frameDir = join(TMP, "frames_long");
     mkdirSync(frameDir, { recursive: true });
 
-    // ✅ emptyPng fallback
     const emptyPng =
       pngCache.get("long_empty_n_hold_") ||
       [...pngCache.values()][0];
