@@ -69,7 +69,8 @@ const isShort = !isLong;
 
 const TITLE_SLIDE_FRAMES = Math.floor(0.6 * FPS);
 const HOOK_FRAMES        = Math.floor(3.0 * FPS);
-const HOOK_INTRO_FRAMES  = Math.floor(0.4 * FPS);
+// ✅ الإصلاح: HOOK_INTRO_FRAMES = 0 → لا تأخير في ظهور الكلمات
+const HOOK_INTRO_FRAMES  = 0;
 const INTRO_FRAMES       = Math.floor(1.0 * FPS);
 const OUTRO_FRAMES       = Math.floor(1.0 * FPS);
 
@@ -295,8 +296,7 @@ const effectiveDuration =
 const totalFrames = Math.ceil(effectiveDuration * FPS);
 
 console.log(
-  `🎵 Audio: ${realAudioDuration.toFixed(3)}s | ` +
-  `Frames: ${totalFrames}`
+  `🎵 Audio: ${realAudioDuration.toFixed(3)}s | Frames: ${totalFrames}`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -487,15 +487,6 @@ function buildWordList() {
     );
   }
 
-  // ✅ تشخيص: طباعة أول 5 كلمات مع timestamps
-  console.log("\n🔍 Word timestamps check:");
-  words.slice(0, 5).forEach((w, i) => {
-    console.log(
-      `   [${i}] ${w.start.toFixed(3)}s → ` +
-      `${w.end.toFixed(3)}s "${w.word}" [${w.tag}]`
-    );
-  });
-
   return words;
 }
 
@@ -531,28 +522,6 @@ function buildFrameStateMap(words) {
     `Coverage: ${covered}/${totalFrames} ` +
     `(${((covered / totalFrames) * 100).toFixed(1)}%)`
   );
-
-  // ✅ تشخيص: فحص أول 10 frames
-  console.log("\n🔍 Frame state check (first 10 frames):");
-  for (let f = 0; f < Math.min(10, totalFrames); f++) {
-    const t = f / FPS;
-    const s = map[f];
-    console.log(
-      `   frame[${f}] t=${t.toFixed(3)}s → ` +
-      (s ? `"${s.word}" [${s.tag}]` : "empty")
-    );
-  }
-
-  // ✅ تشخيص: أول frame فيه كلمة
-  const firstWordFrame = map.findIndex(Boolean);
-  if (firstWordFrame >= 0) {
-    console.log(
-      `\n✅ First word at frame ${firstWordFrame} ` +
-      `(t=${(firstWordFrame / FPS).toFixed(3)}s): ` +
-      `"${map[firstWordFrame].word}"`
-    );
-  }
-
   return map;
 }
 
@@ -610,10 +579,6 @@ function stateKey(state, globalFrame, transitionState) {
     `w_${safeKey(state.word, 15)}_${state.tag}_` +
     `${state.isPower ? 1 : 0}_${hook}_${bucket}`
   );
-}
-
-function hookIntroKey(f) {
-  return `hi_f${f}`;
 }
 
 function longStateKey(wordSt, ts, sentence) {
@@ -780,14 +745,12 @@ function getHookText() {
 
 function buildHTMLShort({
   word,
-  tag               = "information",
-  isPower           = false,
-  isHook            = false,
-  globalFrame       = 0,
-  progress          = 0.5,
-  transitionState   = null,
-  isHookIntro       = false,
-  hookIntroProgress = 0,
+  tag             = "information",
+  isPower         = false,
+  isHook          = false,
+  globalFrame     = 0,
+  progress        = 0.5,
+  transitionState = null,
 }) {
   const ar       = word ? isArabic(word) : false;
   const dir      = word ? getDir(word) : "ltr";
@@ -805,23 +768,11 @@ function buildHTMLShort({
     ? computeWordAnimation(progress, tagStyle.scaleMult)
     : { scale: 1.0, opacity: 0, translateY: 0 };
 
-  let hiScale = 1.0, hiOpacity = 1.0;
-  if (isHookIntro) {
-    const e   = 1 - Math.pow(1 - hookIntroProgress, 3);
-    hiScale   = 1.4 - e * 0.4;
-    hiOpacity = e;
-  }
-
   const trans        = computeTransitionEffect(transitionState, globalFrame);
   const baseFontSize = computeFontSize(word, ar, tagStyle.scaleMult, false);
 
-  const finalScale =
-    wordAnim.scale *
-    trans.transScale *
-    (isHookIntro ? hiScale : 1.0);
-  const finalOpacity = word
-    ? wordAnim.opacity * (isHookIntro ? hiOpacity : 1.0)
-    : 0;
+  const finalScale   = wordAnim.scale * trans.transScale;
+  const finalOpacity = word ? wordAnim.opacity : 0;
 
   const wordTransform =
     `translate(-50%, calc(-50% + ${wordAnim.translateY.toFixed(1)}px)) ` +
@@ -1208,32 +1159,26 @@ async function warmupFonts(page, builder) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RENDER PNGs — SHORT
+// ✅ الإصلاح: إزالة hook intro تماماً
 // ═══════════════════════════════════════════════════════════════════════════
 
 function collectUniqueShortStates(frameStateMap, boundaryMap) {
   const unique = new Map();
 
   for (let f = 0; f < frameStateMap.length; f++) {
-    const ts   = boundaryMap[f] || null;
-    const isHI = f < HOOK_INTRO_FRAMES;
-    const hip  = isHI
-      ? f / Math.max(HOOK_INTRO_FRAMES - 1, 1)
-      : 0;
-    const key  = isHI
-      ? hookIntroKey(f)
-      : stateKey(frameStateMap[f], f, ts);
+    const ts  = boundaryMap[f] || null;
+    // ✅ لا hook intro — كل frame يأخذ key الكلمة مباشرة
+    const key = stateKey(frameStateMap[f], f, ts);
 
     if (!unique.has(key)) {
       unique.set(key, {
-        word:              frameStateMap[f]?.word    ?? null,
-        tag:               frameStateMap[f]?.tag     ?? "information",
-        isPower:           frameStateMap[f]?.isPower ?? false,
-        isHook:            f < HOOK_FRAMES,
-        globalFrame:       f,
-        progress:          frameStateMap[f]?.progress ?? 0.5,
-        transitionState:   ts,
-        isHookIntro:       isHI,
-        hookIntroProgress: hip,
+        word:            frameStateMap[f]?.word    ?? null,
+        tag:             frameStateMap[f]?.tag     ?? "information",
+        isPower:         frameStateMap[f]?.isPower ?? false,
+        isHook:          f < HOOK_FRAMES,
+        globalFrame:     f,
+        progress:        frameStateMap[f]?.progress ?? 0.5,
+        transitionState: ts,
       });
     }
   }
@@ -1658,7 +1603,7 @@ async function handleBgOnlyMode() {
   );
 }
 
-// ✅ words_only — SHORT
+// ✅ words_only — SHORT (الإصلاح الرئيسي: لا hook intro)
 async function handleWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
@@ -1688,11 +1633,9 @@ async function handleWordsOnlyMode() {
       pngCache.get("intro_f0");
 
     for (let f = 0; f < totalFrames; f++) {
-      const ts   = boundaryMap[f] || null;
-      const isHI = f < HOOK_INTRO_FRAMES;
-      const key  = isHI
-        ? hookIntroKey(f)
-        : stateKey(frameStateMap[f], f, ts);
+      const ts  = boundaryMap[f] || null;
+      // ✅ لا hook intro — كل frame يأخذ key الكلمة مباشرة
+      const key = stateKey(frameStateMap[f], f, ts);
 
       const src  = pngCache.get(key) || emptyPng;
       const dest = join(
