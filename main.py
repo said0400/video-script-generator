@@ -2,15 +2,15 @@
 """
 🎬 Video Generator — Multi-Language Auto Publisher
 
-Pipeline:
+Pipeline (تزامن 100%):
   STEP A: TTS → clean voice (no music)
-  STEP B: Fetch stock videos
-  STEP C: Render BG video + merge clean voice into it
-  STEP D: WhisperX analyzes BG video (100% sync)
-  STEP E: Build clip plan from real timestamps
-  STEP F: Render words overlay on BG video
-  STEP G: Produce mixed audio (voice + music + SFX)
-  STEP H: Merge final video + mixed audio
+  STEP B: Mixed Audio (voice + music + SFX) ← مُقدَّم
+  STEP C: Fetch stock videos
+  STEP D: Render BG video + mixed audio مباشرة
+  STEP E: Extract audio from BG video
+  STEP F: WhisperX on extracted audio (100% sync)
+  STEP G: Build clip plan from real timestamps
+  STEP H: Render words overlay (audio = mixed)
   STEP I: Facebook vertical (long only)
   STEP J: Publish
 """
@@ -21,6 +21,7 @@ import argparse
 import json
 import logging
 import re
+import shutil
 import subprocess
 import sys
 import traceback
@@ -70,25 +71,25 @@ from youtube import (
 # CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
-BASE_DIR = Path(__file__).parent.resolve()
-RENDER_SCRIPT = BASE_DIR / "remotion" / "render.mjs"
-CONTENT_TYPE = "motivational"
-WPM = 150.0
-CLIP_DURATION = 3.0
+BASE_DIR          = Path(__file__).parent.resolve()
+RENDER_SCRIPT     = BASE_DIR / "remotion" / "render.mjs"
+CONTENT_TYPE      = "motivational"
+WPM               = 150.0
+CLIP_DURATION     = 3.0
 MIN_VALID_AUDIO_S = 5.0
-FFMPEG_TIMEOUT = 300
-RENDER_TIMEOUT = 1800
+FFMPEG_TIMEOUT    = 300
+RENDER_TIMEOUT    = 1800
 
 SPEED_MULTIPLIER = {"ar": 1.15, "fr": 1.05, "en": 1.15}
 
 DIMENSIONS = {
     "short": {"width": 1080, "height": 1920},
-    "long": {"width": 1920, "height": 1080},
+    "long":  {"width": 1920, "height": 1080},
 }
 
 DURATION_LIMITS = {
-    "short": {"min": 30, "max": 90},
-    "long": {"min": 120, "max": 900},
+    "short": {"min": 30,  "max": 90},
+    "long":  {"min": 120, "max": 900},
 }
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -104,24 +105,27 @@ def parse_args():
         description="🎬 Video Generator",
         formatter_class=argparse.RawTextHelpFormatter,
     )
-    p.add_argument("input_file", type=str, nargs="?", default=None)
-    p.add_argument("--output-dir", type=str, default="output")
-    p.add_argument("--video-number", type=str, default=None)
-    p.add_argument("--auto-next", action="store_true")
-    p.add_argument("--lang", type=str, default="ar", choices=["ar", "fr", "en"])
-    p.add_argument("--content-mode", type=str, default="short", choices=["short", "long"])
-    p.add_argument("--formats", type=str, default="9x16")
-    p.add_argument("--no-export", action="store_true")
-    p.add_argument("--script-only", action="store_true")
-    p.add_argument("--no-video", action="store_true")
-    p.add_argument("--force", action="store_true")
-    p.add_argument("--force-ai", action="store_true")
-    p.add_argument("--publish-fb", action="store_true")
-    p.add_argument("--publish-yt", action="store_true")
-    p.add_argument("--no-publish", action="store_true")
-    p.add_argument("--show-ai-cache", type=str, nargs="?", const="all", default=None)
+    p.add_argument("input_file",       type=str, nargs="?", default=None)
+    p.add_argument("--output-dir",     type=str, default="output")
+    p.add_argument("--video-number",   type=str, default=None)
+    p.add_argument("--auto-next",      action="store_true")
+    p.add_argument("--lang",           type=str, default="ar",
+                   choices=["ar", "fr", "en"])
+    p.add_argument("--content-mode",   type=str, default="short",
+                   choices=["short", "long"])
+    p.add_argument("--formats",        type=str, default="9x16")
+    p.add_argument("--no-export",      action="store_true")
+    p.add_argument("--script-only",    action="store_true")
+    p.add_argument("--no-video",       action="store_true")
+    p.add_argument("--force",          action="store_true")
+    p.add_argument("--force-ai",       action="store_true")
+    p.add_argument("--publish-fb",     action="store_true")
+    p.add_argument("--publish-yt",     action="store_true")
+    p.add_argument("--no-publish",     action="store_true")
+    p.add_argument("--show-ai-cache",  type=str, nargs="?",
+                   const="all", default=None)
     p.add_argument("--clear-ai-cache", type=str, default=None)
-    p.add_argument("--reset-videos", action="store_true")
+    p.add_argument("--reset-videos",   action="store_true")
     return p.parse_args()
 
 
@@ -131,7 +135,10 @@ def parse_args():
 
 def _estimate_duration(text, content_mode="short"):
     limits = DURATION_LIMITS.get(content_mode, DURATION_LIMITS["short"])
-    return max(limits["min"], min(limits["max"], int(len(text.split()) / (WPM / 60))))
+    return max(
+        limits["min"],
+        min(limits["max"], int(len(text.split()) / (WPM / 60)))
+    )
 
 
 def _should_publish_fb(args, content_mode):
@@ -166,7 +173,9 @@ def _safe_unlink(path):
 
 def _run_ffmpeg(args, timeout=FFMPEG_TIMEOUT):
     try:
-        r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(
+            args, capture_output=True, text=True, timeout=timeout
+        )
         return r.returncode == 0, r.stderr
     except subprocess.TimeoutExpired:
         return False, "Timeout"
@@ -239,15 +248,15 @@ def _estimate_sentence_durations(sentences, total_duration):
         return []
     if total_duration <= 0:
         return [CLIP_DURATION] * len(sentences)
-    wc = [max(1, len(s.split())) for s in sentences]
-    tw = sum(wc)
+    wc  = [max(1, len(s.split())) for s in sentences]
+    tw  = sum(wc)
     raw = [max(0.8, total_duration * c / tw) for c in wc]
-    tr = sum(raw)
+    tr  = sum(raw)
     if tr <= 0:
         return [CLIP_DURATION] * len(sentences)
     scale = total_duration / tr
-    out = [round(d * scale, 3) for d in raw]
-    diff = round(total_duration - sum(out), 3)
+    out   = [round(d * scale, 3) for d in raw]
+    diff  = round(total_duration - sum(out), 3)
     if out:
         out[-1] = max(0.8, round(out[-1] + diff, 3))
     return out
@@ -266,7 +275,7 @@ def _normalize_keywords_row(row, index):
     while len(cleaned) < 3:
         cleaned.append(defaults[len(cleaned) % 3])
     dedup = []
-    seen = set()
+    seen  = set()
     for item in cleaned:
         k = item.lower().strip()
         if k and k not in seen:
@@ -277,14 +286,15 @@ def _normalize_keywords_row(row, index):
     return dedup[:3]
 
 
-def _build_clip_plan(script_data, ai_data, aligned, total_dur, content_mode="short"):
+def _build_clip_plan(script_data, ai_data, aligned,
+                     total_dur, content_mode="short"):
     sentences = script_data.get("sentences", [])
     vk = ai_data.get("visual_keywords", []) or []
     hk = (script_data.get("hook_keyword") or "").strip()
     if not sentences:
         return [], []
-    ck = []
-    cd = []
+    ck  = []
+    cd  = []
     est = _estimate_sentence_durations(sentences, total_dur)
 
     if aligned and len(aligned) >= len(sentences):
@@ -293,8 +303,8 @@ def _build_clip_plan(script_data, ai_data, aligned, total_dur, content_mode="sho
             f"({len(sentences)} sentences) [{content_mode.upper()}]"
         )
         for i in range(len(sentences)):
-            cs = float(aligned[i].get("start", 0.0))
-            ns = (
+            cs  = float(aligned[i].get("start", 0.0))
+            ns  = (
                 float(aligned[i + 1].get("start", cs))
                 if i < len(sentences) - 1 else total_dur
             )
@@ -344,7 +354,7 @@ def _build_temp_keywords(script_data, ai_data, content_mode):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AUDIO: CLEAN VOICE (TTS + Speed — بدون Music)
+# STEP A: CLEAN VOICE (TTS + Trim + Speed)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _trim_silence(audio_path, output_path):
@@ -353,7 +363,9 @@ def _trim_silence(audio_path, output_path):
     log.info("  ✂️  Trimming leading silence...")
     ok, _ = _run_ffmpeg([
         "ffmpeg", "-y", "-i", audio_path,
-        "-af", "silenceremove=start_periods=1:start_duration=0.3:start_threshold=-40dB",
+        "-af",
+        "silenceremove=start_periods=1"
+        ":start_duration=0.3:start_threshold=-40dB",
         "-c:a", "pcm_s16le", output_path,
     ])
     if not ok:
@@ -382,10 +394,10 @@ def _speed_up_audio(audio_path, speed, output_path):
 
 
 def produce_clean_voice(script_data, output_base, content_mode="short"):
-    """إنتاج صوت نظيف (TTS + Trim + Speed) بدون موسيقى."""
+    """STEP A — TTS + Trim + Speed (بدون موسيقى)."""
     tagged_sentences = script_data["tagged_sentences"]
     lang = script_data.get("lang", "ar")
-    vc = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
+    vc   = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
 
     log.info(
         f"\n  🎙️  TTS ({lang.upper()}, voice={vc['voice_key']}, "
@@ -393,14 +405,14 @@ def produce_clean_voice(script_data, output_base, content_mode="short"):
     )
 
     synthesize_speech(
-        tagged_sentences=tagged_sentences,
-        output_path=f"{output_base}_voice",
-        voice_key=vc["voice_key"],
-        lang=lang,
+        tagged_sentences = tagged_sentences,
+        output_path      = f"{output_base}_voice",
+        voice_key        = vc["voice_key"],
+        lang             = lang,
     )
 
-    out_dir = Path(output_base).parent
-    prefix = Path(output_base).name
+    out_dir        = Path(output_base).parent
+    prefix         = Path(output_base).name
     wav_candidates = sorted(set(
         list(out_dir.glob(f"{prefix}_voice_*.wav")) +
         list(out_dir.glob(f"{prefix}_voice*.wav"))
@@ -418,7 +430,9 @@ def produce_clean_voice(script_data, output_base, content_mode="short"):
         wav_path = None
 
     if wav_path:
-        trimmed = _trim_silence(wav_path, f"{output_base}_voice_trimmed.wav")
+        trimmed = _trim_silence(
+            wav_path, f"{output_base}_voice_trimmed.wav"
+        )
         if trimmed != wav_path:
             wav_path = trimmed
             d = get_audio_duration(wav_path)
@@ -429,7 +443,8 @@ def produce_clean_voice(script_data, output_base, content_mode="short"):
         speed = SPEED_MULTIPLIER.get(lang, 1.0)
         if wav_path and speed != 1.0:
             sped = _speed_up_audio(
-                wav_path, speed, f"{output_base}_voice_fast.wav"
+                wav_path, speed,
+                f"{output_base}_voice_fast.wav"
             )
             if sped != wav_path:
                 wav_path = sped
@@ -447,30 +462,35 @@ def produce_clean_voice(script_data, output_base, content_mode="short"):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# AUDIO: MIXED (Voice + Music + SFX)
+# STEP B: MIXED AUDIO (Voice + Music + SFX) ← مُقدَّم
 # ═════════════════════════════════════════════════════════════════════════════
 
-def produce_mixed_audio(voice_path, script_data, output_base, aligned=None):
-    """إنتاج صوت ممزوج (Voice + Music + SFX)."""
-    lang = script_data.get("lang", "ar")
-    real_dur = get_audio_duration(str(voice_path))
+def produce_mixed_audio(voice_path, script_data, output_base,
+                        aligned=None):
+    """
+    STEP B — ينتج الصوت الممزوج النهائي مبكراً.
+    يُستدعى قبل BG video لضمان أن الصوت في الفيديو
+    هو نفس الصوت الذي سيحلله WhisperX.
+    """
+    lang      = script_data.get("lang", "ar")
+    real_dur  = get_audio_duration(str(voice_path))
     mixed_out = f"{output_base}_audio_mixed.aac"
-    n_clips = max(1, int(real_dur / CLIP_DURATION))
+    n_clips   = max(1, int(real_dur / CLIP_DURATION))
     clip_dur_list = [real_dur / n_clips] * n_clips
 
     try:
         final_audio = mix_voice_music_sfx(
-            voice_path=str(voice_path),
-            content_type=CONTENT_TYPE,
-            output_path=mixed_out,
-            clip_durations=clip_dur_list,
-            sfx_type="swoosh",
-            music_volume=0.12,
-            seed=hash(script_data["title"]) % 10000,
-            lang=lang,
-            aligned=aligned or [],
-            sentences=script_data.get("sentences", []),
-            tagged=script_data["tagged_sentences"],
+            voice_path     = str(voice_path),
+            content_type   = CONTENT_TYPE,
+            output_path    = mixed_out,
+            clip_durations = clip_dur_list,
+            sfx_type       = "swoosh",
+            music_volume   = 0.12,
+            seed           = hash(script_data["title"]) % 10000,
+            lang           = lang,
+            aligned        = aligned or [],
+            sentences      = script_data.get("sentences", []),
+            tagged         = script_data["tagged_sentences"],
         )
         d = get_audio_duration(str(final_audio))
         log.info(f"  ✅ Mixed audio ready: {d:.3f}s")
@@ -481,32 +501,60 @@ def produce_mixed_audio(voice_path, script_data, output_base, aligned=None):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# WHISPERX
+# STEP E: EXTRACT AUDIO FROM VIDEO
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _extract_audio_from_video(video_path, output_path):
+    """
+    STEP E — استخراج الصوت من BG video.
+    WhisperX يحلل هذا الصوت = نفس ما يسمعه المشاهد.
+    ✅ تزامن 100% مضمون.
+    """
+    log.info(f"  🔊 Extracting audio from BG video...")
+    ok, err = _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i",      str(video_path),
+        "-vn",
+        "-acodec", "pcm_s16le",
+        "-ar",     "16000",
+        "-ac",     "1",
+        str(output_path),
+    ])
+    if not ok:
+        log.warning(f"  ⚠️  Extraction failed: {err[:100]}")
+        return str(video_path)
+    dur = get_audio_duration(str(output_path))
+    log.info(f"  ✅ Extracted: {dur:.3f}s")
+    return str(output_path)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STEP F: WHISPERX
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run_whisperx(audio_source, out_base, lang, script_sentences=None):
     """
-    يستخرج النص من مصدر صوتي (ملف صوت أو فيديو).
+    STEP F — يحلل الصوت المستخرج من BG video.
+    الصوت = mixed_audio الموجود في الفيديو → تزامن 100%.
     يدعم ملفات mp4, wav, aac, إلخ.
     """
     source_name = Path(str(audio_source)).name
     log.info(f"\n  🎤 WhisperX analyzing: {source_name}")
 
-    # استخراج الصوت من المصدر (يدعم فيديو أو صوت)
+    # تحويل إلى wav 16kHz مناسب لـ WhisperX
     whisper_input = f"{out_base}_whisper_input.wav"
     ok, _ = _run_ffmpeg([
         "ffmpeg", "-y", "-i", str(audio_source),
         "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-        "-vn",  # تجاهل الفيديو
+        "-vn",
         whisper_input,
     ])
     if not ok:
-        # fallback: نستخدم المصدر مباشرة
         whisper_input = str(audio_source)
 
     transcript = extract_transcript_from_audio(whisper_input, lang=lang)
 
-    # تنظيف
+    # تنظيف ملف مؤقت
     if whisper_input != str(audio_source):
         _safe_unlink(whisper_input)
 
@@ -514,16 +562,18 @@ def run_whisperx(audio_source, out_base, lang, script_sentences=None):
         log.warning("  ⚠️  WhisperX failed")
         return [], []
 
-    aligned = transcript["aligned"]
+    aligned   = transcript["aligned"]
     sentences = transcript["sentences"]
 
-    # محاولة إعادة map على جمل السكريبت
+    # إعادة ربط على جمل السكريبت الأصلية
     if script_sentences:
         word_timestamps = [
             w for seg in transcript["aligned"]
             for w in seg.get("words", [])
         ]
-        total_script_words = sum(len(s.split()) for s in script_sentences)
+        total_script_words = sum(
+            len(s.split()) for s in script_sentences
+        )
 
         if (
             word_timestamps and
@@ -541,21 +591,26 @@ def run_whisperx(audio_source, out_base, lang, script_sentences=None):
                         transcript["total_duration"],
                     )
                     if rebuilt and len(rebuilt) == len(script_sentences):
-                        aligned = rebuilt
+                        aligned   = rebuilt
                         sentences = list(script_sentences)
-                        log.info(f"  ✅ Re-mapped: {len(sentences)} sentences")
+                        log.info(
+                            f"  ✅ Re-mapped: {len(sentences)} sentences"
+                        )
                 except Exception as e:
                     log.warning(f"  ⚠️  Remap skipped: {e}")
             else:
                 log.warning(
-                    f"  ⚠️  Remap skipped — words: {len(word_timestamps)} "
-                    f"vs script: {total_script_words}"
+                    f"  ⚠️  Remap skipped — words: {len(word_timestamps)}"
+                    f" vs script: {total_script_words}"
                 )
 
     total_words = sum(len(s.get("words", [])) for s in aligned)
-    log.info(f"  ✅ WhisperX: {len(sentences)} sentences, {total_words} words")
+    log.info(
+        f"  ✅ WhisperX: {len(sentences)} sentences, "
+        f"{total_words} words"
+    )
 
-    generate_srt(aligned, f"{out_base}.srt")
+    generate_srt(aligned,      f"{out_base}.srt")
     generate_word_srt(aligned, f"{out_base}_words.srt")
 
     return aligned, sentences
@@ -573,39 +628,49 @@ def _build_manifest(script_data, audio_path, video_paths, real_dur,
         if clip_durations else CLIP_DURATION
     )
     return {
-        "title": script_data["title"],
-        "display_title": script_data.get("display_title", script_data["title"]),
-        "emoji_left": script_data.get("emoji_left", "🔥"),
-        "emoji_right": script_data.get("emoji_right", "💥"),
-        "sentences": script_data["sentences"],
-        "audio": str(Path(str(audio_path)).resolve()),
-        "videos": [str(Path(str(p)).resolve()) for p in video_paths],
-        "duration_s": real_dur,
-        "lang": script_data.get("lang", "ar"),
-        "content_type": CONTENT_TYPE,
-        "content_mode": content_mode,
-        "power_words": script_data.get("power_words", []),
-        "accent_colors": script_data.get("accent_colors", []),
-        "analysis": script_data.get("analysis", {}),
-        "clip_duration": avg_clip,
+        "title":          script_data["title"],
+        "display_title":  script_data.get(
+            "display_title", script_data["title"]
+        ),
+        "emoji_left":     script_data.get("emoji_left",  "🔥"),
+        "emoji_right":    script_data.get("emoji_right", "💥"),
+        "sentences":      script_data["sentences"],
+        "audio":          str(Path(str(audio_path)).resolve()),
+        "videos":         [
+            str(Path(str(p)).resolve()) for p in video_paths
+        ],
+        "duration_s":     real_dur,
+        "lang":           script_data.get("lang", "ar"),
+        "content_type":   CONTENT_TYPE,
+        "content_mode":   content_mode,
+        "power_words":    script_data.get("power_words",   []),
+        "accent_colors":  script_data.get("accent_colors", []),
+        "analysis":       script_data.get("analysis",      {}),
+        "clip_duration":  avg_clip,
         "clip_durations": clip_durations,
-        "has_hook": has_hook,
-        "hook_keyword": script_data.get("hook_keyword", ""),
-        "custom_hook": script_data.get("custom_hook", ""),
-        "aligned": aligned,
-        "mode": mode,
+        "has_hook":       has_hook,
+        "hook_keyword":   script_data.get("hook_keyword", ""),
+        "custom_hook":    script_data.get("custom_hook",  ""),
+        "aligned":        aligned,
+        "mode":           mode,
     }
 
 
 def _run_remotion_render(manifest_path, output_path):
     if not RENDER_SCRIPT.exists():
-        raise FileNotFoundError(f"render.mjs not found: {RENDER_SCRIPT}")
+        raise FileNotFoundError(
+            f"render.mjs not found: {RENDER_SCRIPT}"
+        )
     try:
         r = subprocess.run(
-            ["node", str(RENDER_SCRIPT.resolve()),
-             str(manifest_path), str(output_path)],
-            text=True, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, timeout=RENDER_TIMEOUT,
+            [
+                "node", str(RENDER_SCRIPT.resolve()),
+                str(manifest_path), str(output_path),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=RENDER_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"Render timeout ({RENDER_TIMEOUT}s)")
@@ -616,39 +681,66 @@ def _run_remotion_render(manifest_path, output_path):
 def produce_bg_video(video_paths, audio_path, real_dur, out_base,
                      script_data, has_hook, clip_durations,
                      content_mode="short"):
+    """
+    STEP D — رندر BG video مع mixed_audio مباشرة.
+    ✅ الصوت في الفيديو = الصوت النهائي الفعلي.
+    """
     bg_mode = "bg_only" if content_mode == "short" else "long_bg_only"
-    suffix = f"_{content_mode}"
+    suffix  = f"_{content_mode}"
     manifest = _build_manifest(
         script_data, audio_path, video_paths, real_dur,
         clip_durations, [], content_mode, bg_mode, has_hook,
     )
-    manifest_path = Path(f"{out_base}{suffix}_bg_manifest.json").resolve()
+    manifest_path = Path(
+        f"{out_base}{suffix}_bg_manifest.json"
+    ).resolve()
     manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     output_path = Path(f"{out_base}{suffix}_bg.mp4").resolve()
-    log.info(f"\n  🎬 Producing background video [{content_mode.upper()}]...")
+    log.info(
+        f"\n  🎬 Producing background video [{content_mode.upper()}]..."
+    )
     _run_remotion_render(manifest_path, output_path)
-    log.info(f"  ✅ BG video [{content_mode.upper()}]: {_file_size_mb(output_path):.1f} MB")
+    log.info(
+        f"  ✅ BG video [{content_mode.upper()}]: "
+        f"{_file_size_mb(output_path):.1f} MB"
+    )
     return output_path
 
 
 def render_words_overlay(bg_video, audio_path, aligned, sentences,
                          script_data, out_base, content_mode="short"):
-    audio_dur = get_audio_duration(str(audio_path))
-    words_mode = "words_only" if content_mode == "short" else "long_words_only"
-    suffix = f"_{content_mode}"
+    """
+    STEP H — رندر الكلمات فوق BG video.
+    audio_path = mixed_audio (نفس الصوت في BG video).
+    ✅ تزامن 100% — لا merge بعدها.
+    """
+    audio_dur  = get_audio_duration(str(audio_path))
+    words_mode = (
+        "words_only" if content_mode == "short"
+        else "long_words_only"
+    )
+    suffix   = f"_{content_mode}"
     manifest = _build_manifest(
-        {**script_data, "sentences": sentences}, audio_path, [bg_video],
-        audio_dur, [audio_dur], aligned, content_mode, words_mode,
+        {**script_data, "sentences": sentences},
+        audio_path, [bg_video],
+        audio_dur, [audio_dur], aligned,
+        content_mode, words_mode,
         script_data.get("has_hook", False),
     )
-    manifest_path = Path(f"{out_base}{suffix}_words_manifest.json").resolve()
+    manifest_path = Path(
+        f"{out_base}{suffix}_words_manifest.json"
+    ).resolve()
     manifest_path.write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
     output_path = Path(f"{out_base}{suffix}_final.mp4").resolve()
-    log.info(f"\n  🔧 Rendering words overlay [{content_mode.upper()}]...")
+    log.info(
+        f"\n  🔧 Rendering words overlay [{content_mode.upper()}]..."
+    )
     _run_remotion_render(manifest_path, output_path)
     log.info(
         f"  🎉 Final [{content_mode.upper()}]: "
@@ -658,50 +750,20 @@ def render_words_overlay(bg_video, audio_path, aligned, sentences,
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MERGE VIDEO + AUDIO
-# ═════════════════════════════════════════════════════════════════════════════
-
-def merge_video_audio(video_path, audio_path, output_path):
-    """دمج الفيديو + الصوت الممزوج. يستبدل الصوت الأصلي."""
-    log.info(f"\n  🔊 Merging final video + mixed audio...")
-    ad = get_audio_duration(str(audio_path))
-    vd = get_audio_duration(str(video_path))
-    log.info(f"     Video: {vd:.1f}s | Audio: {ad:.1f}s")
-
-    ok, err = _run_ffmpeg([
-        "ffmpeg", "-y",
-        "-i", str(video_path),
-        "-i", str(audio_path),
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        str(output_path),
-    ])
-    if not ok:
-        log.warning(f"  ⚠️  Merge failed: {err[:100]}")
-        return video_path
-    log.info(f"  ✅ Merged: {output_path.name} ({_file_size_mb(output_path):.1f} MB)")
-    return output_path
-
-
-# ═════════════════════════════════════════════════════════════════════════════
 # FACEBOOK VERTICAL (Long فقط — نسخة 9:16)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def produce_fb_vertical_version(script_data, clean_voice_path, aligned,
-                                video_paths, clip_durations, out_base,
-                                mixed_audio):
+def produce_fb_vertical_version(script_data, mixed_audio, aligned,
+                                video_paths, clip_durations, out_base):
     """
-    ينتج نسخة 9:16 من الفيديو الطويل للنشر على Facebook.
-    يجلب فيديوهات portrait جديدة ويرندرها كـ short.
-    ثم يدمجها مع الصوت الممزوج.
+    STEP I — نسخة 9:16 للفيديو الطويل (Facebook).
+    ✅ تستخدم mixed_audio مباشرة في كل الخطوات.
+    ✅ WhisperX يحلل الصوت المستخرج من BG_fb → تزامن 100%.
     """
     try:
         log.info("\n  📱 Rendering Facebook vertical version (9:16)...")
 
-        real_dur = get_audio_duration(str(clean_voice_path))
+        real_dur = get_audio_duration(str(mixed_audio))
 
         # جلب فيديوهات portrait
         vid_dir_fb = str(
@@ -717,42 +779,54 @@ def produce_fb_vertical_version(script_data, clean_voice_path, aligned,
 
         log.info("  📹 Fetching portrait videos for Facebook...")
         fb_video_paths = fetch_videos_for_script(
-            keywords_per_sentence=fb_keywords,
-            clip_durations=clip_durations,
-            output_dir=vid_dir_fb,
-            aligned=aligned,
-            content_mode="short",
+            keywords_per_sentence = fb_keywords,
+            clip_durations        = clip_durations,
+            output_dir            = vid_dir_fb,
+            aligned               = aligned,
+            content_mode          = "short",
         )
 
-        # Background 9:16
+        # ── BG 9:16 مع mixed_audio مباشرة ───────────────────────
         bg_fb = produce_bg_video(
-            video_paths=fb_video_paths,
-            audio_path=clean_voice_path,
-            real_dur=real_dur,
-            out_base=f"{out_base}_fb",
-            script_data=script_data,
-            has_hook=False,
-            clip_durations=clip_durations,
-            content_mode="short",
+            video_paths   = fb_video_paths,
+            audio_path    = mixed_audio,       # ✅ mixed مباشرة
+            real_dur      = real_dur,
+            out_base      = f"{out_base}_fb",
+            script_data   = script_data,
+            has_hook      = False,
+            clip_durations= clip_durations,
+            content_mode  = "short",
         )
 
-        # Words overlay 9:16
-        fb_video_with_words = render_words_overlay(
-            bg_video=bg_fb,
-            audio_path=clean_voice_path,
-            aligned=aligned,
-            sentences=script_data["sentences"],
-            script_data=script_data,
-            out_base=f"{out_base}_fb",
-            content_mode="short",
+        # ── استخراج الصوت من BG_fb ──────────────────────────────
+        extracted_fb = f"{out_base}_fb_extracted.wav"
+        _extract_audio_from_video(str(bg_fb), extracted_fb)
+
+        # ── WhisperX على الصوت المستخرج ─────────────────────────
+        fb_aligned, fb_sentences = run_whisperx(
+            audio_source     = extracted_fb,
+            out_base         = f"{out_base}_fb",
+            lang             = script_data.get("lang", "ar"),
+            script_sentences = script_data["sentences"],
+        )
+        _safe_unlink(extracted_fb)
+
+        if not fb_sentences:
+            fb_sentences = script_data["sentences"]
+        fb_aligned = _inject_tags_into_aligned(
+            fb_aligned,
+            script_data.get("tagged_sentences", []),
         )
 
-        # دمج مع الصوت الممزوج
-        fb_final_output = Path(f"{out_base}_fb_short_published.mp4").resolve()
-        fb_final = merge_video_audio(
-            video_path=fb_video_with_words,
-            audio_path=mixed_audio,
-            output_path=fb_final_output,
+        # ── Words overlay 9:16 ──────────────────────────────────
+        fb_final = render_words_overlay(
+            bg_video     = bg_fb,
+            audio_path   = mixed_audio,        # ✅ نفس الصوت
+            aligned      = fb_aligned,
+            sentences    = fb_sentences,
+            script_data  = script_data,
+            out_base     = f"{out_base}_fb",
+            content_mode = "short",
         )
 
         log.info(f"  ✅ Facebook vertical ready: {fb_final.name}")
@@ -771,8 +845,8 @@ def produce_fb_vertical_version(script_data, clean_voice_path, aligned,
 def get_or_create_ai_data(record, lang, tagged, content_mode="short",
                           force_ai=False, content=""):
     video_number = str(record["number"])
-    title = record.get("title", "")
-    cache_key = make_cache_key(video_number, lang, content_mode)
+    title        = record.get("title", "")
+    cache_key    = make_cache_key(video_number, lang, content_mode)
 
     if not force_ai and has_ai_cache(cache_key):
         cached = get_ai_cache(cache_key)
@@ -797,14 +871,25 @@ def get_or_create_ai_data(record, lang, tagged, content_mode="short",
         )
 
     enriched = enrich_record(
-        record={"number": video_number, "title": title, "content": content_to_use},
-        lang=lang, tagged=tagged, verbose=True,
+        record  = {
+            "number":  video_number,
+            "title":   title,
+            "content": content_to_use,
+        },
+        lang    = lang,
+        tagged  = tagged,
+        verbose = True,
     )
     save_ai_cache(
-        cache_key=cache_key, title=title, lang=lang,
-        enriched=enriched, content_mode=content_mode,
+        cache_key    = cache_key,
+        title        = title,
+        lang         = lang,
+        enriched     = enriched,
+        content_mode = content_mode,
     )
-    log.info(f"  💾 AI cached for #{video_number} [{content_mode.upper()}]")
+    log.info(
+        f"  💾 AI cached for #{video_number} [{content_mode.upper()}]"
+    )
     return enriched
 
 
@@ -812,13 +897,16 @@ def get_or_create_ai_data(record, lang, tagged, content_mode="short",
 # BUILD SCRIPT DATA
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _build_script_data(record, lang, ai_data, tagged, content_mode="short"):
+def _build_script_data(record, lang, ai_data, tagged,
+                       content_mode="short"):
     if not tagged:
         return None
-    sentences_clean = [s["text"] for s in tagged]
-    full_script = " ".join(sentences_clean)
+    sentences_clean  = [s["text"] for s in tagged]
+    full_script      = " ".join(sentences_clean)
     attractive_title = ai_data.get("attractive_title") or {}
-    display_title = attractive_title.get("title") or record["title"]
+    display_title    = (
+        attractive_title.get("title") or record["title"]
+    )
     power_words = ai_data.get("power_words", [])
     if isinstance(power_words, dict):
         power_words = (
@@ -826,33 +914,35 @@ def _build_script_data(record, lang, ai_data, tagged, content_mode="short"):
             power_words.get("ar") or
             power_words.get("en") or []
         )
-    emotion = ai_data.get("analysis", {}).get("primary_emotion", "")
-    bg_style = {"fear": "cinematic", "sadness": "cinematic", "awe": "blur"}.get(
-        emotion, "video"
-    )
+    emotion  = ai_data.get("analysis", {}).get("primary_emotion", "")
+    bg_style = {
+        "fear": "cinematic", "sadness": "cinematic", "awe": "blur"
+    }.get(emotion, "video")
+
     return {
-        "title": record["title"],
-        "display_title": display_title,
-        "emoji_left": attractive_title.get("emoji_left", "🔥"),
-        "emoji_right": attractive_title.get("emoji_right", "💥"),
-        "hook": sentences_clean[0] if sentences_clean else "",
-        "full_script": full_script,
-        "sentences": sentences_clean,
-        "tagged_sentences": tagged,
+        "title":             record["title"],
+        "display_title":     display_title,
+        "emoji_left":        attractive_title.get("emoji_left",  "🔥"),
+        "emoji_right":       attractive_title.get("emoji_right", "💥"),
+        "hook":              sentences_clean[0] if sentences_clean else "",
+        "full_script":       full_script,
+        "sentences":         sentences_clean,
+        "tagged_sentences":  tagged,
         "estimated_seconds": _estimate_duration(full_script, content_mode),
-        "word_count": len(full_script.split()),
-        "lang": lang,
-        "content_mode": content_mode,
-        "content_type": CONTENT_TYPE,
-        "power_words": power_words,
-        "accent_colors": ai_data.get("accent_colors", []),
-        "visual_keywords": ai_data.get("visual_keywords", []),
-        "analysis": ai_data.get("analysis", {}),
-        "hook_keyword": ai_data.get("hook_keyword", ""),
-        "custom_hook": ai_data.get("custom_hook", ""),
-        "bg_style": bg_style,
-        "has_hook": bool(
-            ai_data.get("hook_keyword", "") and content_mode == "short"
+        "word_count":        len(full_script.split()),
+        "lang":              lang,
+        "content_mode":      content_mode,
+        "content_type":      CONTENT_TYPE,
+        "power_words":       power_words,
+        "accent_colors":     ai_data.get("accent_colors",   []),
+        "visual_keywords":   ai_data.get("visual_keywords", []),
+        "analysis":          ai_data.get("analysis",        {}),
+        "hook_keyword":      ai_data.get("hook_keyword",    ""),
+        "custom_hook":       ai_data.get("custom_hook",     ""),
+        "bg_style":          bg_style,
+        "has_hook":          bool(
+            ai_data.get("hook_keyword", "") and
+            content_mode == "short"
         ),
     }
 
@@ -860,7 +950,7 @@ def _build_script_data(record, lang, ai_data, tagged, content_mode="short"):
 def _rebuild_text_with_tag(tagged):
     for s in tagged:
         ft = s.get("final_tag")
-        t = s.get("text", "")
+        t  = s.get("text", "")
         s["text_with_tag"] = f"[{ft}] {t}" if ft else t
     return tagged
 
@@ -877,7 +967,7 @@ def _do_publish(video_path, record, ai_data, lang, video_number,
         return
 
     street_description = ai_data.get("street_description", "")
-    title = record.get("title", "")
+    title   = record.get("title", "")
     fb_path = fb_video_path or video_path
     yt_path = yt_video_path or video_path
 
@@ -887,10 +977,12 @@ def _do_publish(video_path, record, ai_data, lang, video_number,
         else:
             try:
                 publish_to_facebook(
-                    video_path=fb_path, record=record, lang=lang,
-                    as_reel=(content_mode == "short"),
-                    ai_caption=street_description or title,
-                    content_mode=content_mode,
+                    video_path   = fb_path,
+                    record       = record,
+                    lang         = lang,
+                    as_reel      = (content_mode == "short"),
+                    ai_caption   = street_description or title,
+                    content_mode = content_mode,
                 )
                 mark_video_published_for_lang(
                     video_number, lang, "facebook", content_mode
@@ -901,18 +993,24 @@ def _do_publish(video_path, record, ai_data, lang, video_number,
 
     if should_publish_yt:
         if is_published_youtube(video_number, lang, content_mode):
-            log.info(f"  ⏭️  YouTube: already published [{content_mode}]")
+            log.info(
+                f"  ⏭️  YouTube: already published [{content_mode}]"
+            )
         else:
             try:
                 publish_to_youtube(
-                    video_path=yt_path, record=record, lang=lang,
-                    street_description=street_description,
-                    content_mode=content_mode,
+                    video_path         = yt_path,
+                    record             = record,
+                    lang               = lang,
+                    street_description = street_description,
+                    content_mode       = content_mode,
                 )
                 mark_video_published_for_lang(
                     video_number, lang, "youtube", content_mode
                 )
-                log.info(f"  📺 YouTube: published ✅ [{content_mode}]")
+                log.info(
+                    f"  📺 YouTube: published ✅ [{content_mode}]"
+                )
             except Exception as e:
                 log.error(f"  ❌ YouTube publish failed: {e}")
 
@@ -923,10 +1021,10 @@ def _do_publish(video_path, record, ai_data, lang, video_number,
 
 def process_video(record, args, out_dir, should_publish_fb,
                   should_publish_yt, content_mode="short"):
-    num = str(record["number"])
+    num   = str(record["number"])
     title = record["title"]
-    lang = args.lang
-    ml = content_mode.upper()
+    lang  = args.lang
+    ml    = content_mode.upper()
     result = {"video_paths": [], "hook_keyword": title}
 
     log.info(f"\n{'═' * 65}")
@@ -934,7 +1032,8 @@ def process_video(record, args, out_dir, should_publish_fb,
     log.info(f"{'═' * 65}")
 
     out_base = str(
-        Path(out_dir).resolve() / f"video_{num}_{lang}_{content_mode}"
+        Path(out_dir).resolve() /
+        f"video_{num}_{lang}_{content_mode}"
     )
 
     # ── 1. Parse tags ────────────────────────────────────────────────
@@ -953,26 +1052,35 @@ def process_video(record, args, out_dir, should_publish_fb,
     # ── 2. AI Enrichment ─────────────────────────────────────────────
     try:
         ai_data = get_or_create_ai_data(
-            record=record, lang=lang, tagged=tagged,
-            content_mode=content_mode, force_ai=args.force_ai,
-            content=content,
+            record       = record,
+            lang         = lang,
+            tagged       = tagged,
+            content_mode = content_mode,
+            force_ai     = args.force_ai,
+            content      = content,
         )
     except AIEnrichmentError as e:
         log.error(f"\n  ⛔ AI enrichment failed: {e}")
         return result
 
-    tagged = _rebuild_text_with_tag(ai_data.get("tagged") or tagged)
+    tagged       = _rebuild_text_with_tag(
+        ai_data.get("tagged") or tagged
+    )
     hook_keyword = ai_data.get("hook_keyword", "") or title
     result["hook_keyword"] = hook_keyword
 
     # ── 3. Build script data ─────────────────────────────────────────
-    script_data = _build_script_data(record, lang, ai_data, tagged, content_mode)
+    script_data = _build_script_data(
+        record, lang, ai_data, tagged, content_mode
+    )
     if not script_data:
         log.error("  ❌ Cannot build script data")
         return result
 
-    log.info(f"  📊 Final sentences: {len(script_data['sentences'])} [{ml}]")
-
+    log.info(
+        f"  📊 Final sentences: "
+        f"{len(script_data['sentences'])} [{ml}]"
+    )
     if script_data.get("custom_hook") and content_mode == "short":
         log.info(f"  🪝 Hook: '{script_data['custom_hook']}'")
 
@@ -981,9 +1089,12 @@ def process_video(record, args, out_dir, should_publish_fb,
         log.info(f"  📝 Street Description: {len(street_desc)} chars")
 
     save_script_meta(
-        video_number=num, title=title, lang=lang,
-        sentences=len(tagged), words=script_data["word_count"],
-        content_mode=content_mode,
+        video_number = num,
+        title        = title,
+        lang         = lang,
+        sentences    = len(tagged),
+        words        = script_data["word_count"],
+        content_mode = content_mode,
     )
 
     # ── 4. Script-only / Audio-only ──────────────────────────────────
@@ -1003,183 +1114,218 @@ def process_video(record, args, out_dir, should_publish_fb,
     mark_render_start(num, lang, content_mode)
 
     try:
-        # ═════════════════════════════════════════════════════════
-        # STEP A: صوت نظيف (TTS + Trim + Speed) — بدون موسيقى
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
+        # STEP A: صوت نظيف (TTS + Trim + Speed)
+        # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(f"  ✅ STEP A: Clean voice [{ml}]")
         clean_voice_path, real_dur = produce_clean_voice(
-            script_data=script_data,
-            output_base=out_base,
-            content_mode=content_mode,
+            script_data  = script_data,
+            output_base  = out_base,
+            content_mode = content_mode,
         )
 
-        # ═════════════════════════════════════════════════════════
-        # STEP B: جلب فيديوهات (تقدير مؤقت للمدد)
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
+        # STEP B: Mixed Audio ← مُقدَّم لضمان التزامن
+        # الصوت النهائي الفعلي الذي سيسمعه المشاهد
+        # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
-        log.info(f"  ✅ STEP B: Fetch videos [{ml}]")
+        log.info(
+            f"  ✅ STEP B: Mixed audio "
+            f"(voice + music + SFX) [{ml}]"
+        )
+        mixed_audio = produce_mixed_audio(
+            voice_path  = clean_voice_path,
+            script_data = script_data,
+            output_base = out_base,
+            aligned     = None,
+        )
+        # تحديث real_dur من الصوت الممزوج الفعلي
+        mixed_dur = get_audio_duration(str(mixed_audio))
+        if mixed_dur >= MIN_VALID_AUDIO_S:
+            real_dur = mixed_dur
+            log.info(f"  📏 Final audio duration: {real_dur:.3f}s")
 
+        # ═══════════════════════════════════════════════════════
+        # STEP C: جلب الفيديوهات
+        # ═══════════════════════════════════════════════════════
+        log.info(f"\n  {'─' * 55}")
+        log.info(f"  ✅ STEP C: Fetch videos [{ml}]")
         temp_durations = _estimate_sentence_durations(
             script_data["sentences"], real_dur
         )
         temp_keywords = _build_temp_keywords(
             script_data, ai_data, content_mode
         )
-
         vid_dir = str(
             Path(out_dir).resolve() /
             f"videos_{num}_{lang}_{content_mode}"
         )
         video_paths = fetch_videos_for_script(
-            keywords_per_sentence=temp_keywords,
-            clip_durations=temp_durations,
-            output_dir=vid_dir,
-            content_mode=content_mode,
+            keywords_per_sentence = temp_keywords,
+            clip_durations        = temp_durations,
+            output_dir            = vid_dir,
+            content_mode          = content_mode,
         )
         result["video_paths"] = [str(p) for p in video_paths]
 
-        # ═════════════════════════════════════════════════════════
-        # STEP C: رندر Background video + دمج الصوت النظيف
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
+        # STEP D: BG video + mixed_audio مباشرة
+        # ✅ الصوت في الفيديو = الصوت النهائي الفعلي
+        # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
-        log.info(f"  ✅ STEP C: Background video + clean voice [{ml}]")
+        log.info(
+            f"  ✅ STEP D: Background video + "
+            f"mixed audio [{ml}]"
+        )
         bg_video = produce_bg_video(
-            video_paths=video_paths,
-            audio_path=clean_voice_path,
-            real_dur=real_dur,
-            out_base=out_base,
-            script_data=script_data,
-            has_hook=script_data.get("has_hook", False),
-            clip_durations=temp_durations,
-            content_mode=content_mode,
+            video_paths    = video_paths,
+            audio_path     = mixed_audio,      # ✅ mixed مباشرة
+            real_dur       = real_dur,
+            out_base       = out_base,
+            script_data    = script_data,
+            has_hook       = script_data.get("has_hook", False),
+            clip_durations = temp_durations,
+            content_mode   = content_mode,
         )
 
-        # ═════════════════════════════════════════════════════════
-        # STEP D: WhisperX — يستخرج النص من الفيديو الخلفية
-        # يحلل نفس الصوت الموجود في الفيديو = تطابق 100%
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
+        # STEP E: استخراج الصوت من BG video
+        # هذا الصوت = ما سيسمعه المشاهد فعلاً
+        # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
-        log.info(f"  ✅ STEP D: WhisperX (from BG video) [{ml}]")
-        log.info(f"  📎 Analyzing audio from: {bg_video.name}")
-
-        aligned, whisper_sentences = run_whisperx(
-            audio_source=bg_video,
-            out_base=out_base,
-            lang=lang,
-            script_sentences=script_data["sentences"],
+        log.info(
+            f"  ✅ STEP E: Extract audio from BG video [{ml}]"
         )
+        extracted_audio = (
+            f"{out_base}_{content_mode}_extracted.wav"
+        )
+        _extract_audio_from_video(str(bg_video), extracted_audio)
+
+        # ═══════════════════════════════════════════════════════
+        # STEP F: WhisperX على الصوت المستخرج
+        # يحلل نفس الصوت الموجود في الفيديو → تزامن 100%
+        # ═══════════════════════════════════════════════════════
+        log.info(f"\n  {'─' * 55}")
+        log.info(
+            f"  ✅ STEP F: WhisperX on extracted audio [{ml}]"
+        )
+        log.info(
+            f"  📎 Analyzing: {Path(extracted_audio).name}"
+        )
+        aligned, whisper_sentences = run_whisperx(
+            audio_source     = extracted_audio,  # ✅ الصوت المستخرج
+            out_base         = out_base,
+            lang             = lang,
+            script_sentences = script_data["sentences"],
+        )
+        # تنظيف الملف المؤقت
+        _safe_unlink(extracted_audio)
+
         if not whisper_sentences:
             whisper_sentences = script_data["sentences"]
         aligned = _inject_tags_into_aligned(aligned, tagged)
 
-        # ═════════════════════════════════════════════════════════
-        # STEP E: بناء clip plan بناءً على timestamps الحقيقية
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
+        # STEP G: بناء clip plan من timestamps الحقيقية
+        # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
-        log.info(f"  ✅ STEP E: Final clip plan [{ml}]")
+        log.info(f"  ✅ STEP G: Clip plan from WhisperX [{ml}]")
         clip_keywords, clip_durations = _build_clip_plan(
-            script_data=script_data,
-            ai_data=ai_data,
-            aligned=aligned,
-            total_dur=real_dur,
-            content_mode=content_mode,
+            script_data  = script_data,
+            ai_data      = ai_data,
+            aligned      = aligned,
+            total_dur    = real_dur,
+            content_mode = content_mode,
         )
 
-        # ═════════════════════════════════════════════════════════
-        # STEP F: إضافة النص (Words overlay) فوق الفيديو
-        # الكلمات تتطابق 100% مع الصوت في الفيديو
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
+        # STEP H: Words overlay
+        # audio = mixed_audio (نفس الصوت في BG video)
+        # ✅ تزامن 100% — لا merge بعدها
+        # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
-        log.info(f"  ✅ STEP F: Words overlay [{ml}]")
+        log.info(f"  ✅ STEP H: Words overlay [{ml}]")
         video_with_words = render_words_overlay(
-            bg_video=bg_video,
-            audio_path=clean_voice_path,
-            aligned=aligned,
-            sentences=whisper_sentences,
-            script_data=script_data,
-            out_base=out_base,
-            content_mode=content_mode,
+            bg_video     = bg_video,
+            audio_path   = mixed_audio,        # ✅ نفس الصوت
+            aligned      = aligned,
+            sentences    = whisper_sentences,
+            script_data  = script_data,
+            out_base     = out_base,
+            content_mode = content_mode,
         )
 
-        # ═════════════════════════════════════════════════════════
-        # STEP G: إنتاج الصوت الممزوج (Voice + Music + SFX)
-        # ═════════════════════════════════════════════════════════
-        log.info(f"\n  {'─' * 55}")
-        log.info(f"  ✅ STEP G: Background music + SFX [{ml}]")
-        mixed_audio = produce_mixed_audio(
-            voice_path=clean_voice_path,
-            script_data=script_data,
-            output_base=out_base,
-            aligned=aligned,
+        # ═══════════════════════════════════════════════════════
+        # النهائي: نسخ الفيديو (لا merge مطلوب)
+        # render_words_overlay يحتوي الصوت الصحيح بالفعل
+        # ═══════════════════════════════════════════════════════
+        suffix       = f"_{content_mode}"
+        final_output = Path(
+            f"{out_base}{suffix}_published.mp4"
+        ).resolve()
+        shutil.copy2(str(video_with_words), str(final_output))
+        final_video = final_output
+        log.info(
+            f"  ✅ Final: {final_video.name} "
+            f"({_file_size_mb(final_video):.1f} MB)"
         )
 
-        # ═════════════════════════════════════════════════════════
-        # STEP H: دمج الفيديو النهائي + الصوت الممزوج
-        # ═════════════════════════════════════════════════════════
-        log.info(f"\n  {'─' * 55}")
-        log.info(f"  ✅ STEP H: Final merge (video + mixed audio) [{ml}]")
-        suffix = f"_{content_mode}"
-        final_output = Path(f"{out_base}{suffix}_published.mp4").resolve()
-        final_video = merge_video_audio(
-            video_path=video_with_words,
-            audio_path=mixed_audio,
-            output_path=final_output,
-        )
-
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
         # STEP I: Facebook vertical (Long فقط — نسخة 9:16)
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
         fb_vertical = None
         if content_mode == "long" and should_publish_fb:
             log.info(f"\n  {'─' * 55}")
             log.info("  ✅ STEP I: Facebook vertical version (9:16)")
             fb_vertical = produce_fb_vertical_version(
-                script_data=script_data,
-                clean_voice_path=clean_voice_path,
-                aligned=aligned,
-                video_paths=video_paths,
-                clip_durations=clip_durations,
-                out_base=out_base,
-                mixed_audio=mixed_audio,
+                script_data    = script_data,
+                mixed_audio    = mixed_audio,      # ✅ mixed مباشرة
+                aligned        = aligned,
+                video_paths    = video_paths,
+                clip_durations = clip_durations,
+                out_base       = out_base,
             )
 
-        # ═════════════════════════════════════════════════════════
         # Export (short فقط)
-        # ═════════════════════════════════════════════════════════
         export_formats = (
             [] if args.no_export
-            else [f.strip() for f in args.formats.split(",") if f.strip()]
+            else [
+                f.strip()
+                for f in args.formats.split(",")
+                if f.strip()
+            ]
         )
         if export_formats and content_mode == "short":
             export_all(str(final_video), out_base, export_formats)
 
-        # ═════════════════════════════════════════════════════════
         # حفظ في DB
-        # ═════════════════════════════════════════════════════════
-        fb_path = str(fb_vertical) if fb_vertical else str(final_video)
+        fb_path = (
+            str(fb_vertical) if fb_vertical
+            else str(final_video)
+        )
         yt_path = str(final_video)
         mark_render_done(
-            num, lang, str(final_video), real_dur, content_mode,
-            fb_path=fb_path, yt_path=yt_path,
+            num, lang, str(final_video), real_dur,
+            content_mode, fb_path=fb_path, yt_path=yt_path,
         )
 
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
         # STEP J: Publish
-        # ═════════════════════════════════════════════════════════
+        # ═══════════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(f"  ✅ STEP J: Publishing [{ml}]")
         _do_publish(
-            video_path=str(final_video),
-            record=record,
-            ai_data=ai_data,
-            lang=lang,
-            video_number=num,
-            content_mode=content_mode,
-            should_publish_fb=should_publish_fb,
-            should_publish_yt=should_publish_yt,
-            fb_video_path=fb_path,
-            yt_video_path=yt_path,
+            video_path        = str(final_video),
+            record            = record,
+            ai_data           = ai_data,
+            lang              = lang,
+            video_number      = num,
+            content_mode      = content_mode,
+            should_publish_fb = should_publish_fb,
+            should_publish_yt = should_publish_yt,
+            fb_video_path     = fb_path,
+            yt_video_path     = yt_path,
         )
 
         mb = _file_size_mb(final_video)
@@ -1203,29 +1349,28 @@ def process_video(record, args, out_dir, should_publish_fb,
 def _generate_thumbnails(valid, video_results, args, content_mode):
     thumbnail_queue = []
     for record in valid:
-        num = record["number"]
+        num      = record["number"]
         out_base = str(
             Path(args.output_dir).resolve() /
             f"video_{num}_{args.lang}_{content_mode}"
         )
         html_path = f"{out_base}_thumbnail.html"
-        png_path = f"{out_base}_thumbnail.png"
+        png_path  = f"{out_base}_thumbnail.png"
 
         if Path(png_path).exists():
             continue
 
         try:
-            vr = video_results.get(str(num), {})
+            vr           = video_results.get(str(num), {})
             hook_keyword = vr.get("hook_keyword", record["title"])
-            video_paths = vr.get("video_paths", [])
-
+            video_paths  = vr.get("video_paths", [])
             generate_thumbnail_html(
-                title=record["title"],
-                lang=args.lang,
-                output_path=html_path,
-                keyword=hook_keyword,
-                video_paths=video_paths,
-                content_mode=content_mode,
+                title        = record["title"],
+                lang         = args.lang,
+                output_path  = html_path,
+                keyword      = hook_keyword,
+                video_paths  = video_paths,
+                content_mode = content_mode,
             )
             thumbnail_queue.append((html_path, png_path))
         except Exception as e:
@@ -1238,8 +1383,8 @@ def _generate_thumbnails(valid, video_results, args, content_mode):
         )
         try:
             render_thumbnails_batch(
-                items=thumbnail_queue,
-                content_mode=content_mode,
+                items        = thumbnail_queue,
+                content_mode = content_mode,
             )
         except Exception as e:
             log.error(f"  ⚠️  Thumbnail render error: {e}")
@@ -1251,9 +1396,9 @@ def _generate_thumbnails(valid, video_results, args, content_mode):
 
 def _try_publish_existing(record, args, content_mode,
                           will_publish_fb, will_publish_yt):
-    num = record["number"]
-    lang = args.lang
-    suffix = f"_{content_mode}"
+    num      = record["number"]
+    lang     = args.lang
+    suffix   = f"_{content_mode}"
     out_base = str(
         Path(args.output_dir).resolve() /
         f"video_{num}_{lang}_{content_mode}"
@@ -1284,16 +1429,16 @@ def _try_publish_existing(record, args, content_mode,
         fb_path = yt_path
 
     _do_publish(
-        video_path=yt_path,
-        record=record,
-        ai_data=ai_data,
-        lang=lang,
-        video_number=str(num),
-        content_mode=content_mode,
-        should_publish_fb=will_publish_fb and not fb_done,
-        should_publish_yt=will_publish_yt and not yt_done,
-        fb_video_path=fb_path,
-        yt_video_path=yt_path,
+        video_path        = yt_path,
+        record            = record,
+        ai_data           = ai_data,
+        lang              = lang,
+        video_number      = str(num),
+        content_mode      = content_mode,
+        should_publish_fb = will_publish_fb and not fb_done,
+        should_publish_yt = will_publish_yt and not yt_done,
+        fb_video_path     = fb_path,
+        yt_video_path     = yt_path,
     )
 
 
@@ -1304,7 +1449,8 @@ def _try_publish_existing(record, args, content_mode,
 def _handle_management_commands(args):
     if args.show_ai_cache is not None:
         show_ai_cache(
-            args.show_ai_cache if args.show_ai_cache != "all" else None
+            args.show_ai_cache
+            if args.show_ai_cache != "all" else None
         )
         return True
 
@@ -1330,7 +1476,7 @@ def _handle_management_commands(args):
 # ═════════════════════════════════════════════════════════════════════════════
 
 def main():
-    args = parse_args()
+    args         = parse_args()
     content_mode = args.content_mode
     init_db()
 
@@ -1341,12 +1487,15 @@ def main():
         log.error("❌ Error: input_file is required")
         sys.exit(1)
 
-    lang = args.lang
+    lang            = args.lang
     will_publish_fb = _should_publish_fb(args, content_mode)
     will_publish_yt = _should_publish_yt(args, lang)
 
     log.info(f"\n{'═' * 62}")
-    log.info(f"  🚀  Video Generator — {lang.upper()} [{content_mode.upper()}]")
+    log.info(
+        f"  🚀  Video Generator — "
+        f"{lang.upper()} [{content_mode.upper()}]"
+    )
     log.info(f"{'═' * 62}")
     log.info(f"  Input        : {args.input_file}")
     log.info(f"  Language     : {lang.upper()}")
@@ -1354,6 +1503,7 @@ def main():
     log.info(f"  Output       : {args.output_dir}")
     log.info(f"  Facebook     : {'✅' if will_publish_fb else '❌'}")
     log.info(f"  YouTube      : {'✅' if will_publish_yt else '❌'}")
+    log.info(f"  Sync         : 100% (WhisperX on mixed audio) ✅")
     log.info("")
     print_db_summary()
 
@@ -1364,7 +1514,9 @@ def main():
             will_publish_fb = False
 
     if will_publish_yt:
-        log.info(f"\n📺 Checking YouTube credentials ({lang.upper()})...")
+        log.info(
+            f"\n📺 Checking YouTube credentials ({lang.upper()})..."
+        )
         if not yt_check_credentials(lang):
             log.warning("  ⚠️  YT credentials invalid — disabled")
             will_publish_yt = False
@@ -1387,7 +1539,9 @@ def main():
 
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
-        next_num = get_next_video_number(lang, available, content_mode)
+        next_num  = get_next_video_number(
+            lang, available, content_mode
+        )
         if next_num is None:
             log.info(
                 f"\n  🔄 All videos published! "
@@ -1395,8 +1549,12 @@ def main():
             )
             reset_published_for_lang(lang, content_mode)
             next_num = str(valid[0]["number"])
-        log.info(f"\n  🎯 Auto-next: #{next_num} [{content_mode.upper()}]")
-        valid = [s for s in valid if str(s["number"]) == next_num]
+        log.info(
+            f"\n  🎯 Auto-next: #{next_num} [{content_mode.upper()}]"
+        )
+        valid = [
+            s for s in valid if str(s["number"]) == next_num
+        ]
 
     elif args.video_number:
         valid = [
@@ -1409,8 +1567,8 @@ def main():
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
 
-    success = 0
-    failed = 0
+    success       = 0
+    failed        = 0
     video_results = {}
 
     for i, record in enumerate(valid, 1):
@@ -1420,22 +1578,22 @@ def main():
             record["number"], lang, content_mode
         ):
             _try_publish_existing(
-                record=record,
-                args=args,
-                content_mode=content_mode,
-                will_publish_fb=will_publish_fb,
-                will_publish_yt=will_publish_yt,
+                record          = record,
+                args            = args,
+                content_mode    = content_mode,
+                will_publish_fb = will_publish_fb,
+                will_publish_yt = will_publish_yt,
             )
             continue
 
         try:
             result = process_video(
-                record=record,
-                args=args,
-                out_dir=args.output_dir,
-                should_publish_fb=will_publish_fb,
-                should_publish_yt=will_publish_yt,
-                content_mode=content_mode,
+                record            = record,
+                args              = args,
+                out_dir           = args.output_dir,
+                should_publish_fb = will_publish_fb,
+                should_publish_yt = will_publish_yt,
+                content_mode      = content_mode,
             )
             video_results[str(record["number"])] = result
             success += 1
@@ -1448,10 +1606,10 @@ def main():
             failed += 1
 
     _generate_thumbnails(
-        valid=valid,
-        video_results=video_results,
-        args=args,
-        content_mode=content_mode,
+        valid         = valid,
+        video_results = video_results,
+        args          = args,
+        content_mode  = content_mode,
     )
 
     log.info(f"\n{'═' * 62}")
