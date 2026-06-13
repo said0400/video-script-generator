@@ -1314,10 +1314,9 @@ async function renderAllPNGsLong(
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildDramaticLightingFilter() {
-  // ✅ إضاءة قوية ثابتة بدون نبض
-  // 🔴 يسار: يضيف +130 في قناة الأحمر، يتناقص باتجاه المنتصف
-  // 🔵 يمين: يضيف +130 في قناة الأزرق، يتناقص باتجاه المنتصف
-  // المنتصف: ظلام طبيعي حيث يلتقي اللونان
+  // 🔴 يسار: +130 أحمر يتناقص باتجاه المنتصف
+  // 🔵 يمين: +130 أزرق يتناقص باتجاه المنتصف
+  // clip(0,255): لا يتجاوز الحد الأقصى
   return (
     `geq=` +
     `r='clip(r(X,Y)+if(lte(X,W/2),130*(1-X/(W/2)),0),0,255)':` +
@@ -1328,63 +1327,8 @@ function buildDramaticLightingFilter() {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // PROCESS BACKGROUND
+// ✅ scale + crop بسيط (بدون zoompan) + إضاءة 🔴🔵
 // ═══════════════════════════════════════════════════════════════════════════
-
-function buildMotionFilter(duration, idx, isHookClip) {
-  const frames       = Math.ceil(duration * FPS);
-  const scaleAndCrop =
-    `scale=${WIDTH}:${HEIGHT}:` +
-    `force_original_aspect_ratio=increase,` +
-    `crop=${WIDTH}:${HEIGHT},setsar=1`;
-
-  if (isLong) {
-    const panDir = idx % 2 === 0 ? "+" : "-";
-    return (
-      `scale=w='trunc((iw*1.05)/2)*2':` +
-      `h='trunc((ih*1.05)/2)*2',` +
-      `zoompan=z='1.02':` +
-      `x='if(gte(on,1),x${panDir}0.2,iw/2-(iw/zoom/2))':` +
-      `y='ih/2-(ih/zoom/2)':` +
-      `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`
-    );
-  }
-
-  if (isHookClip) {
-    return (
-      `scale=w='trunc((iw*1.2)/2)*2':` +
-      `h='trunc((ih*1.2)/2)*2',` +
-      `zoompan=z='if(eq(on,1),1.15,max(zoom-0.005,1.0))':` +
-      `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
-      `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`
-    );
-  }
-
-  const zooms = [
-    `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
-    `zoompan=z='min(zoom+0.0008,1.3)':` +
-    `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
-    `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-
-    `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
-    `zoompan=z='max(zoom-0.0008,1.0)':` +
-    `x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':` +
-    `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-
-    `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
-    `zoompan=z='1.1':` +
-    `x='if(gte(x,iw/10),x-0.5,iw/10)':` +
-    `y='ih/2-(ih/zoom/2)':` +
-    `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-
-    `scale=w='trunc((iw*1.2)/2)*2':h='trunc((ih*1.2)/2)*2',` +
-    `zoompan=z='1.1':` +
-    `x='if(lte(x,iw-iw/10),x+0.5,iw-iw/10)':` +
-    `y='ih/2-(ih/zoom/2)':` +
-    `d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`,
-  ];
-
-  return zooms[idx % 4];
-}
 
 function buildColorGrading(isHookClip) {
   return isHookClip
@@ -1393,21 +1337,31 @@ function buildColorGrading(isHookClip) {
 }
 
 function processBackground(
-  videoPath, duration, outPath, idx, isHookClip = false
+  videoPath,
+  duration,
+  outPath,
+  idx,
+  isHookClip = false
 ) {
   const d  = Math.max(duration, 0.5);
   const fi = Math.min(0.3, d * 0.08);
   const fo = Math.min(0.3, d * 0.08);
 
-  const motionFilter  = buildMotionFilter(d, idx, isHookClip);
-  const grading       = buildColorGrading(isHookClip);
-  // ✅ إضاءة درامية 🔴 يسار + 🔵 يمين
-  const lightingFilter = buildDramaticLightingFilter();
+  // ✅ scale + crop بسيط بدون zoompan
+  const scaleAndCrop =
+    `scale=${WIDTH}:${HEIGHT}:` +
+    `force_original_aspect_ratio=increase,` +
+    `crop=${WIDTH}:${HEIGHT},` +
+    `setsar=1`;
 
+  const grading  = buildColorGrading(isHookClip);
+  const lighting = buildDramaticLightingFilter();
+
+  // ✅ Pipeline: scale → grading → lighting 🔴🔵 → fade
   const vf =
-    `${motionFilter},` +
+    `${scaleAndCrop},` +
     `${grading},` +
-    `${lightingFilter},` +
+    `${lighting},` +
     `fade=t=in:st=0:d=${fi.toFixed(3)},` +
     `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
 
@@ -1422,47 +1376,50 @@ function processBackground(
     "-t", d.toFixed(3),
     "-vf", vf,
     "-r", String(FPS),
-    "-c:v", "libx264", "-preset", "fast",
+    "-c:v", "libx264",
+    "-preset", "fast",
     "-crf", isHookClip ? "16" : "18",
-    "-pix_fmt", "yuv420p", "-an",
+    "-pix_fmt", "yuv420p",
+    "-an",
     outPath,
   ]);
 
-  // Fallback بدون lighting إذا فشل geq
+  // Fallback 1: بدون lighting
   if (r.status !== 0) {
     console.log(
       "  ⚠️  Lighting filter failed — trying without..."
     );
-    const vfSimple =
-      `${motionFilter},${grading},` +
+    const vfNoLight =
+      `${scaleAndCrop},` +
+      `${grading},` +
       `fade=t=in:st=0:d=${fi.toFixed(3)},` +
       `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
 
     r = runFFmpeg([
       "-y", ...loopArg, "-i", videoPath,
       "-t", d.toFixed(3),
-      "-vf", vfSimple,
+      "-vf", vfNoLight,
       "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast",
-      "-crf", isHookClip ? "16" : "18",
-      "-pix_fmt", "yuv420p", "-an",
+      "-c:v", "libx264",
+      "-preset", "fast",
+      "-crf", "21",
+      "-pix_fmt", "yuv420p",
+      "-an",
       outPath,
     ]);
 
-    // Fallback نهائي
+    // Fallback 2: scale بسيط فقط
     if (r.status !== 0) {
-      const simple =
-        `scale=${WIDTH}:${HEIGHT}:` +
-        `force_original_aspect_ratio=increase,` +
-        `crop=${WIDTH}:${HEIGHT},setsar=1`;
       runFFmpeg([
         "-y", "-stream_loop", "-1", "-i", videoPath,
         "-t", d.toFixed(3),
-        "-vf", simple,
+        "-vf", scaleAndCrop,
         "-r", String(FPS),
-        "-c:v", "libx264", "-preset", "fast",
-        "-crf", "21",
-        "-pix_fmt", "yuv420p", "-an",
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-an",
         outPath,
       ]);
     }
@@ -1492,6 +1449,7 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     "[1:v]format=rgba[cap];" +
     "[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]";
 
+  // ✅ المحاولة الأولى: صوت من BG video
   let r = runFFmpeg([
     "-y",
     "-i", bgMp4,
@@ -1505,6 +1463,7 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     outPath,
   ]);
 
+  // ✅ Fallback: صوت من ملف منفصل
   if (r.status !== 0 && audioPth) {
     console.log("  ⚠️  Using external audio fallback...");
     r = runFFmpeg([
@@ -1647,7 +1606,7 @@ async function handleBgOnlyMode() {
     const bgMp4 = join(
       TMP, `bg_${String(index).padStart(3, "0")}.mp4`
     );
-    // ✅ processBackground يطبق الإضاءة الدرامية تلقائياً
+    // ✅ scale + crop + إضاءة 🔴🔵
     processBackground(
       videoPath, duration, bgMp4, index, isHook
     );
@@ -1668,6 +1627,7 @@ async function handleBgOnlyMode() {
   );
 }
 
+// ✅ words_only — SHORT
 async function handleWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
@@ -1719,6 +1679,7 @@ async function handleWordsOnlyMode() {
   }
 }
 
+// ✅ words_only — LONG
 async function handleLongWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
