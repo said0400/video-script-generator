@@ -69,7 +69,6 @@ const isShort = !isLong;
 
 const TITLE_SLIDE_FRAMES = Math.floor(0.6 * FPS);
 const HOOK_FRAMES        = Math.floor(3.0 * FPS);
-// ✅ الإصلاح: 0 = لا تأخير في ظهور الكلمات
 const HOOK_INTRO_FRAMES  = 0;
 const INTRO_FRAMES       = Math.floor(1.0 * FPS);
 const OUTRO_FRAMES       = Math.floor(1.0 * FPS);
@@ -298,8 +297,7 @@ const effectiveDuration =
 const totalFrames = Math.ceil(effectiveDuration * FPS);
 
 console.log(
-  `🎵 Audio: ${realAudioDuration.toFixed(3)}s | ` +
-  `Frames: ${totalFrames}`
+  `🎵 Audio: ${realAudioDuration.toFixed(3)}s | Frames: ${totalFrames}`
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -412,8 +410,7 @@ function buildClipPlan() {
 
 function logClipPlan(plan) {
   console.log(
-    `\n📋 Clip plan: ${plan.length} clips ` +
-    `[${content_mode.toUpperCase()}]`
+    `\n📋 Clip plan: ${plan.length} clips [${content_mode.toUpperCase()}]`
   );
   plan.forEach((c) =>
     console.log(
@@ -426,7 +423,6 @@ function logClipPlan(plan) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // WORD LIST
-// ✅ timestamps حقيقية مباشرة من WhisperX بدون أي تعديل
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildWordList() {
@@ -447,15 +443,14 @@ function buildWordList() {
 
       words.push({
         word:    w.word.trim(),
-        start,                   // ← وقت حقيقي من الفيديو
-        end,                     // ← وقت حقيقي من الفيديو
+        start,
+        end,
         tag:     segTag,
         isPower: isPowerWord(w.word),
       });
     }
   }
 
-  // Fallback فقط إذا لم يجد WhisperX أي كلمات
   if (words.length === 0 && sentences.length > 0) {
     console.log("⚠️  No word alignment — equal split fallback");
     const allText = sentences
@@ -497,7 +492,6 @@ function buildWordList() {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FRAME STATE MAP
-// ✅ كل frame يأخذ الكلمة التي تُنطق في وقته بالضبط
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildFrameStateMap(words) {
@@ -508,13 +502,11 @@ function buildFrameStateMap(words) {
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
 
-    // تقدم للكلمة الحالية
     while (wi < words.length - 1 && t >= words[wi].end) {
       wi++;
     }
 
     const w = words[wi];
-    // ✅ الكلمة تظهر في وقتها الحقيقي بدقة
     if (t >= w.start && t < w.end) {
       map[f] = {
         word:     w.word,
@@ -1187,7 +1179,6 @@ async function warmupFonts(page, builder) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RENDER PNGs — SHORT
-// ✅ بدون hook intro — الكلمات تبدأ من frame 0
 // ═══════════════════════════════════════════════════════════════════════════
 
 function collectUniqueShortStates(frameStateMap, boundaryMap) {
@@ -1195,7 +1186,6 @@ function collectUniqueShortStates(frameStateMap, boundaryMap) {
 
   for (let f = 0; f < frameStateMap.length; f++) {
     const ts  = boundaryMap[f] || null;
-    // ✅ مباشرة — لا hook intro
     const key = stateKey(frameStateMap[f], f, ts);
 
     if (!unique.has(key)) {
@@ -1319,6 +1309,24 @@ async function renderAllPNGsLong(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// 🔴🔵 DRAMATIC LIGHTING FILTER
+// إضاءة حمراء يسار + زرقاء يمين — ثابتة درامية غامضة
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildDramaticLightingFilter() {
+  // ✅ إضاءة قوية ثابتة بدون نبض
+  // 🔴 يسار: يضيف +130 في قناة الأحمر، يتناقص باتجاه المنتصف
+  // 🔵 يمين: يضيف +130 في قناة الأزرق، يتناقص باتجاه المنتصف
+  // المنتصف: ظلام طبيعي حيث يلتقي اللونان
+  return (
+    `geq=` +
+    `r='clip(r(X,Y)+if(lte(X,W/2),130*(1-X/(W/2)),0),0,255)':` +
+    `g='g(X,Y)':` +
+    `b='clip(b(X,Y)+if(gte(X,W/2),130*((X-W/2)/(W/2)),0),0,255)'`
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // PROCESS BACKGROUND
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1351,7 +1359,6 @@ function buildMotionFilter(duration, idx, isHookClip) {
     );
   }
 
-  // Short: 4 motion types
   const zooms = [
     `scale=w='trunc((iw*1.3)/2)*2':h='trunc((ih*1.3)/2)*2',` +
     `zoompan=z='min(zoom+0.0008,1.3)':` +
@@ -1392,11 +1399,15 @@ function processBackground(
   const fi = Math.min(0.3, d * 0.08);
   const fo = Math.min(0.3, d * 0.08);
 
-  const motionFilter = buildMotionFilter(d, idx, isHookClip);
-  const grading      = buildColorGrading(isHookClip);
+  const motionFilter  = buildMotionFilter(d, idx, isHookClip);
+  const grading       = buildColorGrading(isHookClip);
+  // ✅ إضاءة درامية 🔴 يسار + 🔵 يمين
+  const lightingFilter = buildDramaticLightingFilter();
 
   const vf =
-    `${motionFilter},${grading},` +
+    `${motionFilter},` +
+    `${grading},` +
+    `${lightingFilter},` +
     `fade=t=in:st=0:d=${fi.toFixed(3)},` +
     `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
 
@@ -1417,21 +1428,44 @@ function processBackground(
     outPath,
   ]);
 
+  // Fallback بدون lighting إذا فشل geq
   if (r.status !== 0) {
-    const simple =
-      `scale=${WIDTH}:${HEIGHT}:` +
-      `force_original_aspect_ratio=increase,` +
-      `crop=${WIDTH}:${HEIGHT},setsar=1`;
-    runFFmpeg([
-      "-y", "-stream_loop", "-1", "-i", videoPath,
+    console.log(
+      "  ⚠️  Lighting filter failed — trying without..."
+    );
+    const vfSimple =
+      `${motionFilter},${grading},` +
+      `fade=t=in:st=0:d=${fi.toFixed(3)},` +
+      `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
+
+    r = runFFmpeg([
+      "-y", ...loopArg, "-i", videoPath,
       "-t", d.toFixed(3),
-      "-vf", simple,
+      "-vf", vfSimple,
       "-r", String(FPS),
       "-c:v", "libx264", "-preset", "fast",
-      "-crf", "21",
+      "-crf", isHookClip ? "16" : "18",
       "-pix_fmt", "yuv420p", "-an",
       outPath,
     ]);
+
+    // Fallback نهائي
+    if (r.status !== 0) {
+      const simple =
+        `scale=${WIDTH}:${HEIGHT}:` +
+        `force_original_aspect_ratio=increase,` +
+        `crop=${WIDTH}:${HEIGHT},setsar=1`;
+      runFFmpeg([
+        "-y", "-stream_loop", "-1", "-i", videoPath,
+        "-t", d.toFixed(3),
+        "-vf", simple,
+        "-r", String(FPS),
+        "-c:v", "libx264", "-preset", "fast",
+        "-crf", "21",
+        "-pix_fmt", "yuv420p", "-an",
+        outPath,
+      ]);
+    }
   }
 
   return outPath;
@@ -1458,7 +1492,6 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     "[1:v]format=rgba[cap];" +
     "[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]";
 
-  // ✅ المحاولة الأولى: صوت من BG video
   let r = runFFmpeg([
     "-y",
     "-i", bgMp4,
@@ -1472,7 +1505,6 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     outPath,
   ]);
 
-  // ✅ Fallback: صوت من ملف منفصل
   if (r.status !== 0 && audioPth) {
     console.log("  ⚠️  Using external audio fallback...");
     r = runFFmpeg([
@@ -1615,6 +1647,7 @@ async function handleBgOnlyMode() {
     const bgMp4 = join(
       TMP, `bg_${String(index).padStart(3, "0")}.mp4`
     );
+    // ✅ processBackground يطبق الإضاءة الدرامية تلقائياً
     processBackground(
       videoPath, duration, bgMp4, index, isHook
     );
@@ -1635,8 +1668,6 @@ async function handleBgOnlyMode() {
   );
 }
 
-// ✅ words_only — SHORT
-// timestamps حقيقية + لا hook intro = تزامن 100%
 async function handleWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
@@ -1667,9 +1698,7 @@ async function handleWordsOnlyMode() {
 
     for (let f = 0; f < totalFrames; f++) {
       const ts  = boundaryMap[f] || null;
-      // ✅ مباشرة — لا hook intro
       const key = stateKey(frameStateMap[f], f, ts);
-
       const src  = pngCache.get(key) || emptyPng;
       const dest = join(
         frameDir,
@@ -1682,7 +1711,6 @@ async function handleWordsOnlyMode() {
     framesToMov(frameDir, capMov);
 
     console.log("🔧 Overlaying words on BG video [SHORT]...");
-    // ✅ صوت BG video = mixed_audio → تزامن 100%
     overlayOnBg(bgVideoPath, capMov, audio, outputPath);
 
     console.log(`\n🎉 Final [SHORT] → ${outputPath}\n`);
@@ -1691,7 +1719,6 @@ async function handleWordsOnlyMode() {
   }
 }
 
-// ✅ words_only — LONG
 async function handleLongWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
@@ -1726,9 +1753,8 @@ async function handleLongWordsOnlyMode() {
       const wordSt   = frameStateMap[f];
       const sentence = sentenceMap[f] || "";
       const key      = longStateKey(wordSt, ts, sentence);
-
-      const src  = pngCache.get(key) || emptyPng;
-      const dest = join(
+      const src      = pngCache.get(key) || emptyPng;
+      const dest     = join(
         frameDir,
         `frame_${String(f).padStart(6, "0")}.png`
       );
@@ -1739,7 +1765,6 @@ async function handleLongWordsOnlyMode() {
     framesToMov(frameDir, capMov);
 
     console.log("🔧 Overlaying words on BG video [LONG]...");
-    // ✅ صوت BG video = mixed_audio → تزامن 100%
     overlayOnBg(bgVideoPath, capMov, audio, outputPath);
 
     console.log(`\n🎉 Final [LONG] → ${outputPath}\n`);
