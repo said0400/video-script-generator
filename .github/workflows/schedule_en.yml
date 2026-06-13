@@ -104,8 +104,9 @@ jobs:
 
       - name: 📦 Install openai-whisper (required by stable-ts)
         run: |
-          pip install setuptools wheel
+          pip install "setuptools<81.0.0" wheel
           pip install openai-whisper==20240930 --no-build-isolation
+          pip install --upgrade setuptools
 
       - name: 📦 Install Python dependencies
         run: pip install -r requirements.txt
@@ -117,12 +118,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: remotion/package-lock.json
 
       - name: 📦 Install Node dependencies
         working-directory: remotion
-        run: npm ci
+        run: |
+          if [ -f "package-lock.json" ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: 🌐 Install Playwright Chromium
         run: python -m playwright install chromium --with-deps
@@ -151,11 +155,25 @@ jobs:
           TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
           CURRENT_LANG:          "en"
+
+          INPUT_CONTENT_MODE: ${{ github.event.inputs.content_mode }}
+          INPUT_VIDEO_NUMBER: ${{ github.event.inputs.video_number }}
+          INPUT_FORCE:        ${{ github.event.inputs.force }}
+          INPUT_FORCE_AI:     ${{ github.event.inputs.force_ai }}
+          INPUT_PUBLISH_FB:   ${{ github.event.inputs.publish_fb }}
+          INPUT_PUBLISH_YT:   ${{ github.event.inputs.publish_yt }}
+
         run: |
           MODE="short"
           HOUR=$(date -u +"%H")
           [ "$HOUR" = "23" ] && MODE="long"
-          [ -n "${{ github.event.inputs.content_mode }}" ] && MODE="${{ github.event.inputs.content_mode }}"
+          [ -n "$INPUT_CONTENT_MODE" ] && MODE="$INPUT_CONTENT_MODE"
+
+          FORCE="${INPUT_FORCE:-false}"
+          FORCE_AI="${INPUT_FORCE_AI:-false}"
+          PUBLISH_FB="${INPUT_PUBLISH_FB:-true}"
+          PUBLISH_YT="${INPUT_PUBLISH_YT:-true}"
+          VIDEO_NUMBER="${INPUT_VIDEO_NUMBER:-}"
 
           if [ "$MODE" = "long" ]; then
             INPUT_FILE="scripts/videos_en_long.xlsx"
@@ -165,16 +183,16 @@ jobs:
             OUTPUT_DIR="output"
           fi
 
-          FLAGS="--lang en --content-mode $MODE --auto-next"
-          [ "${{ github.event.inputs.force }}" = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}" = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && FLAGS="$FLAGS --publish-yt"
-          [ "${{ github.event.inputs.publish_fb }}" = "false" ] && \
-          [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="$FLAGS --no-publish"
-          [ -n "${{ github.event.inputs.video_number }}" ] && FLAGS="$FLAGS --video-number ${{ github.event.inputs.video_number }}"
+          FLAGS=(--lang en --content-mode "$MODE" --auto-next)
 
-          python main.py "$INPUT_FILE" --output-dir "$OUTPUT_DIR" $FLAGS
+          [ "$FORCE" = "true" ]      && FLAGS+=(--force)
+          [ "$FORCE_AI" = "true" ]   && FLAGS+=(--force-ai)
+          [ "$PUBLISH_FB" = "true" ] && FLAGS+=(--publish-fb)
+          [ "$PUBLISH_YT" = "true" ] && FLAGS+=(--publish-yt)
+          [ "$PUBLISH_FB" = "false" ] && [ "$PUBLISH_YT" = "false" ] && FLAGS+=(--no-publish)
+          [ -n "$VIDEO_NUMBER" ]     && FLAGS+=(--video-number "$VIDEO_NUMBER")
+
+          python main.py "$INPUT_FILE" --output-dir "$OUTPUT_DIR" "${FLAGS[@]}"
 
       - name: 📤 Upload final videos
         if: always()
