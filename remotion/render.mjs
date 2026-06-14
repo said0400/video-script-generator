@@ -158,14 +158,10 @@ const location = GPS_LOCATIONS[lang] || GPS_LOCATIONS.ar;
 function buildiPhoneMetadata() {
   const now     = new Date();
   const dateISO = now.toISOString();
-  const dateStr = dateISO
-    .replace(/[-:]/g, "")
-    .split(".")[0];
+  const dateStr = dateISO.replace(/[-:]/g, "").split(".")[0];
 
-  const serial   = "F" + Math.random()
-    .toString(36).substring(2, 10).toUpperCase();
-  const cameraId = Math.random()
-    .toString(36).substring(2, 14).toUpperCase();
+  const serial   = "F" + Math.random().toString(36).substring(2, 10).toUpperCase();
+  const cameraId = Math.random().toString(36).substring(2, 14).toUpperCase();
   const uuid     = [
     Math.random().toString(16).substring(2, 10),
     Math.random().toString(16).substring(2, 6),
@@ -174,17 +170,22 @@ function buildiPhoneMetadata() {
     Math.random().toString(16).substring(2, 14),
   ].join("-").toUpperCase();
 
+  const gyroX  = (Math.random() * 0.02 - 0.01).toFixed(6);
+  const gyroY  = (Math.random() * 0.02 - 0.01).toFixed(6);
+  const gyroZ  = (Math.random() * 0.02 - 0.01).toFixed(6);
+  const accelX = (Math.random() * 0.1 - 0.05).toFixed(6);
+  const accelY = (Math.random() * 0.1 - 0.05).toFixed(6);
+  const accelZ = (9.8 + Math.random() * 0.1 - 0.05).toFixed(6);
+
   return [
     "-map_metadata", "-1",
 
-    // ── جهاز التصوير ──
     "-metadata", "make=Apple",
     "-metadata", "model=iPhone 17 Pro Max",
     "-metadata", "software=Adobe Premiere Pro 25.0",
     "-metadata", "encoder=Adobe Premiere Pro 25.0",
     "-metadata", "handler_name=Core Media Data Handler",
 
-    // ── Apple QuickTime ──
     "-metadata", "com.apple.quicktime.make=Apple",
     "-metadata", "com.apple.quicktime.model=iPhone 17 Pro Max",
     "-metadata", "com.apple.quicktime.software=iOS 18.2",
@@ -196,11 +197,9 @@ function buildiPhoneMetadata() {
     "-metadata", "com.apple.quicktime.fullframerate=1",
     "-metadata", "com.apple.quicktime.live-photo.auto=0",
 
-    // ── التاريخ ──
     "-metadata", `creation_time=${dateISO}`,
     "-metadata", `date=${dateStr}`,
 
-    // ── كاميرا EXIF ──
     "-metadata", "focal_length=9",
     "-metadata", "focal_length_in_35mm_film=24",
     "-metadata", "aperture=f/2.8",
@@ -219,14 +218,13 @@ function buildiPhoneMetadata() {
     "-metadata", "color_space=sRGB",
     "-metadata", "digital_zoom_ratio=1.0",
 
-    // ── العدسة ──
     "-metadata", "lens=Apple iPhone 17 Pro Max back camera 9mm f/2.8",
     "-metadata", "lens_make=Apple",
     "-metadata", "lens_model=iPhone 17 Pro Max back camera 9mm f/2.8",
     "-metadata", "lens_serial_number=" + serial,
     "-metadata", "lens_specification=9/1 9/1 28/10 28/10",
+    "-metadata", "lens_distortion=-0.12",
 
-    // ── GPS ──
     "-metadata", `location=${location.iso6709}`,
     "-metadata", `location-eng=${location.city}, ${location.country}`,
     "-metadata", `GPS_latitude=${location.lat}`,
@@ -241,7 +239,6 @@ function buildiPhoneMetadata() {
     "-metadata", `GPS_date_stamp=${dateStr.substring(0, 8)}`,
     "-metadata", "GPS_processing_method=GPS",
 
-    // ── معلومات الفيديو ──
     "-metadata", "media_type=Video",
     "-metadata", "hdr_format=Dolby Vision",
     "-metadata", "color_primaries=BT.2020",
@@ -250,9 +247,23 @@ function buildiPhoneMetadata() {
     "-metadata", "video_range=Full",
     "-metadata", "color_temperature=6500K",
     "-metadata", "aspect_ratio=9:16",
-    "-metadata", "scene=Portrait",
 
-    // ── إخفاء المصدر ──
+    "-metadata", "scene=Portrait",
+    "-metadata", "scene_type=Indoor",
+    "-metadata", "content_type=video",
+
+    "-metadata", "stabilization=OIS",
+    "-metadata", "optical_stabilization=Enabled",
+    "-metadata", "video_stabilization=CinematicStabilization",
+
+    "-metadata", `gyroscope_x=${gyroX}`,
+    "-metadata", `gyroscope_y=${gyroY}`,
+    "-metadata", `gyroscope_z=${gyroZ}`,
+    "-metadata", `accelerometer_x=${accelX}`,
+    "-metadata", `accelerometer_y=${accelY}`,
+    "-metadata", `accelerometer_z=${accelZ}`,
+    "-metadata", "motion_reference_frame=Device",
+
     "-metadata", "comment=",
     "-metadata", "artist=",
     "-metadata", "copyright=",
@@ -375,20 +386,15 @@ function safeKey(str, maxLen = 25) {
 }
 
 const esc = (s) =>
-  (s || "")
-    .toString()
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
+  (s || "").toString()
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 
 function normalizeWord(w) {
-  return (w || "")
-    .toString()
+  return (w || "").toString()
     .replace(/[.,!?؟،;:"'(){}[\]<>«»…]/g, "")
-    .trim()
-    .toLowerCase();
+    .trim().toLowerCase();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -404,9 +410,7 @@ function getFontFamily(text) {
     : `"Noto Sans", "DejaVu Sans", sans-serif`;
 }
 
-function getDir(text) {
-  return isArabic(text) ? "rtl" : "ltr";
-}
+function getDir(text)  { return isArabic(text) ? "rtl" : "ltr"; }
 
 function getLang(text) {
   if (isArabic(text)) return "ar";
@@ -419,16 +423,12 @@ function getLang(text) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function probeDuration(filePath) {
-  const r = spawnSync(
-    "ffprobe",
-    [
-      "-v", "error",
-      "-show_entries", "format=duration",
-      "-of", "default=noprint_wrappers=1:nokey=1",
-      filePath,
-    ],
-    { stdio: ["ignore", "pipe", "pipe"] }
-  );
+  const r = spawnSync("ffprobe", [
+    "-v", "error",
+    "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1",
+    filePath,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
   return parseFloat(r.stdout.toString().trim()) || 0;
 }
 
@@ -462,12 +462,9 @@ function isPowerWord(w) {
   if (n.length < 2) return false;
   return power_words.some((pw) => {
     const p = normalizeWord(pw);
-    return (
-      p &&
-      (n === p ||
-        (p.length >= 3 && n.includes(p)) ||
-        (n.length >= 3 && p.includes(n)))
-    );
+    return p && (n === p ||
+      (p.length >= 3 && n.includes(p)) ||
+      (n.length >= 3 && p.includes(n)));
   });
 }
 
@@ -493,11 +490,7 @@ function buildSentenceBoundaryMap() {
 
     for (let f = 0; f < config.flashFrames; f++) {
       const frame = endFr + f;
-      if (
-        frame >= 0 &&
-        frame < totalFrames &&
-        map[frame] === null
-      ) {
+      if (frame >= 0 && frame < totalFrames && map[frame] === null) {
         map[frame] = {
           tag,
           config,
@@ -513,9 +506,7 @@ function buildSentenceBoundaryMap() {
 
   console.log(`\n🎬 Sentence boundaries: ${boundaries.length}`);
   boundaries.forEach((b) =>
-    console.log(
-      `   [${b.tag || "info"}] @ ${parseFloat(b.end).toFixed(3)}s`
-    )
+    console.log(`   [${b.tag || "info"}] @ ${parseFloat(b.end).toFixed(3)}s`)
   );
 
   return map;
@@ -543,9 +534,7 @@ function buildClipPlan() {
     return plan;
   }
 
-  const totalClips = Math.max(
-    1, Math.floor(effectiveDuration / clip_duration)
-  );
+  const totalClips    = Math.max(1, Math.floor(effectiveDuration / clip_duration));
   const actualClipDur = effectiveDuration / totalClips;
 
   const plan = Array.from({ length: totalClips }, (_, i) => ({
@@ -561,9 +550,7 @@ function buildClipPlan() {
 }
 
 function logClipPlan(plan) {
-  console.log(
-    `\n📋 Clip plan: ${plan.length} clips [${content_mode.toUpperCase()}]`
-  );
+  console.log(`\n📋 Clip plan: ${plan.length} clips [${content_mode.toUpperCase()}]`);
   plan.forEach((c) =>
     console.log(
       `   [${c.index + 1}] ${c.start.toFixed(2)}s → ` +
@@ -588,10 +575,7 @@ function buildWordList() {
       if (!w.word) continue;
       const start = parseFloat(w.start);
       const end   = parseFloat(w.end);
-      if (
-        isNaN(start) || isNaN(end) ||
-        start < 0 || end <= start
-      ) continue;
+      if (isNaN(start) || isNaN(end) || start < 0 || end <= start) continue;
 
       words.push({
         word:    w.word.trim(),
@@ -605,13 +589,8 @@ function buildWordList() {
 
   if (words.length === 0 && sentences.length > 0) {
     console.log("⚠️  No word alignment — equal split fallback");
-    const allText = sentences
-      .join(" ")
-      .split(/\s+/)
-      .filter(Boolean);
-    const perWord =
-      effectiveDuration / Math.max(allText.length, 1);
-
+    const allText = sentences.join(" ").split(/\s+/).filter(Boolean);
+    const perWord = effectiveDuration / Math.max(allText.length, 1);
     for (let i = 0; i < allText.length; i++) {
       words.push({
         word:    allText[i],
@@ -629,14 +608,8 @@ function buildWordList() {
   if (words.length > 0) {
     const first = words[0];
     const last  = words[words.length - 1];
-    console.log(
-      `   [0]  ${first.start.toFixed(3)}s → ` +
-      `${first.end.toFixed(3)}s "${first.word}" [${first.tag}]`
-    );
-    console.log(
-      `   [-1] ${last.start.toFixed(3)}s → ` +
-      `${last.end.toFixed(3)}s "${last.word}" [${last.tag}]`
-    );
+    console.log(`   [0]  ${first.start.toFixed(3)}s → ${first.end.toFixed(3)}s "${first.word}" [${first.tag}]`);
+    console.log(`   [-1] ${last.start.toFixed(3)}s → ${last.end.toFixed(3)}s "${last.word}" [${last.tag}]`);
   }
 
   return words;
@@ -653,11 +626,7 @@ function buildFrameStateMap(words) {
   let wi = 0;
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
-
-    while (wi < words.length - 1 && t >= words[wi].end) {
-      wi++;
-    }
-
+    while (wi < words.length - 1 && t >= words[wi].end) wi++;
     const w = words[wi];
     if (t >= w.start && t < w.end) {
       map[f] = {
@@ -670,10 +639,7 @@ function buildFrameStateMap(words) {
   }
 
   const covered = map.filter(Boolean).length;
-  console.log(
-    `Coverage: ${covered}/${totalFrames} ` +
-    `(${((covered / totalFrames) * 100).toFixed(1)}%)`
-  );
+  console.log(`Coverage: ${covered}/${totalFrames} (${((covered / totalFrames) * 100).toFixed(1)}%)`);
   return map;
 }
 
@@ -687,12 +653,10 @@ function buildSentenceMap() {
   }
 
   const map = new Array(totalFrames).fill(null);
-
   for (const seg of aligned) {
     const segStart = Math.floor(parseFloat(seg.start || 0) * FPS);
     const segEnd   = Math.ceil(parseFloat(seg.end   || 0) * FPS);
     const sentence = seg.sentence || "";
-
     for (let f = segStart; f < segEnd && f < totalFrames; f++) {
       map[f] = sentence;
     }
@@ -706,12 +670,9 @@ function buildSentenceMap() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function stateKey(state, globalFrame, transitionState) {
-  if (globalFrame < INTRO_FRAMES) {
-    return `intro_f${globalFrame}`;
-  }
-  if (globalFrame >= totalFrames - OUTRO_FRAMES) {
-    return `outro_f${globalFrame}`;
-  }
+  if (globalFrame < INTRO_FRAMES) return `intro_f${globalFrame}`;
+  if (globalFrame >= totalFrames - OUTRO_FRAMES) return `outro_f${globalFrame}`;
+
   if (transitionState) {
     const pb = transitionState.progress < 0.5 ? "in" : "out";
     return (
@@ -721,36 +682,24 @@ function stateKey(state, globalFrame, transitionState) {
     );
   }
 
-  const hook = globalFrame < HOOK_FRAMES ? "h" : "n";
+  const hook   = globalFrame < HOOK_FRAMES ? "h" : "n";
   if (!state) return `empty_${hook}`;
 
   const p      = state.progress;
   const bucket = p < 0.15 ? "pop" : p > 0.85 ? "fade" : "hold";
-
-  return (
-    `w_${safeKey(state.word, 15)}_${state.tag}_` +
-    `${state.isPower ? 1 : 0}_${hook}_${bucket}`
-  );
+  return `w_${safeKey(state.word, 15)}_${state.tag}_${state.isPower ? 1 : 0}_${hook}_${bucket}`;
 }
 
 function longStateKey(wordSt, ts, sentence) {
   const wordKey = wordSt
-    ? `${safeKey(wordSt.word, 15)}_` +
-      `${wordSt.tag}_${wordSt.isPower ? 1 : 0}`
+    ? `${safeKey(wordSt.word, 15)}_${wordSt.tag}_${wordSt.isPower ? 1 : 0}`
     : "empty";
-
   const sentKey = safeKey(sentence, 25);
-  const tKey    = ts
-    ? `tr_${ts.tag}_${Math.floor(ts.progress * 4)}`
-    : "n";
-
-  let pBucket = "hold";
+  const tKey    = ts ? `tr_${ts.tag}_${Math.floor(ts.progress * 4)}` : "n";
+  let pBucket   = "hold";
   if (wordSt) {
-    pBucket =
-      wordSt.progress < 0.15 ? "pop" :
-      wordSt.progress > 0.85 ? "fade" : "hold";
+    pBucket = wordSt.progress < 0.15 ? "pop" : wordSt.progress > 0.85 ? "fade" : "hold";
   }
-
   return `long_${wordKey}_${tKey}_${pBucket}_${sentKey}`;
 }
 
@@ -765,8 +714,7 @@ function computeTitleAnimation(globalFrame) {
     return { opacity: e, translateY: (1 - e) * -80 };
   }
   if (globalFrame >= totalFrames - OUTRO_FRAMES) {
-    const t =
-      (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
+    const t = (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
     const e = Math.pow(t, 2);
     return { opacity: 1 - e, translateY: e * -60 };
   }
@@ -777,38 +725,22 @@ function computeWordAnimation(progress, scaleMult) {
   if (progress < 0.15) {
     const t = progress / 0.15;
     const e = 1 - Math.pow(1 - t, 2);
-    return {
-      scale:      0.6 + e * 0.48,
-      opacity:    Math.min(1, t * 3),
-      translateY: (1 - e) * 30,
-    };
+    return { scale: 0.6 + e * 0.48, opacity: Math.min(1, t * 3), translateY: (1 - e) * 30 };
   }
   if (progress > 0.85) {
     const t = (progress - 0.85) / 0.15;
-    return {
-      scale:      1.0 - t * 0.05,
-      opacity:    1 - t * 0.3,
-      translateY: 0,
-    };
+    return { scale: 1.0 - t * 0.05, opacity: 1 - t * 0.3, translateY: 0 };
   }
   return { scale: scaleMult, opacity: 1.0, translateY: 0 };
 }
 
 function computeTransitionEffect(transitionState, globalFrame) {
   if (!transitionState) {
-    return {
-      flashOpacity: 0,
-      flashColor:   "rgba(0,0,0,0)",
-      shakeX:       0,
-      shakeY:       0,
-      transScale:   1.0,
-    };
+    return { flashOpacity: 0, flashColor: "rgba(0,0,0,0)", shakeX: 0, shakeY: 0, transScale: 1.0 };
   }
 
   const { config, progress: tp } = transitionState;
-
-  let flashOpacity =
-    tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
+  let flashOpacity = tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
   flashOpacity = Math.max(0, Math.min(1, flashOpacity));
 
   let shakeX = 0, shakeY = 0;
@@ -820,17 +752,10 @@ function computeTransitionEffect(transitionState, globalFrame) {
 
   let transScale = 1.0;
   if (config.scaleBoost > 1.0 && tp < 0.5) {
-    transScale =
-      1.0 + (config.scaleBoost - 1.0) * (1 - tp * 2);
+    transScale = 1.0 + (config.scaleBoost - 1.0) * (1 - tp * 2);
   }
 
-  return {
-    flashOpacity,
-    flashColor: config.flashColor,
-    shakeX,
-    shakeY,
-    transScale,
-  };
+  return { flashOpacity, flashColor: config.flashColor, shakeX, shakeY, transScale };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -864,10 +789,7 @@ function computeFontSize(word, isAr, scaleMult, isLongMode) {
 
   let baseFontSize = isLongMode ? 80 : 100;
   for (const { maxLen, ar, en } of table) {
-    if (wlen <= maxLen) {
-      baseFontSize = isAr ? ar : en;
-      break;
-    }
+    if (wlen <= maxLen) { baseFontSize = isAr ? ar : en; break; }
   }
 
   baseFontSize = Math.round(baseFontSize * scaleMult);
@@ -930,11 +852,10 @@ function buildHTMLShort({
     `translate(${trans.shakeX.toFixed(2)}px, ${trans.shakeY.toFixed(2)}px) ` +
     `scale(${finalScale.toFixed(4)})`;
 
-  const hookText = getHookText();
-  const hookAr   = isArabic(hookText);
-  const hookDir  = hookAr ? "rtl" : "ltr";
-  const hookFont = getFontFamily(hookText);
-
+  const hookText      = getHookText();
+  const hookAr        = isArabic(hookText);
+  const hookDir       = hookAr ? "rtl" : "ltr";
+  const hookFont      = getFontFamily(hookText);
   const titleArabic   = isArabic(display_title);
   const titleFontSize = titleArabic ? 52 : 46;
   const emojiSize     = titleArabic ? 56 : 50;
@@ -1037,11 +958,10 @@ function buildHTMLLong({
   currentSentence = "",
   highlightedWord = "",
 }) {
-  const ar       = word ? isArabic(word) : false;
-  const dir      = word ? getDir(word) : "ltr";
-  const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
-  const langAttr = word ? getLang(word) : "en";
-
+  const ar        = word ? isArabic(word) : false;
+  const dir       = word ? getDir(word) : "ltr";
+  const font      = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
+  const langAttr  = word ? getLang(word) : "en";
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
   const sentDir   = currentSentence ? getDir(currentSentence) : "ltr";
@@ -1049,9 +969,8 @@ function buildHTMLLong({
   const tagStyle  = getWordStyle(tag);
 
   let titleOpacity = 1.0;
-  if (globalFrame < INTRO_FRAMES) {
-    titleOpacity = globalFrame / INTRO_FRAMES;
-  } else if (globalFrame >= totalFrames - OUTRO_FRAMES) {
+  if (globalFrame < INTRO_FRAMES) titleOpacity = globalFrame / INTRO_FRAMES;
+  else if (globalFrame >= totalFrames - OUTRO_FRAMES) {
     titleOpacity = (totalFrames - globalFrame) / OUTRO_FRAMES;
   }
 
@@ -1126,8 +1045,7 @@ function buildHTMLLong({
     opacity:${flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
   .tc { position:absolute; top:28px;
     ${titleDir === "rtl" ? "right:40px" : "left:40px"};
-    direction:${titleDir};
-    text-align:${titleDir === "rtl" ? "right" : "left"};
+    direction:${titleDir}; text-align:${titleDir === "rtl" ? "right" : "left"};
     z-index:30; opacity:${titleOpacity.toFixed(4)}; }
   .tt { font-family:${titleFont}; font-size:${titleFontSize}px; font-weight:900; color:#FFFFFF;
     display:inline-flex; align-items:center; gap:10px; line-height:1.2; direction:${titleDir};
@@ -1301,10 +1219,10 @@ async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 🎬 VIDEO FILTERS — كل التأثيرات مجتمعة
+// 🎬 VIDEO FILTERS — كل التأثيرات (مضمونة 100% على FFmpeg القياسي)
 // ═══════════════════════════════════════════════════════════════════════════
 
-// 1️⃣ إضاءة درامية 🔴 يسار + 🔵 يمين
+// ✅ 1. إضاءة درامية 🔴 يسار + 🔵 يمين
 function buildDramaticLightingFilter() {
   return (
     `geq=` +
@@ -1314,12 +1232,11 @@ function buildDramaticLightingFilter() {
   );
 }
 
-// 2️⃣ Zoom Out تدريجي (يبدأ قريب ثم يبتعد)
+// ✅ 2. Zoom Out (يبدأ قريب ثم يبتعد)
 function buildZoomOutFilter(duration, idx) {
-  const frames     = Math.ceil(duration * FPS);
-  const startZoom  = (1.25 + (idx % 3) * 0.05).toFixed(3);
-  const endZoom    = "1.02";
-
+  const frames    = Math.ceil(duration * FPS);
+  const startZoom = (1.25 + (idx % 3) * 0.05).toFixed(3);
+  const endZoom   = "1.02";
   return (
     `scale=` +
     `w='trunc((iw*(${startZoom}-(${startZoom}-${endZoom})*min(on,${frames})/${frames}))/2)*2':` +
@@ -1327,13 +1244,12 @@ function buildZoomOutFilter(duration, idx) {
   );
 }
 
-// 3️⃣ اهتزاز الكاميرا الطبيعي
+// ✅ 3. اهتزاز الكاميرا (Camera Shake)
 function buildCameraShakeFilter(idx) {
   const freq1 = (0.8 + (idx % 3) * 0.3).toFixed(2);
   const freq2 = (0.5 + (idx % 2) * 0.4).toFixed(2);
   const ampX  = 3 + (idx % 2);
   const ampY  = 2 + (idx % 2);
-
   return (
     `crop=${WIDTH}:${HEIGHT}:` +
     `'(iw-${WIDTH})/2+${ampX}*sin(2*PI*${freq1}*t)':` +
@@ -1341,7 +1257,29 @@ function buildCameraShakeFilter(idx) {
   );
 }
 
-// 4️⃣ Film Look (Teal & Orange — أشهر look سينمائي)
+// ✅ 4. Breathing Effect (تنفس خفيف)
+function buildBreathingFilter(idx) {
+  const breathHz  = (0.3 + (idx % 2) * 0.1).toFixed(2);
+  const breathAmp = "0.006";
+  return (
+    `scale=` +
+    `w='iw*(1+${breathAmp}*sin(2*PI*${breathHz}*t))':` +
+    `h='ih*(1+${breathAmp}*sin(2*PI*${breathHz}*t))',` +
+    `crop=${WIDTH}:${HEIGHT}`
+  );
+}
+
+// ✅ 5. Micro Rotation (دوران طفيف)
+function buildMicroRotationFilter(idx) {
+  const angle = (idx % 2 === 0 ? "0.3" : "-0.3");
+  return (
+    `rotate=${angle}*PI/180:` +
+    `fillcolor=black@0:` +
+    `oh=${HEIGHT}:ow=${WIDTH}`
+  );
+}
+
+// ✅ 6. Film Look (Teal & Orange)
 function buildFilmLookFilter() {
   return (
     `curves=` +
@@ -1351,77 +1289,153 @@ function buildFilmLookFilter() {
   );
 }
 
-// 5️⃣ Vignette (تعتيم الحواف)
+// ✅ 7. Split Toning (Shadows أزرق + Highlights برتقالي)
+function buildSplitToningFilter() {
+  return (
+    `curves=` +
+    `r='0/0.02 0.5/0.52 1/0.98':` +
+    `g='0/0 0.5/0.50 1/1.0':` +
+    `b='0/0.05 0.5/0.48 1/0.95'`
+  );
+}
+
+// ✅ 8. Dynamic Color Temperature
+// يبدأ دافئ ثم يبرد تدريجياً
+function buildDynamicColorTempFilter(duration) {
+  const frames = Math.ceil(duration * FPS);
+  return (
+    `geq=` +
+    `r='clip(r(X,Y)*(1+0.08*(1-min(on,${frames})/${frames})),0,255)':` +
+    `g='g(X,Y)':` +
+    `b='clip(b(X,Y)*(1+0.08*min(on,${frames})/${frames}),0,255)'`
+  );
+}
+
+// ✅ 9. Vignette (تعتيم الحواف)
 function buildVignetteFilter() {
   return `vignette=PI/5:eval=frame`;
 }
 
-// 6️⃣ Lens Blur خفيف على الحواف
-function buildLensBlurFilter() {
-  return `unsharp=5:5:-0.5:5:5:-0.5`;
+// ✅ 10. Depth of Field (ضبابية من المركز للحواف)
+function buildDepthOfFieldFilter() {
+  return (
+    `split[a][b];` +
+    `[a]gblur=sigma=3[blurred];` +
+    `[b]null[sharp];` +
+    `[blurred][sharp]blend=all_expr=` +
+    `'if(lte(abs(X-W/2)+abs(Y-H/2),(W+H)/6),B,A)'`
+  );
 }
 
-// 7️⃣ Grain + Hue + Sharpening
+// ✅ 11. Light Leak (تسرب الضوء)
+function buildLightLeakFilter(idx) {
+  const side  = idx % 2 === 0 ? "X/W" : "1-X/W";
+  const freq  = (0.15 + (idx % 3) * 0.05).toFixed(2);
+  const intens = (20 + (idx % 4) * 5);
+  return (
+    `geq=` +
+    `r='clip(r(X,Y)+${intens}*(${side})*max(0,sin(2*PI*${freq}*t+${idx})),0,255)':` +
+    `g='clip(g(X,Y)+${Math.floor(intens*0.6)}*(${side})*max(0,sin(2*PI*${freq}*t+${idx})),0,255)':` +
+    `b='clip(b(X,Y)+${Math.floor(intens*0.3)}*(${side})*max(0,sin(2*PI*${freq}*t+${idx})),0,255)'`
+  );
+}
+
+// ✅ 12. Film Grain (grain مختلف لكل frame)
+function buildFilmGrainFilter(idx) {
+  const grainAmt = 4 + (idx % 3);
+  return `noise=alls=${grainAmt}:allf=t+u`;
+}
+
+// ✅ 13. Flicker (وميض خفيف)
+function buildFlickerFilter(idx) {
+  const freq = (8 + (idx % 4)).toFixed(1);
+  return `lutyuv=y='val*(1+0.015*sin(2*PI*${freq}*t))'`;
+}
+
+// ✅ 14. Chromatic Aberration (انزياح الألوان)
+// نستخدم geq بدل rgbashift لأنه مدعوم في كل الإصدارات
+function buildChromaticAberrationFilter(idx) {
+  const shift = 1 + (idx % 2);
+  return (
+    `geq=` +
+    `r='r(clip(X+${shift},0,W-1),Y)':` +
+    `g='g(X,Y)':` +
+    `b='b(clip(X-${shift},0,W-1),Y)'`
+  );
+}
+
+// ✅ 15. Sharpening + Hue + Saturation
 function buildOriginalityFilters(idx) {
   const hue      = (idx % 2 === 0 ? 3 : -3);
   const sat      = (1.03 + (idx % 3) * 0.02).toFixed(2);
-  const noiseAmt = 3 + (idx % 3);
   const sharpAmt = (0.35 + (idx % 2) * 0.1).toFixed(2);
-
   return (
     `hue=h=${hue}:s=${sat},` +
-    `noise=alls=${noiseAmt}:allf=t+u,` +
     `unsharp=3:3:${sharpAmt}:3:3:0.0`
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PROCESS BACKGROUND — Pipeline الكامل
-// ═══════════════════════════════════════════════════════════════════════════
-
+// ✅ 16. Color Grading
 function buildColorGrading(isHookClip) {
   return isHookClip
     ? `eq=contrast=1.2:brightness=-0.04:saturation=0.85`
     : `eq=contrast=1.12:brightness=-0.02:saturation=0.88`;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// PROCESS BACKGROUND — Pipeline الكامل النهائي
+// ═══════════════════════════════════════════════════════════════════════════
+
 function processBackground(videoPath, duration, outPath, idx, isHookClip = false) {
   const d  = Math.max(duration, 0.5);
   const fi = Math.min(0.3, d * 0.08);
   const fo = Math.min(0.3, d * 0.08);
 
-  // ✅ كل الفلاتر مجتمعة
+  // ✅ Pipeline الكامل — كل التأثيرات المضمونة
   const vf =
     // 1. تبطيء 0.75x + mirror أفقي
     `setpts=1.333*PTS,hflip,` +
     // 2. Zoom Out (يبدأ قريب ثم يبتعد)
     `${buildZoomOutFilter(d, idx)},` +
-    // 3. اهتزاز الكاميرا
+    // 3. Breathing Effect (تنفس خفيف)
+    `${buildBreathingFilter(idx)},` +
+    // 4. اهتزاز الكاميرا
     `${buildCameraShakeFilter(idx)},` +
-    // 4. Color Grading
+    // 5. Micro Rotation
+    `${buildMicroRotationFilter(idx)},` +
+    // 6. Color Grading
     `${buildColorGrading(isHookClip)},` +
-    // 5. Film Look (Teal & Orange)
+    // 7. Film Look (Teal & Orange)
     `${buildFilmLookFilter()},` +
-    // 6. 🔴🔵 إضاءة درامية
+    // 8. Split Toning
+    `${buildSplitToningFilter()},` +
+    // 9. Dynamic Color Temperature
+    `${buildDynamicColorTempFilter(d)},` +
+    // 10. 🔴🔵 إضاءة درامية
     `${buildDramaticLightingFilter()},` +
-    // 7. Vignette
+    // 11. Light Leak
+    `${buildLightLeakFilter(idx)},` +
+    // 12. Vignette
     `${buildVignetteFilter()},` +
-    // 8. Lens Blur خفيف
-    `${buildLensBlurFilter()},` +
-    // 9. Grain + Hue + Sharpening
+    // 13. Chromatic Aberration
+    `${buildChromaticAberrationFilter(idx)},` +
+    // 14. Flicker
+    `${buildFlickerFilter(idx)},` +
+    // 15. Film Grain
+    `${buildFilmGrainFilter(idx)},` +
+    // 16. Sharpening + Hue
     `${buildOriginalityFilters(idx)},` +
-    // 10. Fade In/Out
+    // 17. Fade In/Out
     `fade=t=in:st=0:d=${fi.toFixed(3)},` +
     `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
 
   const srcDur  = probeDuration(videoPath);
-  // ✅ نضاعف مدة الـ loop لأن الفيديو مبطأ 0.75x
   const needDur = d * 1.4;
-  const loopArg =
-    srcDur > 0 && srcDur < needDur
-      ? ["-stream_loop", "-1"]
-      : [];
+  const loopArg = srcDur > 0 && srcDur < needDur
+    ? ["-stream_loop", "-1"]
+    : [];
 
+  // ✅ المحاولة الأولى — Pipeline الكامل
   let r = runFFmpeg([
     "-y", ...loopArg, "-i", videoPath,
     "-t", (d * 1.4).toFixed(3),
@@ -1433,15 +1447,18 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
     outPath,
   ]);
 
-  // Fallback 1: بدون zoom + shake
+  // ✅ Fallback 1 — بدون Depth of Field + Micro Rotation
   if (r.status !== 0) {
-    console.log("  ⚠️  Full filter failed — fallback 1...");
-    const vfSimple =
+    console.log("  ⚠️  Full pipeline failed — fallback 1...");
+    const vfFallback1 =
       `setpts=1.333*PTS,hflip,` +
-      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
-      `crop=${WIDTH}:${HEIGHT},setsar=1,` +
+      `${buildZoomOutFilter(d, idx)},` +
+      `${buildCameraShakeFilter(idx)},` +
       `${buildColorGrading(isHookClip)},` +
+      `${buildFilmLookFilter()},` +
       `${buildDramaticLightingFilter()},` +
+      `${buildVignetteFilter()},` +
+      `${buildFilmGrainFilter(idx)},` +
       `${buildOriginalityFilters(idx)},` +
       `fade=t=in:st=0:d=${fi.toFixed(3)},` +
       `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
@@ -1449,7 +1466,7 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
     r = runFFmpeg([
       "-y", ...loopArg, "-i", videoPath,
       "-t", (d * 1.4).toFixed(3),
-      "-vf", vfSimple,
+      "-vf", vfFallback1,
       "-r", String(FPS),
       "-c:v", "libx264", "-preset", "fast",
       "-crf", "21", "-pix_fmt", "yuv420p", "-an",
@@ -1457,8 +1474,9 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
     ]);
   }
 
-  // Fallback 2: scale بسيط فقط
+  // ✅ Fallback 2 — scale بسيط فقط
   if (r.status !== 0) {
+    console.log("  ⚠️  Fallback 1 failed — fallback 2 (simple)...");
     runFFmpeg([
       "-y", "-stream_loop", "-1", "-i", videoPath,
       "-t", d.toFixed(3),
@@ -1476,18 +1494,24 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// AUDIO — Bass Boost + Spatial
+// 🎵 AUDIO FILTERS — تحسين كامل للصوت
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildAudioFilters() {
   return (
-    // Bass Boost
+    // 1. Bass Boost
     `equalizer=f=80:width_type=o:width=2:g=4,` +
-    // Presence boost (صوت أوضح)
+    // 2. Presence Boost (صوت أوضح)
     `equalizer=f=3000:width_type=o:width=2:g=2,` +
-    // Room Reverb خفيف
-    `aecho=0.8:0.88:60:0.4,` +
-    // Normalize
+    // 3. Air Frequency (وضوح عالي)
+    `equalizer=f=10000:width_type=o:width=2:g=1.5,` +
+    // 4. Subtle Compression
+    `acompressor=threshold=0.5:ratio=4:attack=5:release=50:makeup=2,` +
+    // 5. Room Reverb خفيف
+    `aecho=0.8:0.88:60:0.3,` +
+    // 6. Vinyl Warmth (دفء كلاسيكي)
+    `equalizer=f=200:width_type=o:width=2:g=2,` +
+    // 7. Loudnorm
     `loudnorm=I=-16:TP=-1.5:LRA=11`
   );
 }
@@ -1597,7 +1621,7 @@ function applyMetadata(inputPath, outputPath) {
   ]);
 
   if (r.status !== 0) {
-    console.log("  ⚠️  Metadata apply failed — copying as-is");
+    console.log("  ⚠️  Metadata failed — copying as-is");
     copyFileSync(inputPath, outputPath);
   } else {
     console.log(
@@ -1631,9 +1655,10 @@ function mergeAudio(videoPath, audioPath, outPath) {
     if (r.status === 0) vid = looped;
   }
 
-  // دمج مع تحسين الصوت
   const tempOut = join(TMP, "merged_temp.mp4");
-  runFFmpeg([
+
+  // ✅ دمج مع تحسين الصوت
+  const rMerge = runFFmpeg([
     "-y", "-i", vid, "-i", audioPath,
     "-map", "0:v:0", "-map", "1:a:0",
     "-c:v", "copy",
@@ -1643,7 +1668,19 @@ function mergeAudio(videoPath, audioPath, outPath) {
     tempOut,
   ]);
 
-  // تطبيق iPhone metadata
+  // Fallback audio بدون filters
+  if (rMerge.status !== 0) {
+    console.log("  ⚠️  Audio filters failed — using basic merge...");
+    runFFmpeg([
+      "-y", "-i", vid, "-i", audioPath,
+      "-map", "0:v:0", "-map", "1:a:0",
+      "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+      "-t", aDur.toFixed(3),
+      tempOut,
+    ]);
+  }
+
+  // ✅ تطبيق iPhone metadata
   applyMetadata(tempOut, outPath);
   console.log(`✅ Done → ${outPath}`);
 }
@@ -1672,10 +1709,8 @@ async function handleBgOnlyMode() {
   for (const clip of clipPlan) {
     const { index, duration, videoPath, isHook } = clip;
     process.stdout.write(
-      `  [${index + 1}/${clipPlan.length}] ` +
-      `${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
+      `  [${index + 1}/${clipPlan.length}] ${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
     );
-
     const bgMp4 = join(TMP, `bg_${String(index).padStart(3, "0")}.mp4`);
     processBackground(videoPath, duration, bgMp4, index, isHook);
     finalClips.push(bgMp4);
