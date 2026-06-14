@@ -8,7 +8,7 @@ Pipeline (تزامن 100%):
   STEP C: Fetch stock videos
   STEP D: Render BG video + mixed audio مباشرة
   STEP E: Extract audio from BG video
-  STEP F: WhisperX → timestamps حقيقية (بدون remap)
+  STEP F: WhisperX on extracted audio (100% sync)
   STEP G: Build clip plan from real timestamps
   STEP H: Render words overlay (audio = mixed)
   STEP I: Facebook vertical (long only)
@@ -479,12 +479,16 @@ def produce_clean_voice(script_data, output_base,
 
 def produce_mixed_audio(voice_path, script_data,
                         output_base, aligned=None):
-    """STEP B — Mixed Audio مُقدَّم لضمان التزامن."""
+    """
+    STEP B — Mixed Audio مُقدَّم لضمان التزامن.
+    ✅ إصلاح: mixed لا ينقص عن clean voice duration.
+    """
     lang      = script_data.get("lang", "ar")
-    real_dur  = get_audio_duration(str(voice_path))
+    # ✅ مدة الصوت النظيف = المرجع الحقيقي
+    voice_dur = get_audio_duration(str(voice_path))
     mixed_out = f"{output_base}_audio_mixed.aac"
-    n_clips   = max(1, int(real_dur / CLIP_DURATION))
-    clip_dur_list = [real_dur / n_clips] * n_clips
+    n_clips   = max(1, int(voice_dur / CLIP_DURATION))
+    clip_dur_list = [voice_dur / n_clips] * n_clips
 
     try:
         final_audio = mix_voice_music_sfx(
@@ -500,9 +504,40 @@ def produce_mixed_audio(voice_path, script_data,
             sentences      = script_data.get("sentences", []),
             tagged         = script_data["tagged_sentences"],
         )
-        d = get_audio_duration(str(final_audio))
-        log.info(f"  ✅ Mixed audio ready: {d:.3f}s")
+
+        mixed_dur = get_audio_duration(str(final_audio))
+
+        # ✅ الإصلاح الرئيسي:
+        # إذا mixed أقصر من clean voice بأكثر من 0.5s
+        # نعيد pad الصوت حتى نفس مدة clean voice
+        if voice_dur - mixed_dur > 0.5:
+            log.warning(
+                f"  ⚠️  Mixed audio shorter than voice: "
+                f"{mixed_dur:.3f}s vs {voice_dur:.3f}s "
+                f"— padding to match..."
+            )
+            padded_out = f"{output_base}_audio_mixed_padded.aac"
+            ok, err = _run_ffmpeg([
+                "ffmpeg", "-y",
+                "-i", str(final_audio),
+                "-af",
+                f"apad=pad_dur={voice_dur - mixed_dur + 0.1}",
+                "-t", str(voice_dur + 0.1),
+                "-c:a", "aac", "-b:a", "192k",
+                padded_out,
+            ])
+            if ok and Path(padded_out).exists():
+                padded_dur = get_audio_duration(padded_out)
+                if padded_dur >= MIN_VALID_AUDIO_S:
+                    log.info(
+                        f"  ✅ Padded: "
+                        f"{mixed_dur:.3f}s → {padded_dur:.3f}s"
+                    )
+                    return Path(padded_out)
+
+        log.info(f"  ✅ Mixed audio ready: {mixed_dur:.3f}s")
         return Path(final_audio)
+
     except Exception as e:
         log.warning(f"  ⚠️  Mix error: {e} — using clean voice")
         return voice_path
@@ -536,19 +571,17 @@ def _extract_audio_from_video(video_path, output_path):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# STEP F: WHISPERX — timestamps حقيقية بدون remap
+# STEP F: WHISPERX
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run_whisperx(audio_source, out_base, lang):
     """
-    STEP F — يستخرج timestamps الكلمات الحقيقية من الصوت.
-    ✅ بدون أي remap أو تقدير.
-    ✅ كل كلمة تظهر في وقتها الحقيقي من الفيديو.
+    STEP F — timestamps حقيقية بدون remap.
+    ✅ كل كلمة تظهر في وقتها الحقيقي.
     """
     source_name = Path(str(audio_source)).name
     log.info(f"\n  🎤 WhisperX analyzing: {source_name}")
 
-    # تحويل إلى wav 16kHz
     whisper_input = f"{out_base}_whisper_input.wav"
     ok, _ = _run_ffmpeg([
         "ffmpeg", "-y", "-i", str(audio_source),
@@ -565,7 +598,6 @@ def run_whisperx(audio_source, out_base, lang):
         whisper_input, lang=lang
     )
 
-    # تنظيف ملف مؤقت
     if whisper_input != str(audio_source):
         _safe_unlink(whisper_input)
 
@@ -573,7 +605,6 @@ def run_whisperx(audio_source, out_base, lang):
         log.warning("  ⚠️  WhisperX failed")
         return [], []
 
-    # ✅ timestamps مباشرة من WhisperX — بدون أي remap
     aligned   = transcript["aligned"]
     sentences = transcript["sentences"]
 
@@ -585,7 +616,6 @@ def run_whisperx(audio_source, out_base, lang):
         f"{total_words} words"
     )
 
-    # طباعة أول 5 كلمات للتحقق
     all_words = [
         w for s in aligned for w in s.get("words", [])
     ]
@@ -709,9 +739,7 @@ def render_words_overlay(bg_video, audio_path, aligned,
                          content_mode="short"):
     """
     STEP H — رندر الكلمات فوق BG video.
-    ✅ timestamps حقيقية من WhisperX.
-    ✅ audio_path = mixed_audio = نفس الصوت في BG video.
-    ✅ لا merge بعدها.
+    ✅ timestamps حقيقية + نفس الصوت → تزامن 100%.
     """
     audio_dur  = get_audio_duration(str(audio_path))
     words_mode = (
@@ -786,7 +814,6 @@ def produce_fb_vertical_version(script_data, mixed_audio,
             content_mode          = "short",
         )
 
-        # BG 9:16 مع mixed_audio
         bg_fb = produce_bg_video(
             video_paths    = fb_video_paths,
             audio_path     = mixed_audio,
@@ -798,11 +825,9 @@ def produce_fb_vertical_version(script_data, mixed_audio,
             content_mode   = "short",
         )
 
-        # استخراج الصوت من BG_fb
         extracted_fb = f"{out_base}_fb_extracted.wav"
         _extract_audio_from_video(str(bg_fb), extracted_fb)
 
-        # WhisperX على الصوت المستخرج
         fb_aligned, fb_sentences = run_whisperx(
             audio_source = extracted_fb,
             out_base     = f"{out_base}_fb",
@@ -817,7 +842,6 @@ def produce_fb_vertical_version(script_data, mixed_audio,
             script_data.get("tagged_sentences", []),
         )
 
-        # Words overlay 9:16
         fb_final = render_words_overlay(
             bg_video     = bg_fb,
             audio_path   = mixed_audio,
@@ -1160,6 +1184,7 @@ def process_video(record, args, out_dir, should_publish_fb,
 
         # ═══════════════════════════════════════════════════
         # STEP B: Mixed Audio مُقدَّم
+        # ✅ الإصلاح: real_dur لا ينقص عن clean voice
         # ═══════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(
@@ -1173,8 +1198,12 @@ def process_video(record, args, out_dir, should_publish_fb,
             aligned     = None,
         )
         mixed_dur = get_audio_duration(str(mixed_audio))
+
+        # ✅ الإصلاح الرئيسي:
+        # real_dur = أكبر قيمة بين clean_voice و mixed
+        # لأن mixed لا يجب أن ينقص المدة الإجمالية
         if mixed_dur >= MIN_VALID_AUDIO_S:
-            real_dur = mixed_dur
+            real_dur = max(real_dur, mixed_dur)
             log.info(
                 f"  📏 Final audio duration: {real_dur:.3f}s"
             )
@@ -1234,7 +1263,7 @@ def process_video(record, args, out_dir, should_publish_fb,
         _extract_audio_from_video(str(bg_video), extracted_audio)
 
         # ═══════════════════════════════════════════════════
-        # STEP F: WhisperX — timestamps حقيقية بدون remap
+        # STEP F: WhisperX — timestamps حقيقية
         # ═══════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(
@@ -1248,17 +1277,14 @@ def process_video(record, args, out_dir, should_publish_fb,
             out_base     = out_base,
             lang         = lang,
         )
-        # تنظيف ملف مؤقت
         _safe_unlink(extracted_audio)
 
         if not whisper_sentences:
             whisper_sentences = script_data["sentences"]
-
-        # inject tags
         aligned = _inject_tags_into_aligned(aligned, tagged)
 
         # ═══════════════════════════════════════════════════
-        # STEP G: Clip plan من timestamps الحقيقية
+        # STEP G: Clip plan
         # ═══════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(
@@ -1274,7 +1300,6 @@ def process_video(record, args, out_dir, should_publish_fb,
 
         # ═══════════════════════════════════════════════════
         # STEP H: Words overlay
-        # ✅ timestamps حقيقية + نفس الصوت → تزامن 100%
         # ═══════════════════════════════════════════════════
         log.info(f"\n  {'─' * 55}")
         log.info(f"  ✅ STEP H: Words overlay [{ml}]")
@@ -1539,9 +1564,7 @@ def main():
     log.info(f"  Output       : {args.output_dir}")
     log.info(f"  Facebook     : {'✅' if will_publish_fb else '❌'}")
     log.info(f"  YouTube      : {'✅' if will_publish_yt else '❌'}")
-    log.info(
-        f"  Sync         : 100% real timestamps ✅"
-    )
+    log.info(f"  Sync         : 100% real timestamps ✅")
     log.info("")
     print_db_summary()
 
