@@ -179,13 +179,11 @@ function buildiPhoneMetadata() {
 
   return [
     "-map_metadata", "-1",
-
     "-metadata", "make=Apple",
     "-metadata", "model=iPhone 17 Pro Max",
     "-metadata", "software=Adobe Premiere Pro 25.0",
     "-metadata", "encoder=Adobe Premiere Pro 25.0",
     "-metadata", "handler_name=Core Media Data Handler",
-
     "-metadata", "com.apple.quicktime.make=Apple",
     "-metadata", "com.apple.quicktime.model=iPhone 17 Pro Max",
     "-metadata", "com.apple.quicktime.software=iOS 18.2",
@@ -196,10 +194,8 @@ function buildiPhoneMetadata() {
     "-metadata", `com.apple.quicktime.camera.identifier=${cameraId}`,
     "-metadata", "com.apple.quicktime.fullframerate=1",
     "-metadata", "com.apple.quicktime.live-photo.auto=0",
-
     "-metadata", `creation_time=${dateISO}`,
     "-metadata", `date=${dateStr}`,
-
     "-metadata", "focal_length=9",
     "-metadata", "focal_length_in_35mm_film=24",
     "-metadata", "aperture=f/2.8",
@@ -217,14 +213,12 @@ function buildiPhoneMetadata() {
     "-metadata", "sensing_method=One-chip color area sensor",
     "-metadata", "color_space=sRGB",
     "-metadata", "digital_zoom_ratio=1.0",
-
     "-metadata", "lens=Apple iPhone 17 Pro Max back camera 9mm f/2.8",
     "-metadata", "lens_make=Apple",
     "-metadata", "lens_model=iPhone 17 Pro Max back camera 9mm f/2.8",
     "-metadata", "lens_serial_number=" + serial,
     "-metadata", "lens_specification=9/1 9/1 28/10 28/10",
     "-metadata", "lens_distortion=-0.12",
-
     "-metadata", `location=${location.iso6709}`,
     "-metadata", `location-eng=${location.city}, ${location.country}`,
     "-metadata", `GPS_latitude=${location.lat}`,
@@ -238,7 +232,6 @@ function buildiPhoneMetadata() {
     "-metadata", "GPS_map_datum=WGS-84",
     "-metadata", `GPS_date_stamp=${dateStr.substring(0, 8)}`,
     "-metadata", "GPS_processing_method=GPS",
-
     "-metadata", "media_type=Video",
     "-metadata", "hdr_format=Dolby Vision",
     "-metadata", "color_primaries=BT.2020",
@@ -247,15 +240,12 @@ function buildiPhoneMetadata() {
     "-metadata", "video_range=Full",
     "-metadata", "color_temperature=6500K",
     "-metadata", "aspect_ratio=9:16",
-
     "-metadata", "scene=Portrait",
     "-metadata", "scene_type=Indoor",
     "-metadata", "content_type=video",
-
     "-metadata", "stabilization=OIS",
     "-metadata", "optical_stabilization=Enabled",
     "-metadata", "video_stabilization=CinematicStabilization",
-
     "-metadata", `gyroscope_x=${gyroX}`,
     "-metadata", `gyroscope_y=${gyroY}`,
     "-metadata", `gyroscope_z=${gyroZ}`,
@@ -263,7 +253,6 @@ function buildiPhoneMetadata() {
     "-metadata", `accelerometer_y=${accelY}`,
     "-metadata", `accelerometer_z=${accelZ}`,
     "-metadata", "motion_reference_frame=Device",
-
     "-metadata", "comment=",
     "-metadata", "artist=",
     "-metadata", "copyright=",
@@ -831,27 +820,21 @@ function buildHTMLShort({
   const dir      = word ? getDir(word) : "ltr";
   const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
-
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
-
   const tagStyle  = isPower ? POWER_STYLE : getWordStyle(tag);
   const titleAnim = computeTitleAnimation(globalFrame);
   const wordAnim  = word
     ? computeWordAnimation(progress, tagStyle.scaleMult)
     : { scale: 1.0, opacity: 0, translateY: 0 };
-
   const trans        = computeTransitionEffect(transitionState, globalFrame);
   const baseFontSize = computeFontSize(word, ar, tagStyle.scaleMult, false);
-
   const finalScale   = wordAnim.scale * trans.transScale;
   const finalOpacity = word ? wordAnim.opacity : 0;
-
   const wordTransform =
     `translate(-50%, calc(-50% + ${wordAnim.translateY.toFixed(1)}px)) ` +
     `translate(${trans.shakeX.toFixed(2)}px, ${trans.shakeY.toFixed(2)}px) ` +
     `scale(${finalScale.toFixed(4)})`;
-
   const hookText      = getHookText();
   const hookAr        = isArabic(hookText);
   const hookDir       = hookAr ? "rtl" : "ltr";
@@ -1219,10 +1202,10 @@ async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 🎬 VIDEO FILTERS — كل التأثيرات (مضمونة 100% على FFmpeg القياسي)
+// 🎬 VIDEO FILTERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ✅ 1. إضاءة درامية 🔴 يسار + 🔵 يمين
+// ✅ 1. 🔴🔵 إضاءة درامية (geq منفصل في مرحلة 2)
 function buildDramaticLightingFilter() {
   return (
     `geq=` +
@@ -1232,7 +1215,7 @@ function buildDramaticLightingFilter() {
   );
 }
 
-// ✅ 2. Zoom Out (يبدأ قريب ثم يبتعد)
+// ✅ 2. Zoom Out
 function buildZoomOutFilter(duration, idx) {
   const frames    = Math.ceil(duration * FPS);
   const startZoom = (1.25 + (idx % 3) * 0.05).toFixed(3);
@@ -1244,7 +1227,7 @@ function buildZoomOutFilter(duration, idx) {
   );
 }
 
-// ✅ 3. اهتزاز الكاميرا (Camera Shake)
+// ✅ 3. اهتزاز الكاميرا
 function buildCameraShakeFilter(idx) {
   const freq1 = (0.8 + (idx % 3) * 0.3).toFixed(2);
   const freq2 = (0.5 + (idx % 2) * 0.4).toFixed(2);
@@ -1257,7 +1240,7 @@ function buildCameraShakeFilter(idx) {
   );
 }
 
-// ✅ 4. Breathing Effect (تنفس خفيف)
+// ✅ 4. Breathing Effect
 function buildBreathingFilter(idx) {
   const breathHz  = (0.3 + (idx % 2) * 0.1).toFixed(2);
   const breathAmp = "0.006";
@@ -1269,17 +1252,7 @@ function buildBreathingFilter(idx) {
   );
 }
 
-// ✅ 5. Micro Rotation (دوران طفيف)
-function buildMicroRotationFilter(idx) {
-  const angle = (idx % 2 === 0 ? "0.3" : "-0.3");
-  return (
-    `rotate=${angle}*PI/180:` +
-    `fillcolor=black@0:` +
-    `oh=${HEIGHT}:ow=${WIDTH}`
-  );
-}
-
-// ✅ 6. Film Look (Teal & Orange)
+// ✅ 5. Film Look (Teal & Orange)
 function buildFilmLookFilter() {
   return (
     `curves=` +
@@ -1289,7 +1262,7 @@ function buildFilmLookFilter() {
   );
 }
 
-// ✅ 7. Split Toning (Shadows أزرق + Highlights برتقالي)
+// ✅ 6. Split Toning
 function buildSplitToningFilter() {
   return (
     `curves=` +
@@ -1299,72 +1272,31 @@ function buildSplitToningFilter() {
   );
 }
 
-// ✅ 8. Dynamic Color Temperature
-// يبدأ دافئ ثم يبرد تدريجياً
-function buildDynamicColorTempFilter(duration) {
-  const frames = Math.ceil(duration * FPS);
-  return (
-    `geq=` +
-    `r='clip(r(X,Y)*(1+0.08*(1-min(on,${frames})/${frames})),0,255)':` +
-    `g='g(X,Y)':` +
-    `b='clip(b(X,Y)*(1+0.08*min(on,${frames})/${frames}),0,255)'`
-  );
-}
-
-// ✅ 9. Vignette (تعتيم الحواف)
+// ✅ 7. Vignette
 function buildVignetteFilter() {
   return `vignette=PI/5:eval=frame`;
 }
 
-// ✅ 10. Depth of Field (ضبابية من المركز للحواف)
-function buildDepthOfFieldFilter() {
-  return (
-    `split[a][b];` +
-    `[a]gblur=sigma=3[blurred];` +
-    `[b]null[sharp];` +
-    `[blurred][sharp]blend=all_expr=` +
-    `'if(lte(abs(X-W/2)+abs(Y-H/2),(W+H)/6),B,A)'`
-  );
-}
-
-// ✅ 11. Light Leak (تسرب الضوء)
-function buildLightLeakFilter(idx) {
-  const side  = idx % 2 === 0 ? "X/W" : "1-X/W";
-  const freq  = (0.15 + (idx % 3) * 0.05).toFixed(2);
-  const intens = (20 + (idx % 4) * 5);
-  return (
-    `geq=` +
-    `r='clip(r(X,Y)+${intens}*(${side})*max(0,sin(2*PI*${freq}*t+${idx})),0,255)':` +
-    `g='clip(g(X,Y)+${Math.floor(intens*0.6)}*(${side})*max(0,sin(2*PI*${freq}*t+${idx})),0,255)':` +
-    `b='clip(b(X,Y)+${Math.floor(intens*0.3)}*(${side})*max(0,sin(2*PI*${freq}*t+${idx})),0,255)'`
-  );
-}
-
-// ✅ 12. Film Grain (grain مختلف لكل frame)
+// ✅ 8. Film Grain
 function buildFilmGrainFilter(idx) {
   const grainAmt = 4 + (idx % 3);
   return `noise=alls=${grainAmt}:allf=t+u`;
 }
 
-// ✅ 13. Flicker (وميض خفيف)
+// ✅ 9. Flicker
 function buildFlickerFilter(idx) {
   const freq = (8 + (idx % 4)).toFixed(1);
   return `lutyuv=y='val*(1+0.015*sin(2*PI*${freq}*t))'`;
 }
 
-// ✅ 14. Chromatic Aberration (انزياح الألوان)
-// نستخدم geq بدل rgbashift لأنه مدعوم في كل الإصدارات
-function buildChromaticAberrationFilter(idx) {
-  const shift = 1 + (idx % 2);
-  return (
-    `geq=` +
-    `r='r(clip(X+${shift},0,W-1),Y)':` +
-    `g='g(X,Y)':` +
-    `b='b(clip(X-${shift},0,W-1),Y)'`
-  );
+// ✅ 10. Color Grading
+function buildColorGrading(isHookClip) {
+  return isHookClip
+    ? `eq=contrast=1.2:brightness=-0.04:saturation=0.85`
+    : `eq=contrast=1.12:brightness=-0.02:saturation=0.88`;
 }
 
-// ✅ 15. Sharpening + Hue + Saturation
+// ✅ 11. Sharpening + Hue
 function buildOriginalityFilters(idx) {
   const hue      = (idx % 2 === 0 ? 3 : -3);
   const sat      = (1.03 + (idx % 3) * 0.02).toFixed(2);
@@ -1375,15 +1307,9 @@ function buildOriginalityFilters(idx) {
   );
 }
 
-// ✅ 16. Color Grading
-function buildColorGrading(isHookClip) {
-  return isHookClip
-    ? `eq=contrast=1.2:brightness=-0.04:saturation=0.85`
-    : `eq=contrast=1.12:brightness=-0.02:saturation=0.88`;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
-// PROCESS BACKGROUND — Pipeline الكامل النهائي
+// PROCESS BACKGROUND
+// ✅ مرحلتان منفصلتان لضمان عمل geq الإضاءة دائماً
 // ═══════════════════════════════════════════════════════════════════════════
 
 function processBackground(videoPath, duration, outPath, idx, isHookClip = false) {
@@ -1391,127 +1317,123 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
   const fi = Math.min(0.3, d * 0.08);
   const fo = Math.min(0.3, d * 0.08);
 
-  // ✅ Pipeline الكامل — كل التأثيرات المضمونة
-  const vf =
-    // 1. تبطيء 0.75x + mirror أفقي
-    `setpts=1.333*PTS,hflip,` +
-    // 2. Zoom Out (يبدأ قريب ثم يبتعد)
-    `${buildZoomOutFilter(d, idx)},` +
-    // 3. Breathing Effect (تنفس خفيف)
-    `${buildBreathingFilter(idx)},` +
-    // 4. اهتزاز الكاميرا
-    `${buildCameraShakeFilter(idx)},` +
-    // 5. Micro Rotation
-    `${buildMicroRotationFilter(idx)},` +
-    // 6. Color Grading
-    `${buildColorGrading(isHookClip)},` +
-    // 7. Film Look (Teal & Orange)
-    `${buildFilmLookFilter()},` +
-    // 8. Split Toning
-    `${buildSplitToningFilter()},` +
-    // 9. Dynamic Color Temperature
-    `${buildDynamicColorTempFilter(d)},` +
-    // 10. 🔴🔵 إضاءة درامية
-    `${buildDramaticLightingFilter()},` +
-    // 11. Light Leak
-    `${buildLightLeakFilter(idx)},` +
-    // 12. Vignette
-    `${buildVignetteFilter()},` +
-    // 13. Chromatic Aberration
-    `${buildChromaticAberrationFilter(idx)},` +
-    // 14. Flicker
-    `${buildFlickerFilter(idx)},` +
-    // 15. Film Grain
-    `${buildFilmGrainFilter(idx)},` +
-    // 16. Sharpening + Hue
-    `${buildOriginalityFilters(idx)},` +
-    // 17. Fade In/Out
-    `fade=t=in:st=0:d=${fi.toFixed(3)},` +
-    `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
-
   const srcDur  = probeDuration(videoPath);
   const needDur = d * 1.4;
   const loopArg = srcDur > 0 && srcDur < needDur
     ? ["-stream_loop", "-1"]
     : [];
 
-  // ✅ المحاولة الأولى — Pipeline الكامل
-  let r = runFFmpeg([
+  // ═══════════════════════════════════════════════════════
+  // المرحلة 1: حركة + ألوان + grain
+  // ═══════════════════════════════════════════════════════
+  const tempStage1 = join(TMP, `stage1_${String(idx).padStart(3,"0")}.mp4`);
+
+  const vf1 =
+    `setpts=1.333*PTS,hflip,` +
+    `${buildZoomOutFilter(d, idx)},` +
+    `${buildBreathingFilter(idx)},` +
+    `${buildCameraShakeFilter(idx)},` +
+    `${buildColorGrading(isHookClip)},` +
+    `${buildFilmLookFilter()},` +
+    `${buildSplitToningFilter()},` +
+    `${buildVignetteFilter()},` +
+    `${buildFlickerFilter(idx)},` +
+    `${buildFilmGrainFilter(idx)},` +
+    `${buildOriginalityFilters(idx)},` +
+    `fade=t=in:st=0:d=${fi.toFixed(3)},` +
+    `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
+
+  let r1 = runFFmpeg([
     "-y", ...loopArg, "-i", videoPath,
     "-t", (d * 1.4).toFixed(3),
-    "-vf", vf,
+    "-vf", vf1,
     "-r", String(FPS),
+    "-c:v", "libx264", "-preset", "fast",
+    "-crf", isHookClip ? "16" : "18",
+    "-pix_fmt", "yuv420p", "-an",
+    tempStage1,
+  ]);
+
+  // Fallback للمرحلة 1
+  if (r1.status !== 0) {
+    console.log(`  ⚠️  Stage1 full failed [${idx}] — simple fallback...`);
+    const vfSimple =
+      `setpts=1.333*PTS,hflip,` +
+      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
+      `crop=${WIDTH}:${HEIGHT},setsar=1,` +
+      `${buildColorGrading(isHookClip)},` +
+      `${buildFilmGrainFilter(idx)},` +
+      `${buildOriginalityFilters(idx)},` +
+      `fade=t=in:st=0:d=${fi.toFixed(3)},` +
+      `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
+
+    r1 = runFFmpeg([
+      "-y", ...loopArg, "-i", videoPath,
+      "-t", (d * 1.4).toFixed(3),
+      "-vf", vfSimple,
+      "-r", String(FPS),
+      "-c:v", "libx264", "-preset", "fast",
+      "-crf", "21", "-pix_fmt", "yuv420p", "-an",
+      tempStage1,
+    ]);
+
+    // Fallback نهائي للمرحلة 1
+    if (r1.status !== 0) {
+      console.log(`  ⚠️  Stage1 simple failed [${idx}] — minimal...`);
+      runFFmpeg([
+        "-y", "-stream_loop", "-1", "-i", videoPath,
+        "-t", d.toFixed(3),
+        "-vf",
+        `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
+        `crop=${WIDTH}:${HEIGHT},setsar=1`,
+        "-r", String(FPS),
+        "-c:v", "libx264", "-preset", "fast",
+        "-crf", "23", "-pix_fmt", "yuv420p", "-an",
+        tempStage1,
+      ]);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // المرحلة 2: 🔴🔵 إضاءة درامية (geq منفصل)
+  // ✅ مضمونة دائماً لأنها فلتر واحد فقط
+  // ═══════════════════════════════════════════════════════
+  const r2 = runFFmpeg([
+    "-y", "-i", tempStage1,
+    "-vf", buildDramaticLightingFilter(),
     "-c:v", "libx264", "-preset", "fast",
     "-crf", isHookClip ? "16" : "18",
     "-pix_fmt", "yuv420p", "-an",
     outPath,
   ]);
 
-  // ✅ Fallback 1 — بدون Depth of Field + Micro Rotation
-  if (r.status !== 0) {
-    console.log("  ⚠️  Full pipeline failed — fallback 1...");
-    const vfFallback1 =
-      `setpts=1.333*PTS,hflip,` +
-      `${buildZoomOutFilter(d, idx)},` +
-      `${buildCameraShakeFilter(idx)},` +
-      `${buildColorGrading(isHookClip)},` +
-      `${buildFilmLookFilter()},` +
-      `${buildDramaticLightingFilter()},` +
-      `${buildVignetteFilter()},` +
-      `${buildFilmGrainFilter(idx)},` +
-      `${buildOriginalityFilters(idx)},` +
-      `fade=t=in:st=0:d=${fi.toFixed(3)},` +
-      `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
-
-    r = runFFmpeg([
-      "-y", ...loopArg, "-i", videoPath,
-      "-t", (d * 1.4).toFixed(3),
-      "-vf", vfFallback1,
-      "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast",
-      "-crf", "21", "-pix_fmt", "yuv420p", "-an",
-      outPath,
-    ]);
+  if (r2.status !== 0) {
+    console.log(`  ⚠️  Lighting failed [${idx}] — using stage1 as-is`);
+    copyFileSync(tempStage1, outPath);
+  } else {
+    console.log(`  ✅ 🔴🔵 Lighting applied [${idx}]`);
   }
 
-  // ✅ Fallback 2 — scale بسيط فقط
-  if (r.status !== 0) {
-    console.log("  ⚠️  Fallback 1 failed — fallback 2 (simple)...");
-    runFFmpeg([
-      "-y", "-stream_loop", "-1", "-i", videoPath,
-      "-t", d.toFixed(3),
-      "-vf",
-      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
-      `crop=${WIDTH}:${HEIGHT},setsar=1`,
-      "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast",
-      "-crf", "23", "-pix_fmt", "yuv420p", "-an",
-      outPath,
-    ]);
-  }
+  // تنظيف ملف مؤقت
+  try {
+    spawnSync("rm", ["-f", tempStage1], { stdio: "ignore" });
+  } catch {}
 
   return outPath;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 🎵 AUDIO FILTERS — تحسين كامل للصوت
+// 🎵 AUDIO FILTERS
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildAudioFilters() {
   return (
-    // 1. Bass Boost
     `equalizer=f=80:width_type=o:width=2:g=4,` +
-    // 2. Presence Boost (صوت أوضح)
     `equalizer=f=3000:width_type=o:width=2:g=2,` +
-    // 3. Air Frequency (وضوح عالي)
     `equalizer=f=10000:width_type=o:width=2:g=1.5,` +
-    // 4. Subtle Compression
     `acompressor=threshold=0.5:ratio=4:attack=5:release=50:makeup=2,` +
-    // 5. Room Reverb خفيف
     `aecho=0.8:0.88:60:0.3,` +
-    // 6. Vinyl Warmth (دفء كلاسيكي)
     `equalizer=f=200:width_type=o:width=2:g=2,` +
-    // 7. Loudnorm
     `loudnorm=I=-16:TP=-1.5:LRA=11`
   );
 }
@@ -1657,7 +1579,6 @@ function mergeAudio(videoPath, audioPath, outPath) {
 
   const tempOut = join(TMP, "merged_temp.mp4");
 
-  // ✅ دمج مع تحسين الصوت
   const rMerge = runFFmpeg([
     "-y", "-i", vid, "-i", audioPath,
     "-map", "0:v:0", "-map", "1:a:0",
@@ -1668,9 +1589,8 @@ function mergeAudio(videoPath, audioPath, outPath) {
     tempOut,
   ]);
 
-  // Fallback audio بدون filters
   if (rMerge.status !== 0) {
-    console.log("  ⚠️  Audio filters failed — using basic merge...");
+    console.log("  ⚠️  Audio filters failed — basic merge...");
     runFFmpeg([
       "-y", "-i", vid, "-i", audioPath,
       "-map", "0:v:0", "-map", "1:a:0",
@@ -1680,7 +1600,6 @@ function mergeAudio(videoPath, audioPath, outPath) {
     ]);
   }
 
-  // ✅ تطبيق iPhone metadata
   applyMetadata(tempOut, outPath);
   console.log(`✅ Done → ${outPath}`);
 }
@@ -1711,6 +1630,7 @@ async function handleBgOnlyMode() {
     process.stdout.write(
       `  [${index + 1}/${clipPlan.length}] ${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
     );
+
     const bgMp4 = join(TMP, `bg_${String(index).padStart(3, "0")}.mp4`);
     processBackground(videoPath, duration, bgMp4, index, isHook);
     finalClips.push(bgMp4);
