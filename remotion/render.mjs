@@ -1,4 +1,7 @@
 // remotion/render.mjs
+// 🎬 PROFESSIONAL VIDEO RENDERER (2026)
+// 8 Transition Types + Particles + Glitch + TV Static
+
 import {
   readFileSync,
   writeFileSync,
@@ -73,6 +76,10 @@ const HOOK_INTRO_FRAMES  = 0;
 const INTRO_FRAMES       = Math.floor(1.0 * FPS);
 const OUTRO_FRAMES       = Math.floor(1.0 * FPS);
 
+// 🆕 Transition constants
+const TRANSITION_DURATION = 0.5;  // مدة كل انتقال
+const TRANSITION_FRAMES   = Math.floor(TRANSITION_DURATION * FPS);
+
 const BROWSER_ARGS = [
   "--no-sandbox",
   "--disable-setuid-sandbox",
@@ -90,6 +97,41 @@ const XFADE_TRANSITIONS = [
   "smoothleft",
   "smoothright",
 ];
+
+// 🆕 8 Professional Transition Types
+const PRO_TRANSITION_TYPES = [
+  "slide_burst",
+  "zoom_punch",
+  "spin_crash",
+  "flash_cut",
+  "cinema_frame",
+  "glitch_wave",
+  "liquid_sweep",
+  "reveal_drop",
+];
+
+// 🆕 Tag-based Frame Colors
+const TAG_FRAME_COLORS = {
+  shock:        "#FF1744",  // أحمر متوهج
+  urgency:      "#FF6E00",  // برتقالي ناري
+  intrigue:     "#FFD700",  // ذهبي
+  revelation:   "#FFFFFF",  // أبيض متألق
+  inspiration:  "#00E676",  // أخضر تحفيزي
+  emotional:    "#FF4081",  // وردي عاطفي
+  confident:    "#FFFFFF",  // أبيض نقي
+  wisdom:       "#448AFF",  // أزرق حكيم
+  calm:         "#80DEEA",  // سماوي هادئ
+  information:  "#FFFFFF",  // أبيض
+  desire:       "#FF6EC7",  // وردي
+  curiosity:    "#FFEB3B",  // أصفر
+  storytelling: "#FFA726",  // برتقالي
+  dramatic:     "#E91E63",  // وردي غامق
+  tension:      "#FF5722",  // أحمر برتقالي
+  climax:       "#FFFFFF",  // أبيض ساطع
+  powerful:     "#F44336",  // أحمر قوي
+  whisper:      "#9C27B0",  // بنفسجي
+  pause:        "#607D8B",  // رمادي
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TEMP DIRECTORY
@@ -121,30 +163,21 @@ console.log(
 
 const GPS_LOCATIONS = {
   ar: {
-    city:    "Riyadh",
-    country: "Saudi Arabia",
-    lat:     "24.7136",
-    lon:     "46.6753",
-    latRef:  "N",
-    lonRef:  "E",
+    city: "Riyadh", country: "Saudi Arabia",
+    lat: "24.7136", lon: "46.6753",
+    latRef: "N", lonRef: "E",
     iso6709: "+24.7136+046.6753/",
   },
   fr: {
-    city:    "Paris",
-    country: "France",
-    lat:     "48.8566",
-    lon:     "2.3522",
-    latRef:  "N",
-    lonRef:  "E",
+    city: "Paris", country: "France",
+    lat: "48.8566", lon: "2.3522",
+    latRef: "N", lonRef: "E",
     iso6709: "+48.8566+002.3522/",
   },
   en: {
-    city:    "New York",
-    country: "United States",
-    lat:     "40.7128",
-    lon:     "74.0060",
-    latRef:  "N",
-    lonRef:  "W",
+    city: "New York", country: "United States",
+    lat: "40.7128", lon: "74.0060",
+    latRef: "N", lonRef: "W",
     iso6709: "+40.7128-074.0060/",
   },
 };
@@ -458,6 +491,66 @@ function isPowerWord(w) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// SECTION DETECTION (Hook/Content/CTA)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function detectVideoSections() {
+  if (!aligned || aligned.length === 0) return [];
+
+  const sections = [];
+  const total = aligned.length;
+  const CTA_TAGS = ["confident", "inspiration", "powerful"];
+
+  for (let i = 0; i < total; i++) {
+    const seg = aligned[i];
+    const tag = seg.tag || "information";
+
+    let sectionType;
+    if (i === 0) {
+      sectionType = "hook";
+    } else if (i === total - 1) {
+      sectionType = "cta";
+    } else if (i === total - 2 && CTA_TAGS.includes(tag)) {
+      sectionType = "cta";
+    } else {
+      sectionType = "content";
+    }
+
+    sections.push({
+      type: sectionType,
+      start: parseFloat(seg.start || 0),
+      end:   parseFloat(seg.end || 0),
+      idx:   i,
+      tag:   tag,
+    });
+  }
+
+  return sections;
+}
+
+function getBigTransitionPoints(sections) {
+  if (sections.length < 2) return [];
+
+  const points = [];
+  for (let i = 0; i < sections.length - 1; i++) {
+    const curr = sections[i];
+    const next = sections[i + 1];
+
+    if (curr.type !== next.type) {
+      points.push({
+        time:     curr.end,
+        fromType: curr.type,
+        toType:   next.type,
+        tag:      next.tag,
+        idx:      i,
+      });
+    }
+  }
+
+  return points;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SENTENCE BOUNDARY MAP
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -548,7 +641,6 @@ function logClipPlan(plan) {
     )
   );
 }
-
 // ═══════════════════════════════════════════════════════════════════════════
 // WORD LIST
 // ═══════════════════════════════════════════════════════════════════════════
@@ -820,21 +912,27 @@ function buildHTMLShort({
   const dir      = word ? getDir(word) : "ltr";
   const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
+
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
+
   const tagStyle  = isPower ? POWER_STYLE : getWordStyle(tag);
   const titleAnim = computeTitleAnimation(globalFrame);
   const wordAnim  = word
     ? computeWordAnimation(progress, tagStyle.scaleMult)
     : { scale: 1.0, opacity: 0, translateY: 0 };
+
   const trans        = computeTransitionEffect(transitionState, globalFrame);
   const baseFontSize = computeFontSize(word, ar, tagStyle.scaleMult, false);
+
   const finalScale   = wordAnim.scale * trans.transScale;
   const finalOpacity = word ? wordAnim.opacity : 0;
+
   const wordTransform =
     `translate(-50%, calc(-50% + ${wordAnim.translateY.toFixed(1)}px)) ` +
     `translate(${trans.shakeX.toFixed(2)}px, ${trans.shakeY.toFixed(2)}px) ` +
     `scale(${finalScale.toFixed(4)})`;
+
   const hookText      = getHookText();
   const hookAr        = isArabic(hookText);
   const hookDir       = hookAr ? "rtl" : "ltr";
@@ -1200,12 +1298,11 @@ async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) 
 
   return cache;
 }
-
 // ═══════════════════════════════════════════════════════════════════════════
 // 🎬 VIDEO FILTERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ✅ 1. 🔴🔵 إضاءة درامية (geq منفصل في مرحلة 2)
+// ✅ 1. 🔴🔵 إضاءة درامية
 function buildDramaticLightingFilter() {
   return (
     `geq=` +
@@ -1308,8 +1405,7 @@ function buildOriginalityFilters(idx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PROCESS BACKGROUND
-// ✅ مرحلتان منفصلتان لضمان عمل geq الإضاءة دائماً
+// PROCESS BACKGROUND (مرحلتان)
 // ═══════════════════════════════════════════════════════════════════════════
 
 function processBackground(videoPath, duration, outPath, idx, isHookClip = false) {
@@ -1323,9 +1419,7 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
     ? ["-stream_loop", "-1"]
     : [];
 
-  // ═══════════════════════════════════════════════════════
   // المرحلة 1: حركة + ألوان + grain
-  // ═══════════════════════════════════════════════════════
   const tempStage1 = join(TMP, `stage1_${String(idx).padStart(3,"0")}.mp4`);
 
   const vf1 =
@@ -1354,7 +1448,6 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
     tempStage1,
   ]);
 
-  // Fallback للمرحلة 1
   if (r1.status !== 0) {
     console.log(`  ⚠️  Stage1 full failed [${idx}] — simple fallback...`);
     const vfSimple =
@@ -1377,7 +1470,6 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
       tempStage1,
     ]);
 
-    // Fallback نهائي للمرحلة 1
     if (r1.status !== 0) {
       console.log(`  ⚠️  Stage1 simple failed [${idx}] — minimal...`);
       runFFmpeg([
@@ -1394,10 +1486,7 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
     }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // المرحلة 2: 🔴🔵 إضاءة درامية (geq منفصل)
-  // ✅ مضمونة دائماً لأنها فلتر واحد فقط
-  // ═══════════════════════════════════════════════════════
+  // المرحلة 2: 🔴🔵 إضاءة درامية
   const r2 = runFFmpeg([
     "-y", "-i", tempStage1,
     "-vf", buildDramaticLightingFilter(),
@@ -1408,13 +1497,12 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
   ]);
 
   if (r2.status !== 0) {
-    console.log(`  ⚠️  Lighting failed [${idx}] — using stage1 as-is`);
+    console.log(`  ⚠️  Lighting failed [${idx}] — using stage1`);
     copyFileSync(tempStage1, outPath);
   } else {
     console.log(`  ✅ 🔴🔵 Lighting applied [${idx}]`);
   }
 
-  // تنظيف ملف مؤقت
   try {
     spawnSync("rm", ["-f", tempStage1], { stdio: "ignore" });
   } catch {}
@@ -1423,19 +1511,318 @@ function processBackground(videoPath, duration, outPath, idx, isHookClip = false
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 🎵 AUDIO FILTERS
+// 🎬 PROFESSIONAL TRANSITION OVERLAYS (HTML based)
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildAudioFilters() {
-  return (
-    `equalizer=f=80:width_type=o:width=2:g=4,` +
-    `equalizer=f=3000:width_type=o:width=2:g=2,` +
-    `equalizer=f=10000:width_type=o:width=2:g=1.5,` +
-    `acompressor=threshold=0.5:ratio=4:attack=5:release=50:makeup=2,` +
-    `aecho=0.8:0.88:60:0.3,` +
-    `equalizer=f=200:width_type=o:width=2:g=2,` +
-    `loudnorm=I=-16:TP=-1.5:LRA=11`
-  );
+function buildTransitionFrameHTML(transitionType, progress, frameColor, idx) {
+  const t = progress;
+
+  let frameOpacity = 0;
+  let frameWidth = 0;
+  let videoTransform = "scale(1)";
+  let flashOpacity = 0;
+  let glitchOffset = 0;
+  let particles = "";
+
+  switch (transitionType) {
+    case "slide_burst": {
+      if (t < 0.3) {
+        frameOpacity = t / 0.3;
+        frameWidth = 20;
+      } else if (t < 0.7) {
+        const slideT = (t - 0.3) / 0.4;
+        frameOpacity = 1;
+        frameWidth = 20;
+        const offsetX = -slideT * WIDTH;
+        videoTransform = `translateX(${offsetX}px)`;
+      } else {
+        const endT = (t - 0.7) / 0.3;
+        frameOpacity = 1 - endT;
+        flashOpacity = endT * 0.5;
+      }
+      break;
+    }
+
+    case "zoom_punch": {
+      if (t < 0.3) {
+        const zoomT = t / 0.3;
+        videoTransform = `scale(${1 + zoomT * 0.2})`;
+        frameOpacity = zoomT;
+        frameWidth = 15 + zoomT * 10;
+      } else if (t < 0.6) {
+        const shrinkT = (t - 0.3) / 0.3;
+        videoTransform = `scale(${1.2 - shrinkT * 1.2})`;
+        frameOpacity = 1;
+        frameWidth = 25;
+      } else {
+        const newT = (t - 0.6) / 0.4;
+        videoTransform = `scale(${newT})`;
+        frameOpacity = 1 - newT;
+        flashOpacity = (1 - newT) * 0.4;
+      }
+      break;
+    }
+
+    case "spin_crash": {
+      if (t < 0.2) {
+        frameOpacity = t / 0.2;
+        frameWidth = 20;
+        flashOpacity = (t / 0.2) * 0.6;
+      } else if (t < 0.7) {
+        const spinT = (t - 0.2) / 0.5;
+        const angle = spinT * 90;
+        const scale = 1 - spinT * 0.7;
+        videoTransform = `rotate(${angle}deg) scale(${scale})`;
+        frameOpacity = 1;
+        frameWidth = 25;
+      } else {
+        const newT = (t - 0.7) / 0.3;
+        const angle = -90 + newT * 90;
+        const scale = 0.3 + newT * 0.7;
+        videoTransform = `rotate(${angle}deg) scale(${scale})`;
+        frameOpacity = 1 - newT;
+      }
+      break;
+    }
+
+    case "flash_cut": {
+      if (t < 0.4) {
+        flashOpacity = t / 0.4;
+        frameOpacity = (t / 0.4) * 0.3;
+      } else if (t < 0.6) {
+        flashOpacity = 1;
+      } else {
+        flashOpacity = 1 - (t - 0.6) / 0.4;
+      }
+      break;
+    }
+
+    case "cinema_frame": {
+      if (t < 0.4) {
+        frameOpacity = t / 0.4;
+        frameWidth = (t / 0.4) * 40;
+        videoTransform = `scale(${1 - (t / 0.4) * 0.2})`;
+      } else if (t < 0.7) {
+        frameOpacity = 1;
+        frameWidth = 40;
+        videoTransform = "scale(0.8)";
+        flashOpacity = ((t - 0.4) / 0.3) * 0.3;
+      } else {
+        const newT = (t - 0.7) / 0.3;
+        frameOpacity = 1 - newT;
+        frameWidth = 40 - newT * 40;
+        videoTransform = `scale(${0.8 + newT * 0.2})`;
+      }
+      break;
+    }
+
+    case "glitch_wave": {
+      if (t < 0.3) {
+        glitchOffset = Math.sin(t * 50) * 10;
+        frameOpacity = t / 0.3;
+        frameWidth = 15;
+      } else if (t < 0.7) {
+        glitchOffset = Math.sin(t * 80) * 20;
+        frameOpacity = 1;
+        frameWidth = 20;
+        flashOpacity = Math.sin(t * 30) * 0.3;
+      } else {
+        glitchOffset = Math.sin(t * 30) * 5;
+        frameOpacity = 1 - (t - 0.7) / 0.3;
+      }
+      break;
+    }
+
+    case "liquid_sweep": {
+      if (t < 0.5) {
+        const sweepT = t / 0.5;
+        frameOpacity = sweepT;
+        frameWidth = 30;
+        const offsetX = -WIDTH + sweepT * WIDTH;
+        videoTransform = `translateX(${offsetX}px)`;
+      } else {
+        const newT = (t - 0.5) / 0.5;
+        frameOpacity = 1 - newT * 0.5;
+        frameWidth = 30 - newT * 20;
+      }
+      break;
+    }
+
+    case "reveal_drop": {
+      if (t < 0.3) {
+        frameOpacity = t / 0.3;
+        frameWidth = 20;
+        const offsetY = -HEIGHT + (t / 0.3) * HEIGHT;
+        videoTransform = `translateY(${offsetY}px)`;
+      } else if (t < 0.7) {
+        const dropT = (t - 0.3) / 0.4;
+        frameOpacity = 1;
+        frameWidth = 25;
+        videoTransform = `translateY(${dropT * HEIGHT}px)`;
+      } else {
+        const newT = (t - 0.7) / 0.3;
+        frameOpacity = 1 - newT;
+      }
+      break;
+    }
+  }
+
+  // Particles (نقاط ضوئية)
+  if (t > 0.3 && t < 0.7) {
+    const numParticles = 15;
+    for (let i = 0; i < numParticles; i++) {
+      const px = Math.random() * WIDTH;
+      const py = Math.random() * HEIGHT;
+      const size = 3 + Math.random() * 5;
+      particles += `
+        <div style="position:absolute;left:${px}px;top:${py}px;
+          width:${size}px;height:${size}px;
+          background:${frameColor};border-radius:50%;
+          box-shadow:0 0 ${size * 2}px ${frameColor};
+          opacity:0.8;z-index:60;"></div>
+      `;
+    }
+  }
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"/>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body {
+    width:${WIDTH}px; height:${HEIGHT}px;
+    overflow:hidden; background:transparent;
+  }
+  .frame {
+    position:absolute; inset:0;
+    border:${frameWidth}px solid ${frameColor};
+    opacity:${frameOpacity};
+    box-shadow:
+      0 0 ${frameWidth * 2}px ${frameColor},
+      inset 0 0 ${frameWidth}px ${frameColor};
+    pointer-events:none; z-index:55;
+  }
+  .flash {
+    position:absolute; inset:0;
+    background:${frameColor};
+    opacity:${flashOpacity};
+    pointer-events:none; z-index:50;
+  }
+  .glitch {
+    position:absolute; inset:0;
+    transform:translateX(${glitchOffset}px);
+    pointer-events:none; z-index:45;
+  }
+</style>
+</head>
+<body>
+  <div class="frame"></div>
+  <div class="flash"></div>
+  <div class="glitch"></div>
+  ${particles}
+</body>
+</html>`;
+}
+
+async function renderTransitionOverlay(
+  page, transitionType, frameColor, idx, outPath
+) {
+  const frameDir = join(TMP, `trans_${idx}`);
+  mkdirSync(frameDir, { recursive: true });
+
+  console.log(`  🎬 Rendering transition [${transitionType}]...`);
+
+  for (let f = 0; f < TRANSITION_FRAMES; f++) {
+    const progress = f / (TRANSITION_FRAMES - 1);
+    const html = buildTransitionFrameHTML(
+      transitionType, progress, frameColor, idx
+    );
+    const hp = join(frameDir, `t${f}.html`);
+    writeFileSync(hp, html, "utf-8");
+
+    await page.goto(`file://${hp}`, { waitUntil: "load" });
+    await page.waitForTimeout(15);
+
+    const pp = join(frameDir, `frame_${String(f).padStart(6, "0")}.png`);
+    await page.screenshot({ path: pp, type: "png", omitBackground: true });
+  }
+
+  // تحويل لـ MOV
+  const movPath = join(TMP, `trans_${idx}.mov`);
+  runFFmpeg([
+    "-y", "-framerate", String(FPS),
+    "-i", `${frameDir}/frame_%06d.png`,
+    "-c:v", "png", "-an",
+    movPath,
+  ]);
+
+  return movPath;
+}
+
+async function applyTransitionsToVideo(
+  page, bgVideoPath, bigTransPoints, outputPath
+) {
+  if (!bigTransPoints || bigTransPoints.length === 0) {
+    console.log("  ℹ️  No big transitions to apply");
+    copyFileSync(bgVideoPath, outputPath);
+    return outputPath;
+  }
+
+  console.log(`\n  🎬 Applying ${bigTransPoints.length} pro transitions...`);
+
+  let currentVideo = bgVideoPath;
+  const tempFiles = [];
+
+  for (let i = 0; i < bigTransPoints.length; i++) {
+    const point = bigTransPoints[i];
+    const transType = PRO_TRANSITION_TYPES[i % PRO_TRANSITION_TYPES.length];
+    const frameColor = TAG_FRAME_COLORS[point.tag] || "#FF1744";
+
+    console.log(
+      `     [${i + 1}/${bigTransPoints.length}] ` +
+      `@${point.time.toFixed(2)}s — ${transType} (${point.tag})`
+    );
+
+    const transMov = await renderTransitionOverlay(
+      page, transType, frameColor, i,
+      join(TMP, `trans_overlay_${i}.mov`)
+    );
+
+    const nextOut = join(TMP, `with_trans_${i}.mp4`);
+    tempFiles.push(nextOut);
+
+    const startTime = Math.max(0, point.time - TRANSITION_DURATION / 2);
+
+    const r = runFFmpeg([
+      "-y",
+      "-i", currentVideo,
+      "-i", transMov,
+      "-filter_complex",
+      `[1:v]format=rgba,setpts=PTS+${startTime}/TB[overlay];` +
+      `[0:v][overlay]overlay=0:0:enable='between(t,${startTime},${startTime + TRANSITION_DURATION})':format=auto[out]`,
+      "-map", "[out]",
+      "-map", "0:a?",
+      "-c:v", "libx264", "-preset", "fast", "-crf", "19",
+      "-c:a", "copy",
+      "-pix_fmt", "yuv420p",
+      nextOut,
+    ]);
+
+    if (r.status === 0) {
+      currentVideo = nextOut;
+    } else {
+      console.log(`  ⚠️  Transition ${i} failed — skipping`);
+    }
+  }
+
+  copyFileSync(currentVideo, outputPath);
+
+  // تنظيف
+  tempFiles.forEach((f) => {
+    try { spawnSync("rm", ["-f", f], { stdio: "ignore" }); } catch {}
+  });
+
+  console.log(`  ✅ Pro transitions applied`);
+  return outputPath;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1578,27 +1965,13 @@ function mergeAudio(videoPath, audioPath, outPath) {
   }
 
   const tempOut = join(TMP, "merged_temp.mp4");
-
-  const rMerge = runFFmpeg([
+  runFFmpeg([
     "-y", "-i", vid, "-i", audioPath,
     "-map", "0:v:0", "-map", "1:a:0",
-    "-c:v", "copy",
-    "-af", buildAudioFilters(),
-    "-c:a", "aac", "-b:a", "192k",
+    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
     "-t", aDur.toFixed(3),
     tempOut,
   ]);
-
-  if (rMerge.status !== 0) {
-    console.log("  ⚠️  Audio filters failed — basic merge...");
-    runFFmpeg([
-      "-y", "-i", vid, "-i", audioPath,
-      "-map", "0:v:0", "-map", "1:a:0",
-      "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-      "-t", aDur.toFixed(3),
-      tempOut,
-    ]);
-  }
 
   applyMetadata(tempOut, outPath);
   console.log(`✅ Done → ${outPath}`);
@@ -1630,7 +2003,6 @@ async function handleBgOnlyMode() {
     process.stdout.write(
       `  [${index + 1}/${clipPlan.length}] ${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
     );
-
     const bgMp4 = join(TMP, `bg_${String(index).padStart(3, "0")}.mp4`);
     processBackground(videoPath, duration, bgMp4, index, isHook);
     finalClips.push(bgMp4);
@@ -1657,15 +2029,24 @@ async function handleWordsOnlyMode() {
   const words         = buildWordList();
   const frameStateMap = buildFrameStateMap(words);
   const boundaryMap   = buildSentenceBoundaryMap();
+  const sections      = detectVideoSections();
+  const bigTransPoints = getBigTransitionPoints(sections);
+
+  console.log(`\n📊 Sections: ${sections.length}`);
+  sections.forEach((s) => {
+    console.log(`   [${s.start.toFixed(2)}s] ${s.type.toUpperCase()} (${s.tag})`);
+  });
+  console.log(`\n💥 Big transitions: ${bigTransPoints.length}`);
 
   const { browser, page } = await launchBrowser();
 
   try {
-    console.log("🖼️  Rendering PNGs [SHORT]...");
+    // 1. Render words PNGs
+    console.log("\n🖼️  Rendering words PNGs [SHORT]...");
     const pngCache = await renderAllPNGsShort(page, frameStateMap, boundaryMap);
-    await browser.close();
     console.log(`✅ ${pngCache.size} PNGs\n`);
 
+    // 2. Build words frame sequence
     const frameDir = join(TMP, "frames_words");
     mkdirSync(frameDir, { recursive: true });
 
@@ -1682,12 +2063,22 @@ async function handleWordsOnlyMode() {
     const capMov    = join(TMP, "cap_words.mov");
     framesToMov(frameDir, capMov);
 
-    console.log("🔧 Overlaying words on BG video [SHORT]...");
-    const tempFinal = join(TMP, "final_temp.mp4");
-    overlayOnBg(bgVideoPath, capMov, audio, tempFinal);
+    // 3. Overlay words on BG
+    console.log("🔧 Overlaying words on BG video...");
+    const wordsVideo = join(TMP, "with_words.mp4");
+    overlayOnBg(bgVideoPath, capMov, audio, wordsVideo);
 
-    console.log("📱 Applying iPhone 17 Pro Max metadata...");
-    applyMetadata(tempFinal, outputPath);
+    // 4. Apply pro transitions
+    const withTransitions = join(TMP, "with_transitions.mp4");
+    await applyTransitionsToVideo(
+      page, wordsVideo, bigTransPoints, withTransitions
+    );
+
+    await browser.close();
+
+    // 5. Apply metadata
+    console.log("\n📱 Applying iPhone 17 Pro Max metadata...");
+    applyMetadata(withTransitions, outputPath);
 
     console.log(`\n🎉 Final [SHORT] → ${outputPath}\n`);
   } finally {
@@ -1706,15 +2097,21 @@ async function handleLongWordsOnlyMode() {
   const frameStateMap = buildFrameStateMap(words);
   const boundaryMap   = buildSentenceBoundaryMap();
   const sentenceMap   = buildSentenceMap();
+  const sections      = detectVideoSections();
+  const bigTransPoints = getBigTransitionPoints(sections);
+
+  console.log(`\n📊 Sections: ${sections.length}`);
+  sections.forEach((s) => {
+    console.log(`   [${s.start.toFixed(2)}s] ${s.type.toUpperCase()} (${s.tag})`);
+  });
 
   const { browser, page } = await launchBrowser();
 
   try {
-    console.log("🖼️  Rendering PNGs [LONG]...");
+    console.log("\n🖼️  Rendering PNGs [LONG]...");
     const pngCache = await renderAllPNGsLong(
       page, frameStateMap, boundaryMap, sentenceMap
     );
-    await browser.close();
     console.log(`✅ ${pngCache.size} PNGs [LONG]\n`);
 
     const frameDir = join(TMP, "frames_long");
@@ -1738,11 +2135,18 @@ async function handleLongWordsOnlyMode() {
     framesToMov(frameDir, capMov);
 
     console.log("🔧 Overlaying words on BG video [LONG]...");
-    const tempFinal = join(TMP, "final_temp.mp4");
-    overlayOnBg(bgVideoPath, capMov, audio, tempFinal);
+    const wordsVideo = join(TMP, "with_words_long.mp4");
+    overlayOnBg(bgVideoPath, capMov, audio, wordsVideo);
 
-    console.log("📱 Applying iPhone 17 Pro Max metadata...");
-    applyMetadata(tempFinal, outputPath);
+    const withTransitions = join(TMP, "with_transitions_long.mp4");
+    await applyTransitionsToVideo(
+      page, wordsVideo, bigTransPoints, withTransitions
+    );
+
+    await browser.close();
+
+    console.log("\n📱 Applying iPhone 17 Pro Max metadata...");
+    applyMetadata(withTransitions, outputPath);
 
     console.log(`\n🎉 Final [LONG] → ${outputPath}\n`);
   } finally {
