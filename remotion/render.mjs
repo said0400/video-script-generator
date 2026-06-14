@@ -116,6 +116,158 @@ console.log(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
+// GPS LOCATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+const GPS_LOCATIONS = {
+  ar: {
+    city:    "Riyadh",
+    country: "Saudi Arabia",
+    lat:     "24.7136",
+    lon:     "46.6753",
+    latRef:  "N",
+    lonRef:  "E",
+    iso6709: "+24.7136+046.6753/",
+  },
+  fr: {
+    city:    "Paris",
+    country: "France",
+    lat:     "48.8566",
+    lon:     "2.3522",
+    latRef:  "N",
+    lonRef:  "E",
+    iso6709: "+48.8566+002.3522/",
+  },
+  en: {
+    city:    "New York",
+    country: "United States",
+    lat:     "40.7128",
+    lon:     "74.0060",
+    latRef:  "N",
+    lonRef:  "W",
+    iso6709: "+40.7128-074.0060/",
+  },
+};
+
+const location = GPS_LOCATIONS[lang] || GPS_LOCATIONS.ar;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// iPhone 17 Pro Max METADATA
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildiPhoneMetadata() {
+  const now     = new Date();
+  const dateISO = now.toISOString();
+  const dateStr = dateISO
+    .replace(/[-:]/g, "")
+    .split(".")[0];
+
+  const serial   = "F" + Math.random()
+    .toString(36).substring(2, 10).toUpperCase();
+  const cameraId = Math.random()
+    .toString(36).substring(2, 14).toUpperCase();
+  const uuid     = [
+    Math.random().toString(16).substring(2, 10),
+    Math.random().toString(16).substring(2, 6),
+    Math.random().toString(16).substring(2, 6),
+    Math.random().toString(16).substring(2, 6),
+    Math.random().toString(16).substring(2, 14),
+  ].join("-").toUpperCase();
+
+  return [
+    "-map_metadata", "-1",
+
+    // ── جهاز التصوير ──
+    "-metadata", "make=Apple",
+    "-metadata", "model=iPhone 17 Pro Max",
+    "-metadata", "software=Adobe Premiere Pro 25.0",
+    "-metadata", "encoder=Adobe Premiere Pro 25.0",
+    "-metadata", "handler_name=Core Media Data Handler",
+
+    // ── Apple QuickTime ──
+    "-metadata", "com.apple.quicktime.make=Apple",
+    "-metadata", "com.apple.quicktime.model=iPhone 17 Pro Max",
+    "-metadata", "com.apple.quicktime.software=iOS 18.2",
+    "-metadata", `com.apple.quicktime.creationdate=${dateISO}`,
+    "-metadata", `com.apple.quicktime.location.ISO6709=${location.iso6709}`,
+    "-metadata", `com.apple.quicktime.location.name=${location.city}, ${location.country}`,
+    "-metadata", `com.apple.quicktime.content.identifier=${uuid}`,
+    "-metadata", `com.apple.quicktime.camera.identifier=${cameraId}`,
+    "-metadata", "com.apple.quicktime.fullframerate=1",
+    "-metadata", "com.apple.quicktime.live-photo.auto=0",
+
+    // ── التاريخ ──
+    "-metadata", `creation_time=${dateISO}`,
+    "-metadata", `date=${dateStr}`,
+
+    // ── كاميرا EXIF ──
+    "-metadata", "focal_length=9",
+    "-metadata", "focal_length_in_35mm_film=24",
+    "-metadata", "aperture=f/2.8",
+    "-metadata", "f_number=2.8",
+    "-metadata", "iso=64",
+    "-metadata", "iso_speed_ratings=64",
+    "-metadata", "exposure_time=1/120",
+    "-metadata", "shutter_speed_value=1/120",
+    "-metadata", "white_balance=Auto",
+    "-metadata", "flash=No Flash",
+    "-metadata", "metering_mode=Multi-segment",
+    "-metadata", "exposure_program=Normal program",
+    "-metadata", "exposure_mode=Auto",
+    "-metadata", "scene_capture_type=Standard",
+    "-metadata", "sensing_method=One-chip color area sensor",
+    "-metadata", "color_space=sRGB",
+    "-metadata", "digital_zoom_ratio=1.0",
+
+    // ── العدسة ──
+    "-metadata", "lens=Apple iPhone 17 Pro Max back camera 9mm f/2.8",
+    "-metadata", "lens_make=Apple",
+    "-metadata", "lens_model=iPhone 17 Pro Max back camera 9mm f/2.8",
+    "-metadata", "lens_serial_number=" + serial,
+    "-metadata", "lens_specification=9/1 9/1 28/10 28/10",
+
+    // ── GPS ──
+    "-metadata", `location=${location.iso6709}`,
+    "-metadata", `location-eng=${location.city}, ${location.country}`,
+    "-metadata", `GPS_latitude=${location.lat}`,
+    "-metadata", `GPS_latitude_ref=${location.latRef}`,
+    "-metadata", `GPS_longitude=${location.lon}`,
+    "-metadata", `GPS_longitude_ref=${location.lonRef}`,
+    "-metadata", "GPS_altitude=50",
+    "-metadata", "GPS_altitude_ref=0",
+    "-metadata", "GPS_speed=0",
+    "-metadata", "GPS_speed_ref=K",
+    "-metadata", "GPS_map_datum=WGS-84",
+    "-metadata", `GPS_date_stamp=${dateStr.substring(0, 8)}`,
+    "-metadata", "GPS_processing_method=GPS",
+
+    // ── معلومات الفيديو ──
+    "-metadata", "media_type=Video",
+    "-metadata", "hdr_format=Dolby Vision",
+    "-metadata", "color_primaries=BT.2020",
+    "-metadata", "matrix_coefficients=BT.2020 non-constant",
+    "-metadata", "transfer_characteristics=PQ",
+    "-metadata", "video_range=Full",
+    "-metadata", "color_temperature=6500K",
+    "-metadata", "aspect_ratio=9:16",
+    "-metadata", "scene=Portrait",
+
+    // ── إخفاء المصدر ──
+    "-metadata", "comment=",
+    "-metadata", "artist=",
+    "-metadata", "copyright=",
+    "-metadata", "description=",
+    "-metadata", "album=",
+    "-metadata", "genre=",
+    "-metadata", "composer=",
+    "-metadata", "track=",
+    "-metadata", "network=",
+    "-metadata", "show=",
+    "-metadata", "episode_id=",
+  ];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // EMOTION COLORS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -526,7 +678,7 @@ function buildFrameStateMap(words) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SENTENCE MAP (LONG mode)
+// SENTENCE MAP (LONG)
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildSentenceMap() {
@@ -537,12 +689,8 @@ function buildSentenceMap() {
   const map = new Array(totalFrames).fill(null);
 
   for (const seg of aligned) {
-    const segStart = Math.floor(
-      parseFloat(seg.start || 0) * FPS
-    );
-    const segEnd = Math.ceil(
-      parseFloat(seg.end || 0) * FPS
-    );
+    const segStart = Math.floor(parseFloat(seg.start || 0) * FPS);
+    const segEnd   = Math.ceil(parseFloat(seg.end   || 0) * FPS);
     const sentence = seg.sentence || "";
 
     for (let f = segStart; f < segEnd && f < totalFrames; f++) {
@@ -618,8 +766,7 @@ function computeTitleAnimation(globalFrame) {
   }
   if (globalFrame >= totalFrames - OUTRO_FRAMES) {
     const t =
-      (globalFrame - (totalFrames - OUTRO_FRAMES)) /
-      OUTRO_FRAMES;
+      (globalFrame - (totalFrames - OUTRO_FRAMES)) / OUTRO_FRAMES;
     const e = Math.pow(t, 2);
     return { opacity: 1 - e, translateY: e * -60 };
   }
@@ -760,9 +907,7 @@ function buildHTMLShort({
 }) {
   const ar       = word ? isArabic(word) : false;
   const dir      = word ? getDir(word) : "ltr";
-  const font     = word
-    ? getFontFamily(word)
-    : `"Noto Sans", sans-serif`;
+  const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
 
   const titleDir  = getDir(display_title);
@@ -774,21 +919,15 @@ function buildHTMLShort({
     ? computeWordAnimation(progress, tagStyle.scaleMult)
     : { scale: 1.0, opacity: 0, translateY: 0 };
 
-  const trans        = computeTransitionEffect(
-    transitionState, globalFrame
-  );
-  const baseFontSize = computeFontSize(
-    word, ar, tagStyle.scaleMult, false
-  );
+  const trans        = computeTransitionEffect(transitionState, globalFrame);
+  const baseFontSize = computeFontSize(word, ar, tagStyle.scaleMult, false);
 
   const finalScale   = wordAnim.scale * trans.transScale;
   const finalOpacity = word ? wordAnim.opacity : 0;
 
   const wordTransform =
-    `translate(-50%, calc(-50% + ` +
-    `${wordAnim.translateY.toFixed(1)}px)) ` +
-    `translate(${trans.shakeX.toFixed(2)}px, ` +
-    `${trans.shakeY.toFixed(2)}px) ` +
+    `translate(-50%, calc(-50% + ${wordAnim.translateY.toFixed(1)}px)) ` +
+    `translate(${trans.shakeX.toFixed(2)}px, ${trans.shakeY.toFixed(2)}px) ` +
     `scale(${finalScale.toFixed(4)})`;
 
   const hookText = getHookText();
@@ -804,8 +943,7 @@ function buildHTMLShort({
     ? `background:linear-gradient(135deg,#FF1744 0%,#D50000 100%);
        padding:24px 60px; border-radius:9999px;
        border:3px solid rgba(255,255,255,0.3);
-       box-shadow:0 0 60px rgba(255,23,68,0.8),
-                  0 0 120px rgba(255,23,68,0.4);`
+       box-shadow:0 0 60px rgba(255,23,68,0.8),0 0 120px rgba(255,23,68,0.4);`
     : `background:transparent;padding:0;`;
 
   const wordTextStyle = isPower
@@ -821,9 +959,8 @@ function buildHTMLShort({
        display:block; word-break:break-word;
        -webkit-text-stroke:${tagStyle.strokeWidth}px ${tagStyle.strokeColor};
        paint-order:stroke fill;
-       text-shadow:
-         0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
-         0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
+       text-shadow:0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
+                   0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
        filter:brightness(${tagStyle.brightness});`;
 
   return `<!DOCTYPE html>
@@ -831,80 +968,40 @@ function buildHTMLShort({
 <head><meta charset="UTF-8"/>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  html,body {
-    width:${WIDTH}px; height:${HEIGHT}px;
-    overflow:hidden; background:transparent;
-  }
-  .ot {
-    position:absolute; top:0; left:0; right:0; height:40%;
-    background:linear-gradient(to bottom,
-      rgba(0,0,0,0.85) 0%,rgba(0,0,0,0.5) 50%,transparent 100%);
-    pointer-events:none; z-index:1;
-  }
-  .ob {
-    position:absolute; bottom:0; left:0; right:0; height:42%;
-    background:linear-gradient(to top,
-      rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.45) 65%,transparent 100%);
-    pointer-events:none; z-index:1;
-  }
-  .flash {
-    position:absolute; inset:0;
-    background:${trans.flashColor};
-    opacity:${trans.flashOpacity.toFixed(4)};
-    pointer-events:none; z-index:50;
-  }
-  .tc {
-    position:absolute; top:410px; left:50%;
-    width:92%; max-width:980px;
+  html,body { width:${WIDTH}px; height:${HEIGHT}px; overflow:hidden; background:transparent; }
+  .ot { position:absolute; top:0; left:0; right:0; height:40%;
+    background:linear-gradient(to bottom,rgba(0,0,0,0.85) 0%,rgba(0,0,0,0.5) 50%,transparent 100%);
+    pointer-events:none; z-index:1; }
+  .ob { position:absolute; bottom:0; left:0; right:0; height:42%;
+    background:linear-gradient(to top,rgba(0,0,0,0.88) 0%,rgba(0,0,0,0.45) 65%,transparent 100%);
+    pointer-events:none; z-index:1; }
+  .flash { position:absolute; inset:0; background:${trans.flashColor};
+    opacity:${trans.flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
+  .tc { position:absolute; top:410px; left:50%; width:92%; max-width:980px;
     direction:${titleDir}; text-align:center; z-index:30;
     transform:translateX(-50%) translateY(${titleAnim.translateY.toFixed(2)}px);
-    opacity:${titleAnim.opacity.toFixed(4)};
-  }
-  .tc::after {
-    content:''; display:block; margin:16px auto 0;
-    width:120px; height:4px; border-radius:2px;
-    background:linear-gradient(90deg,transparent,#FF1744,transparent);
-    opacity:${titleAnim.opacity.toFixed(4)};
-  }
-  .tt {
-    font-family:${titleFont}; font-size:${titleFontSize}px;
-    font-weight:900; color:#FFFFFF;
-    display:inline-flex; align-items:center;
-    justify-content:center; gap:14px;
-    line-height:1.3; text-align:center;
-    direction:${titleDir};
-    -webkit-text-stroke:2px rgba(0,0,0,0.8);
-    paint-order:stroke fill;
-    text-shadow:
-      0 0 30px rgba(255,23,68,0.6),
-      0 4px 20px rgba(0,0,0,0.9),
-      2px 2px 0 rgba(0,0,0,0.8);
-  }
+    opacity:${titleAnim.opacity.toFixed(4)}; }
+  .tc::after { content:''; display:block; margin:16px auto 0; width:120px; height:4px;
+    border-radius:2px; background:linear-gradient(90deg,transparent,#FF1744,transparent);
+    opacity:${titleAnim.opacity.toFixed(4)}; }
+  .tt { font-family:${titleFont}; font-size:${titleFontSize}px; font-weight:900; color:#FFFFFF;
+    display:inline-flex; align-items:center; justify-content:center; gap:14px;
+    line-height:1.3; text-align:center; direction:${titleDir};
+    -webkit-text-stroke:2px rgba(0,0,0,0.8); paint-order:stroke fill;
+    text-shadow:0 0 30px rgba(255,23,68,0.6),0 4px 20px rgba(0,0,0,0.9),2px 2px 0 rgba(0,0,0,0.8); }
   .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
-  .hb {
-    position:absolute;
-    top:${titleArabic ? "290px" : "270px"}; left:50%;
+  .hb { position:absolute; top:${titleArabic ? "290px" : "270px"}; left:50%;
     transform:translateX(-50%);
-    background:linear-gradient(
-      135deg,rgba(220,0,0,0.95),rgba(160,0,0,0.95));
-    color:#fff; font-family:${hookFont};
-    font-size:${hookAr ? "32px" : "28px"};
-    font-weight:900; padding:12px 38px;
-    border-radius:9999px; z-index:25;
+    background:linear-gradient(135deg,rgba(220,0,0,0.95),rgba(160,0,0,0.95));
+    color:#fff; font-family:${hookFont}; font-size:${hookAr ? "32px" : "28px"};
+    font-weight:900; padding:12px 38px; border-radius:9999px; z-index:25;
     white-space:nowrap; direction:${hookDir};
     border:2px solid rgba(255,120,120,0.4);
-    box-shadow:
-      0 0 50px rgba(220,0,0,0.7),
-      0 8px 24px rgba(0,0,0,0.5);
-  }
-  .wc {
-    position:absolute; left:50%; top:54%;
-    transform:${wordTransform};
-    opacity:${finalOpacity.toFixed(4)};
+    box-shadow:0 0 50px rgba(220,0,0,0.7),0 8px 24px rgba(0,0,0,0.5); }
+  .wc { position:absolute; left:50%; top:54%;
+    transform:${wordTransform}; opacity:${finalOpacity.toFixed(4)};
     direction:${dir}; text-align:center; z-index:10;
-    width:95%; max-width:1020px;
-    transform-origin:center center;
-  }
+    width:95%; max-width:1020px; transform-origin:center center; }
   .wp { display:inline-block; ${powerContainerStyle} }
   .wt { ${wordTextStyle} }
 </style>
@@ -921,11 +1018,7 @@ function buildHTMLShort({
     </div>
   </div>
   ${isHook ? `<div class="hb">${esc(hookText)}</div>` : ""}
-  ${word
-    ? `<div class="wc"><div class="wp">` +
-      `<span class="wt">${esc(word)}</span>` +
-      `</div></div>`
-    : ""}
+  ${word ? `<div class="wc"><div class="wp"><span class="wt">${esc(word)}</span></div></div>` : ""}
 </body>
 </html>`;
 }
@@ -946,50 +1039,38 @@ function buildHTMLLong({
 }) {
   const ar       = word ? isArabic(word) : false;
   const dir      = word ? getDir(word) : "ltr";
-  const font     = word
-    ? getFontFamily(word)
-    : `"Noto Sans", sans-serif`;
+  const font     = word ? getFontFamily(word) : `"Noto Sans", sans-serif`;
   const langAttr = word ? getLang(word) : "en";
 
   const titleDir  = getDir(display_title);
   const titleFont = getFontFamily(display_title);
-
-  const sentDir  = currentSentence
-    ? getDir(currentSentence) : "ltr";
-  const sentFont = currentSentence
-    ? getFontFamily(currentSentence)
-    : `"Noto Sans", sans-serif`;
-
-  const tagStyle = getWordStyle(tag);
+  const sentDir   = currentSentence ? getDir(currentSentence) : "ltr";
+  const sentFont  = currentSentence ? getFontFamily(currentSentence) : `"Noto Sans", sans-serif`;
+  const tagStyle  = getWordStyle(tag);
 
   let titleOpacity = 1.0;
   if (globalFrame < INTRO_FRAMES) {
     titleOpacity = globalFrame / INTRO_FRAMES;
   } else if (globalFrame >= totalFrames - OUTRO_FRAMES) {
-    titleOpacity =
-      (totalFrames - globalFrame) / OUTRO_FRAMES;
+    titleOpacity = (totalFrames - globalFrame) / OUTRO_FRAMES;
   }
 
   let wordScale   = tagStyle.scaleMult;
   let wordOpacity = word ? 1.0 : 0;
   if (word && progress < 0.15) {
     const t   = progress / 0.15;
-    wordScale = 0.6 +
-      (1 - Math.pow(1 - t, 2)) * (tagStyle.scaleMult - 0.6);
+    wordScale = 0.6 + (1 - Math.pow(1 - t, 2)) * (tagStyle.scaleMult - 0.6);
     wordOpacity = Math.min(1, t * 3);
   } else if (word && progress > 0.85) {
     wordOpacity = 1 - ((progress - 0.85) / 0.15) * 0.3;
   }
 
-  let flashOpacity = 0;
-  let flashColor   = "rgba(0,0,0,0)";
-  let shakeX       = 0;
-  let shakeY       = 0;
+  let flashOpacity = 0, flashColor = "rgba(0,0,0,0)";
+  let shakeX = 0, shakeY = 0;
 
   if (transitionState) {
     const { config, progress: tp } = transitionState;
-    flashOpacity =
-      tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
+    flashOpacity = tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
     flashOpacity = Math.max(0, Math.min(1, flashOpacity));
     flashColor   = config.flashColor;
     if (config.shakeAmount > 0) {
@@ -999,33 +1080,26 @@ function buildHTMLLong({
     }
   }
 
-  const baseFontSize = computeFontSize(
-    word, ar, tagStyle.scaleMult, true
-  );
-
+  const baseFontSize  = computeFontSize(word, ar, tagStyle.scaleMult, true);
   const wordTransform =
     `translate(-50%, -50%) ` +
-    `translate(${shakeX.toFixed(2)}px, ` +
-    `${shakeY.toFixed(2)}px) ` +
+    `translate(${shakeX.toFixed(2)}px, ${shakeY.toFixed(2)}px) ` +
     `scale(${wordScale.toFixed(4)})`;
 
   const wordTextStyle = `
     font-family:${font}; font-size:${baseFontSize}px;
-    font-weight:900; color:${tagStyle.colorWord};
-    line-height:1.2;
+    font-weight:900; color:${tagStyle.colorWord}; line-height:1.2;
     letter-spacing:${ar ? "1px" : "2px"};
     display:block; word-break:break-word;
     -webkit-text-stroke:${tagStyle.strokeWidth}px ${tagStyle.strokeColor};
     paint-order:stroke fill;
-    text-shadow:
-      0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
-      0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
+    text-shadow:0 0 ${tagStyle.glowSpread}px ${tagStyle.colorGlow},
+                0 0 ${tagStyle.glowSpread * 1.5}px ${tagStyle.colorGlow};
     filter:brightness(${tagStyle.brightness});`;
 
   const subtitleHtml = currentSentence
     ? currentSentence.split(/\s+/).map((w) => {
-        const isHL =
-          normalizeWord(w) === normalizeWord(highlightedWord);
+        const isHL = normalizeWord(w) === normalizeWord(highlightedWord);
         return isHL
           ? `<span class="sh">${esc(w)}</span>`
           : `<span class="sw">${esc(w)}</span>`;
@@ -1041,80 +1115,39 @@ function buildHTMLLong({
 <head><meta charset="UTF-8"/>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
-  html,body {
-    width:${WIDTH}px; height:${HEIGHT}px;
-    overflow:hidden; background:transparent;
-  }
-  .ot {
-    position:absolute; top:0; left:0; right:0; height:35%;
-    background:linear-gradient(to bottom,
-      rgba(0,0,0,0.8) 0%,transparent 100%);
-    pointer-events:none; z-index:1;
-  }
-  .ob {
-    position:absolute; bottom:0; left:0; right:0; height:38%;
-    background:linear-gradient(to top,
-      rgba(0,0,0,0.92) 0%,rgba(0,0,0,0.5) 60%,transparent 100%);
-    pointer-events:none; z-index:1;
-  }
-  .flash {
-    position:absolute; inset:0;
-    background:${flashColor};
-    opacity:${flashOpacity.toFixed(4)};
-    pointer-events:none; z-index:50;
-  }
-  .tc {
-    position:absolute; top:28px;
+  html,body { width:${WIDTH}px; height:${HEIGHT}px; overflow:hidden; background:transparent; }
+  .ot { position:absolute; top:0; left:0; right:0; height:35%;
+    background:linear-gradient(to bottom,rgba(0,0,0,0.8) 0%,transparent 100%);
+    pointer-events:none; z-index:1; }
+  .ob { position:absolute; bottom:0; left:0; right:0; height:38%;
+    background:linear-gradient(to top,rgba(0,0,0,0.92) 0%,rgba(0,0,0,0.5) 60%,transparent 100%);
+    pointer-events:none; z-index:1; }
+  .flash { position:absolute; inset:0; background:${flashColor};
+    opacity:${flashOpacity.toFixed(4)}; pointer-events:none; z-index:50; }
+  .tc { position:absolute; top:28px;
     ${titleDir === "rtl" ? "right:40px" : "left:40px"};
     direction:${titleDir};
     text-align:${titleDir === "rtl" ? "right" : "left"};
-    z-index:30; opacity:${titleOpacity.toFixed(4)};
-  }
-  .tt {
-    font-family:${titleFont}; font-size:${titleFontSize}px;
-    font-weight:900; color:#FFFFFF;
-    display:inline-flex; align-items:center;
-    gap:10px; line-height:1.2; direction:${titleDir};
-    -webkit-text-stroke:1px rgba(0,0,0,0.8);
-    paint-order:stroke fill;
-    text-shadow:
-      0 0 20px rgba(255,23,68,0.5),
-      0 2px 10px rgba(0,0,0,0.9);
-  }
+    z-index:30; opacity:${titleOpacity.toFixed(4)}; }
+  .tt { font-family:${titleFont}; font-size:${titleFontSize}px; font-weight:900; color:#FFFFFF;
+    display:inline-flex; align-items:center; gap:10px; line-height:1.2; direction:${titleDir};
+    -webkit-text-stroke:1px rgba(0,0,0,0.8); paint-order:stroke fill;
+    text-shadow:0 0 20px rgba(255,23,68,0.5),0 2px 10px rgba(0,0,0,0.9); }
   .te { font-size:${emojiSize}px; -webkit-text-stroke:0; }
-  .tline {
-    display:block; margin-top:8px; width:80px;
-    height:3px; border-radius:2px; background:#FF1744;
-  }
-  .wc {
-    position:absolute; left:50%; top:46%;
-    transform:${wordTransform};
-    opacity:${wordOpacity.toFixed(4)};
-    direction:${dir}; text-align:center; z-index:10;
-    width:80%; max-width:1400px;
-    transform-origin:center center;
-  }
+  .tline { display:block; margin-top:8px; width:80px; height:3px; border-radius:2px; background:#FF1744; }
+  .wc { position:absolute; left:50%; top:46%; transform:${wordTransform};
+    opacity:${wordOpacity.toFixed(4)}; direction:${dir}; text-align:center; z-index:10;
+    width:80%; max-width:1400px; transform-origin:center center; }
   .wt { ${wordTextStyle} }
-  .subtitle {
-    position:absolute; bottom:48px; left:60px; right:60px;
+  .subtitle { position:absolute; bottom:48px; left:60px; right:60px;
     direction:${sentDir}; text-align:center; z-index:20;
-    font-family:${sentFont};
-    font-size:${ar ? "34px" : "30px"};
-    font-weight:700; line-height:1.6;
-    letter-spacing:${ar ? "0.5px" : "1px"};
-  }
-  .sw {
-    color:rgba(255,255,255,0.65);
-    -webkit-text-stroke:1px rgba(0,0,0,0.6);
+    font-family:${sentFont}; font-size:${ar ? "34px" : "30px"};
+    font-weight:700; line-height:1.6; letter-spacing:${ar ? "0.5px" : "1px"}; }
+  .sw { color:rgba(255,255,255,0.65); -webkit-text-stroke:1px rgba(0,0,0,0.6);
+    paint-order:stroke fill; display:inline; }
+  .sh { color:#FFD700; -webkit-text-stroke:1px rgba(0,0,0,0.8);
     paint-order:stroke fill; display:inline;
-  }
-  .sh {
-    color:#FFD700;
-    -webkit-text-stroke:1px rgba(0,0,0,0.8);
-    paint-order:stroke fill; display:inline;
-    text-shadow:0 0 20px rgba(255,215,0,0.8);
-    font-weight:900;
-  }
+    text-shadow:0 0 20px rgba(255,215,0,0.8); font-weight:900; }
 </style>
 </head>
 <body>
@@ -1124,19 +1157,13 @@ function buildHTMLLong({
   <div class="tc">
     <div class="tt">
       ${titleDir === "rtl"
-        ? `<span>${esc(display_title)}</span>` +
-          `<span class="te">${emoji_left}</span>`
-        : `<span class="te">${emoji_left}</span>` +
-          `<span>${esc(display_title)}</span>`}
+        ? `<span>${esc(display_title)}</span><span class="te">${emoji_left}</span>`
+        : `<span class="te">${emoji_left}</span><span>${esc(display_title)}</span>`}
     </div>
     <span class="tline"></span>
   </div>
-  ${word
-    ? `<div class="wc"><span class="wt">${esc(word)}</span></div>`
-    : ""}
-  ${subtitleHtml
-    ? `<div class="subtitle">${subtitleHtml}</div>`
-    : ""}
+  ${word ? `<div class="wc"><span class="wt">${esc(word)}</span></div>` : ""}
+  ${subtitleHtml ? `<div class="subtitle">${subtitleHtml}</div>` : ""}
 </body>
 </html>`;
 }
@@ -1146,14 +1173,11 @@ function buildHTMLLong({
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function launchBrowser() {
-  const browser = await chromium.launch({
-    headless: true,
-    args:     BROWSER_ARGS,
-  });
+  const browser = await chromium.launch({ headless: true, args: BROWSER_ARGS });
   const context = await browser.newContext({
-    viewport:          { width: WIDTH, height: HEIGHT },
+    viewport: { width: WIDTH, height: HEIGHT },
     deviceScaleFactor: 1,
-    locale:            "ar-SA",
+    locale: "ar-SA",
   });
   const page = await context.newPage();
   return { browser, page };
@@ -1162,12 +1186,8 @@ async function launchBrowser() {
 async function warmupFonts(page, builder) {
   for (const [w, l] of [["مرحبا", "ar"], ["Hello", "en"]]) {
     const html = builder({
-      word:        w,
-      tag:         "information",
-      isPower:     false,
-      isHook:      false,
-      globalFrame: TITLE_SLIDE_FRAMES,
-      progress:    0.5,
+      word: w, tag: "information", isPower: false,
+      isHook: false, globalFrame: TITLE_SLIDE_FRAMES, progress: 0.5,
     });
     const p = join(TMP, `init_${l}.html`);
     writeFileSync(p, html, "utf-8");
@@ -1183,11 +1203,9 @@ async function warmupFonts(page, builder) {
 
 function collectUniqueShortStates(frameStateMap, boundaryMap) {
   const unique = new Map();
-
   for (let f = 0; f < frameStateMap.length; f++) {
     const ts  = boundaryMap[f] || null;
     const key = stateKey(frameStateMap[f], f, ts);
-
     if (!unique.has(key)) {
       unique.set(key, {
         word:            frameStateMap[f]?.word    ?? null,
@@ -1200,16 +1218,12 @@ function collectUniqueShortStates(frameStateMap, boundaryMap) {
       });
     }
   }
-
   return unique;
 }
 
 async function renderAllPNGsShort(page, frameStateMap, boundaryMap) {
-  const unique = collectUniqueShortStates(
-    frameStateMap, boundaryMap
-  );
+  const unique = collectUniqueShortStates(frameStateMap, boundaryMap);
   console.log(`\n📸 ${unique.size} unique states [SHORT]`);
-
   await warmupFonts(page, buildHTMLShort);
 
   const cache = new Map();
@@ -1221,14 +1235,8 @@ async function renderAllPNGsShort(page, frameStateMap, boundaryMap) {
     writeFileSync(hp, html, "utf-8");
     await page.goto(`file://${hp}`, { waitUntil: "load" });
     await page.waitForTimeout(35);
-
     const pp = join(TMP, `${key}.png`);
-    await page.screenshot({
-      path:           pp,
-      type:           "png",
-      omitBackground: true,
-    });
-
+    await page.screenshot({ path: pp, type: "png", omitBackground: true });
     cache.set(key, pp);
     done++;
     if (done % 50 === 0 || done === unique.size) {
@@ -1243,17 +1251,13 @@ async function renderAllPNGsShort(page, frameStateMap, boundaryMap) {
 // RENDER PNGs — LONG
 // ═══════════════════════════════════════════════════════════════════════════
 
-function collectUniqueLongStates(
-  frameStateMap, boundaryMap, sentenceMap
-) {
+function collectUniqueLongStates(frameStateMap, boundaryMap, sentenceMap) {
   const unique = new Map();
-
   for (let f = 0; f < frameStateMap.length; f++) {
     const ts       = boundaryMap[f] || null;
     const wordSt   = frameStateMap[f];
     const sentence = sentenceMap[f] || "";
     const key      = longStateKey(wordSt, ts, sentence);
-
     if (!unique.has(key)) {
       unique.set(key, {
         word:            wordSt?.word    ?? null,
@@ -1267,18 +1271,12 @@ function collectUniqueLongStates(
       });
     }
   }
-
   return unique;
 }
 
-async function renderAllPNGsLong(
-  page, frameStateMap, boundaryMap, sentenceMap
-) {
-  const unique = collectUniqueLongStates(
-    frameStateMap, boundaryMap, sentenceMap
-  );
+async function renderAllPNGsLong(page, frameStateMap, boundaryMap, sentenceMap) {
+  const unique = collectUniqueLongStates(frameStateMap, boundaryMap, sentenceMap);
   console.log(`\n📸 ${unique.size} unique states [LONG]`);
-
   await warmupFonts(page, buildHTMLLong);
 
   const cache = new Map();
@@ -1290,14 +1288,8 @@ async function renderAllPNGsLong(
     writeFileSync(hp, html, "utf-8");
     await page.goto(`file://${hp}`, { waitUntil: "load" });
     await page.waitForTimeout(35);
-
     const pp = join(TMP, `${key}.png`);
-    await page.screenshot({
-      path:           pp,
-      type:           "png",
-      omitBackground: true,
-    });
-
+    await page.screenshot({ path: pp, type: "png", omitBackground: true });
     cache.set(key, pp);
     done++;
     if (done % 50 === 0 || done === unique.size) {
@@ -1309,14 +1301,11 @@ async function renderAllPNGsLong(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 🔴🔵 DRAMATIC LIGHTING FILTER
-// إضاءة حمراء يسار + زرقاء يمين — ثابتة درامية غامضة
+// 🎬 VIDEO FILTERS — كل التأثيرات مجتمعة
 // ═══════════════════════════════════════════════════════════════════════════
 
+// 1️⃣ إضاءة درامية 🔴 يسار + 🔵 يمين
 function buildDramaticLightingFilter() {
-  // 🔴 يسار: +130 أحمر يتناقص باتجاه المنتصف
-  // 🔵 يمين: +130 أزرق يتناقص باتجاه المنتصف
-  // clip(0,255): لا يتجاوز الحد الأقصى
   return (
     `geq=` +
     `r='clip(r(X,Y)+if(lte(X,W/2),130*(1-X/(W/2)),0),0,255)':` +
@@ -1325,9 +1314,69 @@ function buildDramaticLightingFilter() {
   );
 }
 
+// 2️⃣ Zoom Out تدريجي (يبدأ قريب ثم يبتعد)
+function buildZoomOutFilter(duration, idx) {
+  const frames     = Math.ceil(duration * FPS);
+  const startZoom  = (1.25 + (idx % 3) * 0.05).toFixed(3);
+  const endZoom    = "1.02";
+
+  return (
+    `scale=` +
+    `w='trunc((iw*(${startZoom}-(${startZoom}-${endZoom})*min(on,${frames})/${frames}))/2)*2':` +
+    `h='trunc((ih*(${startZoom}-(${startZoom}-${endZoom})*min(on,${frames})/${frames}))/2)*2'`
+  );
+}
+
+// 3️⃣ اهتزاز الكاميرا الطبيعي
+function buildCameraShakeFilter(idx) {
+  const freq1 = (0.8 + (idx % 3) * 0.3).toFixed(2);
+  const freq2 = (0.5 + (idx % 2) * 0.4).toFixed(2);
+  const ampX  = 3 + (idx % 2);
+  const ampY  = 2 + (idx % 2);
+
+  return (
+    `crop=${WIDTH}:${HEIGHT}:` +
+    `'(iw-${WIDTH})/2+${ampX}*sin(2*PI*${freq1}*t)':` +
+    `'(ih-${HEIGHT})/2+${ampY}*sin(2*PI*${freq2}*t+1)'`
+  );
+}
+
+// 4️⃣ Film Look (Teal & Orange — أشهر look سينمائي)
+function buildFilmLookFilter() {
+  return (
+    `curves=` +
+    `r='0/0 0.25/0.20 0.5/0.55 0.75/0.80 1/0.95':` +
+    `g='0/0 0.25/0.22 0.5/0.50 0.75/0.78 1/0.92':` +
+    `b='0/0.05 0.25/0.28 0.5/0.55 0.75/0.82 1/1.0'`
+  );
+}
+
+// 5️⃣ Vignette (تعتيم الحواف)
+function buildVignetteFilter() {
+  return `vignette=PI/5:eval=frame`;
+}
+
+// 6️⃣ Lens Blur خفيف على الحواف
+function buildLensBlurFilter() {
+  return `unsharp=5:5:-0.5:5:5:-0.5`;
+}
+
+// 7️⃣ Grain + Hue + Sharpening
+function buildOriginalityFilters(idx) {
+  const hue      = (idx % 2 === 0 ? 3 : -3);
+  const sat      = (1.03 + (idx % 3) * 0.02).toFixed(2);
+  const noiseAmt = 3 + (idx % 3);
+  const sharpAmt = (0.35 + (idx % 2) * 0.1).toFixed(2);
+
+  return (
+    `hue=h=${hue}:s=${sat},` +
+    `noise=alls=${noiseAmt}:allf=t+u,` +
+    `unsharp=3:3:${sharpAmt}:3:3:0.0`
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// PROCESS BACKGROUND
-// ✅ scale + crop بسيط (بدون zoompan) + إضاءة 🔴🔵
+// PROCESS BACKGROUND — Pipeline الكامل
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildColorGrading(isHookClip) {
@@ -1336,96 +1385,111 @@ function buildColorGrading(isHookClip) {
     : `eq=contrast=1.12:brightness=-0.02:saturation=0.88`;
 }
 
-function processBackground(
-  videoPath,
-  duration,
-  outPath,
-  idx,
-  isHookClip = false
-) {
+function processBackground(videoPath, duration, outPath, idx, isHookClip = false) {
   const d  = Math.max(duration, 0.5);
   const fi = Math.min(0.3, d * 0.08);
   const fo = Math.min(0.3, d * 0.08);
 
-  // ✅ scale + crop بسيط بدون zoompan
-  const scaleAndCrop =
-    `scale=${WIDTH}:${HEIGHT}:` +
-    `force_original_aspect_ratio=increase,` +
-    `crop=${WIDTH}:${HEIGHT},` +
-    `setsar=1`;
-
-  const grading  = buildColorGrading(isHookClip);
-  const lighting = buildDramaticLightingFilter();
-
-  // ✅ Pipeline: scale → grading → lighting 🔴🔵 → fade
+  // ✅ كل الفلاتر مجتمعة
   const vf =
-    `${scaleAndCrop},` +
-    `${grading},` +
-    `${lighting},` +
+    // 1. تبطيء 0.75x + mirror أفقي
+    `setpts=1.333*PTS,hflip,` +
+    // 2. Zoom Out (يبدأ قريب ثم يبتعد)
+    `${buildZoomOutFilter(d, idx)},` +
+    // 3. اهتزاز الكاميرا
+    `${buildCameraShakeFilter(idx)},` +
+    // 4. Color Grading
+    `${buildColorGrading(isHookClip)},` +
+    // 5. Film Look (Teal & Orange)
+    `${buildFilmLookFilter()},` +
+    // 6. 🔴🔵 إضاءة درامية
+    `${buildDramaticLightingFilter()},` +
+    // 7. Vignette
+    `${buildVignetteFilter()},` +
+    // 8. Lens Blur خفيف
+    `${buildLensBlurFilter()},` +
+    // 9. Grain + Hue + Sharpening
+    `${buildOriginalityFilters(idx)},` +
+    // 10. Fade In/Out
     `fade=t=in:st=0:d=${fi.toFixed(3)},` +
     `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
 
   const srcDur  = probeDuration(videoPath);
+  // ✅ نضاعف مدة الـ loop لأن الفيديو مبطأ 0.75x
+  const needDur = d * 1.4;
   const loopArg =
-    srcDur > 0 && srcDur < d + 0.5
+    srcDur > 0 && srcDur < needDur
       ? ["-stream_loop", "-1"]
       : [];
 
   let r = runFFmpeg([
     "-y", ...loopArg, "-i", videoPath,
-    "-t", d.toFixed(3),
+    "-t", (d * 1.4).toFixed(3),
     "-vf", vf,
     "-r", String(FPS),
-    "-c:v", "libx264",
-    "-preset", "fast",
+    "-c:v", "libx264", "-preset", "fast",
     "-crf", isHookClip ? "16" : "18",
-    "-pix_fmt", "yuv420p",
-    "-an",
+    "-pix_fmt", "yuv420p", "-an",
     outPath,
   ]);
 
-  // Fallback 1: بدون lighting
+  // Fallback 1: بدون zoom + shake
   if (r.status !== 0) {
-    console.log(
-      "  ⚠️  Lighting filter failed — trying without..."
-    );
-    const vfNoLight =
-      `${scaleAndCrop},` +
-      `${grading},` +
+    console.log("  ⚠️  Full filter failed — fallback 1...");
+    const vfSimple =
+      `setpts=1.333*PTS,hflip,` +
+      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
+      `crop=${WIDTH}:${HEIGHT},setsar=1,` +
+      `${buildColorGrading(isHookClip)},` +
+      `${buildDramaticLightingFilter()},` +
+      `${buildOriginalityFilters(idx)},` +
       `fade=t=in:st=0:d=${fi.toFixed(3)},` +
       `fade=t=out:st=${(d - fo).toFixed(3)}:d=${fo.toFixed(3)}`;
 
     r = runFFmpeg([
       "-y", ...loopArg, "-i", videoPath,
-      "-t", d.toFixed(3),
-      "-vf", vfNoLight,
+      "-t", (d * 1.4).toFixed(3),
+      "-vf", vfSimple,
       "-r", String(FPS),
-      "-c:v", "libx264",
-      "-preset", "fast",
-      "-crf", "21",
-      "-pix_fmt", "yuv420p",
-      "-an",
+      "-c:v", "libx264", "-preset", "fast",
+      "-crf", "21", "-pix_fmt", "yuv420p", "-an",
       outPath,
     ]);
+  }
 
-    // Fallback 2: scale بسيط فقط
-    if (r.status !== 0) {
-      runFFmpeg([
-        "-y", "-stream_loop", "-1", "-i", videoPath,
-        "-t", d.toFixed(3),
-        "-vf", scaleAndCrop,
-        "-r", String(FPS),
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "23",
-        "-pix_fmt", "yuv420p",
-        "-an",
-        outPath,
-      ]);
-    }
+  // Fallback 2: scale بسيط فقط
+  if (r.status !== 0) {
+    runFFmpeg([
+      "-y", "-stream_loop", "-1", "-i", videoPath,
+      "-t", d.toFixed(3),
+      "-vf",
+      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,` +
+      `crop=${WIDTH}:${HEIGHT},setsar=1`,
+      "-r", String(FPS),
+      "-c:v", "libx264", "-preset", "fast",
+      "-crf", "23", "-pix_fmt", "yuv420p", "-an",
+      outPath,
+    ]);
   }
 
   return outPath;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIO — Bass Boost + Spatial
+// ═══════════════════════════════════════════════════════════════════════════
+
+function buildAudioFilters() {
+  return (
+    // Bass Boost
+    `equalizer=f=80:width_type=o:width=2:g=4,` +
+    // Presence boost (صوت أوضح)
+    `equalizer=f=3000:width_type=o:width=2:g=2,` +
+    // Room Reverb خفيف
+    `aecho=0.8:0.88:60:0.4,` +
+    // Normalize
+    `loudnorm=I=-16:TP=-1.5:LRA=11`
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1434,12 +1498,10 @@ function processBackground(
 
 function framesToMov(frameDir, outPath) {
   runFFmpeg([
-    "-y",
-    "-framerate", String(FPS),
+    "-y", "-framerate", String(FPS),
     "-i", `${frameDir}/frame_%06d.png`,
     "-vf", `scale=${WIDTH}:${HEIGHT},format=rgba`,
-    "-c:v", "png", "-an",
-    outPath,
+    "-c:v", "png", "-an", outPath,
   ]);
   return outPath;
 }
@@ -1449,43 +1511,29 @@ function overlayOnBg(bgMp4, capMov, audioPth, outPath) {
     "[1:v]format=rgba[cap];" +
     "[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]";
 
-  // ✅ المحاولة الأولى: صوت من BG video
   let r = runFFmpeg([
-    "-y",
-    "-i", bgMp4,
-    "-i", capMov,
+    "-y", "-i", bgMp4, "-i", capMov,
     "-filter_complex", overlayFilter,
-    "-map", "[out]",
-    "-map", "0:a:0",
+    "-map", "[out]", "-map", "0:a:0",
     "-c:v", "libx264", "-preset", "fast", "-crf", "19",
     "-c:a", "aac", "-b:a", "192k",
-    "-pix_fmt", "yuv420p",
-    outPath,
+    "-pix_fmt", "yuv420p", outPath,
   ]);
 
-  // ✅ Fallback: صوت من ملف منفصل
   if (r.status !== 0 && audioPth) {
     console.log("  ⚠️  Using external audio fallback...");
     r = runFFmpeg([
-      "-y",
-      "-i", bgMp4,
-      "-i", capMov,
-      "-i", audioPth,
+      "-y", "-i", bgMp4, "-i", capMov, "-i", audioPth,
       "-filter_complex", overlayFilter,
-      "-map", "[out]",
-      "-map", "2:a:0",
+      "-map", "[out]", "-map", "2:a:0",
       "-c:v", "libx264", "-preset", "fast", "-crf", "19",
       "-c:a", "aac", "-b:a", "192k",
-      "-pix_fmt", "yuv420p",
-      outPath,
+      "-pix_fmt", "yuv420p", outPath,
     ]);
   }
 
   if (r.status !== 0) {
-    console.error(
-      "❌ overlayOnBg failed:",
-      r.stderr?.toString().slice(-200)
-    );
+    console.error("❌ overlayOnBg failed:", r.stderr?.toString().slice(-200));
   }
 
   return outPath;
@@ -1503,11 +1551,8 @@ function xfadeConcat(clips, durs) {
   for (let i = 1; i < clips.length; i++) {
     offset += durs[i - 1] - XFADE;
     if (offset < 0) offset = 0;
-
-    const out   =
-      i === clips.length - 1 ? "[vout]" : `[v${i}]`;
-    const trans =
-      XFADE_TRANSITIONS[(i - 1) % XFADE_TRANSITIONS.length];
+    const out   = i === clips.length - 1 ? "[vout]" : `[v${i}]`;
+    const trans = XFADE_TRANSITIONS[(i - 1) % XFADE_TRANSITIONS.length];
     filters.push(
       `${last}[${i}:v]xfade=transition=${trans}:` +
       `duration=${XFADE}:offset=${offset.toFixed(3)}${out}`
@@ -1517,24 +1562,19 @@ function xfadeConcat(clips, durs) {
 
   const outPath = join(TMP, "xfaded.mp4");
   const r = runFFmpeg([
-    "-y",
-    ...clips.flatMap((p) => ["-i", p]),
+    "-y", ...clips.flatMap((p) => ["-i", p]),
     "-filter_complex", filters.join(";"),
     "-map", "[vout]",
     "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-    "-pix_fmt", "yuv420p", "-an",
-    outPath,
+    "-pix_fmt", "yuv420p", "-an", outPath,
   ]);
 
   if (r.status !== 0) {
     const lst = join(TMP, "list.txt");
-    writeFileSync(
-      lst, clips.map((p) => `file '${p}'`).join("\n")
-    );
+    writeFileSync(lst, clips.map((p) => `file '${p}'`).join("\n"));
     const raw = join(TMP, "raw.mp4");
     spawnSync("ffmpeg", [
-      "-y", "-f", "concat", "-safe", "0",
-      "-i", lst, "-c", "copy", raw,
+      "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", raw,
     ], { stdio: "inherit" });
     return raw;
   }
@@ -1542,12 +1582,42 @@ function xfadeConcat(clips, durs) {
   return outPath;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// APPLY iPhone METADATA
+// ═══════════════════════════════════════════════════════════════════════════
+
+function applyMetadata(inputPath, outputPath) {
+  const metadata = buildiPhoneMetadata();
+
+  const r = runFFmpeg([
+    "-y", "-i", inputPath,
+    "-c", "copy",
+    ...metadata,
+    outputPath,
+  ]);
+
+  if (r.status !== 0) {
+    console.log("  ⚠️  Metadata apply failed — copying as-is");
+    copyFileSync(inputPath, outputPath);
+  } else {
+    console.log(
+      `  ✅ Metadata:\n` +
+      `     📱 iPhone 17 Pro Max\n` +
+      `     🎬 Adobe Premiere Pro 2025\n` +
+      `     📍 ${location.city}, ${location.country}\n` +
+      `     📅 ${new Date().toLocaleDateString()}`
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MERGE AUDIO + METADATA
+// ═══════════════════════════════════════════════════════════════════════════
+
 function mergeAudio(videoPath, audioPath, outPath) {
   const aDur = probeDuration(audioPath);
   const vDur = probeDuration(videoPath);
-  console.log(
-    `🎵 Audio: ${aDur.toFixed(3)}s | Video: ${vDur.toFixed(3)}s`
-  );
+  console.log(`🎵 Audio: ${aDur.toFixed(3)}s | Video: ${vDur.toFixed(3)}s`);
 
   let vid = videoPath;
   if (vDur < aDur - 0.3) {
@@ -1556,20 +1626,25 @@ function mergeAudio(videoPath, audioPath, outPath) {
       "-y", "-stream_loop", "-1", "-i", videoPath,
       "-t", aDur.toFixed(3),
       "-c:v", "libx264", "-preset", "fast", "-crf", "21",
-      "-pix_fmt", "yuv420p", "-an",
-      looped,
+      "-pix_fmt", "yuv420p", "-an", looped,
     ]);
     if (r.status === 0) vid = looped;
   }
 
+  // دمج مع تحسين الصوت
+  const tempOut = join(TMP, "merged_temp.mp4");
   runFFmpeg([
     "-y", "-i", vid, "-i", audioPath,
     "-map", "0:v:0", "-map", "1:a:0",
-    "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+    "-c:v", "copy",
+    "-af", buildAudioFilters(),
+    "-c:a", "aac", "-b:a", "192k",
     "-t", aDur.toFixed(3),
-    outPath,
+    tempOut,
   ]);
 
+  // تطبيق iPhone metadata
+  applyMetadata(tempOut, outPath);
   console.log(`✅ Done → ${outPath}`);
 }
 
@@ -1592,9 +1667,7 @@ async function handleBgOnlyMode() {
   const finalClips = [];
   const clipDurs   = [];
 
-  console.log(
-    `📊 ${clipPlan.length} clips [${content_mode.toUpperCase()}]`
-  );
+  console.log(`📊 ${clipPlan.length} clips [${content_mode.toUpperCase()}]`);
 
   for (const clip of clipPlan) {
     const { index, duration, videoPath, isHook } = clip;
@@ -1603,13 +1676,8 @@ async function handleBgOnlyMode() {
       `${duration.toFixed(2)}s${isHook ? " 🔥" : ""}... `
     );
 
-    const bgMp4 = join(
-      TMP, `bg_${String(index).padStart(3, "0")}.mp4`
-    );
-    // ✅ scale + crop + إضاءة 🔴🔵
-    processBackground(
-      videoPath, duration, bgMp4, index, isHook
-    );
+    const bgMp4 = join(TMP, `bg_${String(index).padStart(3, "0")}.mp4`);
+    processBackground(videoPath, duration, bgMp4, index, isHook);
     finalClips.push(bgMp4);
     clipDurs.push(duration);
     process.stdout.write("✓\n");
@@ -1618,16 +1686,12 @@ async function handleBgOnlyMode() {
   console.log(`\n✨ Concat ${finalClips.length} clips...`);
   const dissolved = xfadeConcat(finalClips, clipDurs);
 
-  console.log("🎵 Merging audio...");
+  console.log("🎵 Merging audio + metadata...");
   mergeAudio(dissolved, audio, outputPath);
 
-  console.log(
-    `\n🎉 BG Video [${content_mode.toUpperCase()}] → ` +
-    `${outputPath}\n`
-  );
+  console.log(`\n🎉 BG Video [${content_mode.toUpperCase()}] → ${outputPath}\n`);
 }
 
-// ✅ words_only — SHORT
 async function handleWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
@@ -1643,35 +1707,32 @@ async function handleWordsOnlyMode() {
 
   try {
     console.log("🖼️  Rendering PNGs [SHORT]...");
-    const pngCache = await renderAllPNGsShort(
-      page, frameStateMap, boundaryMap
-    );
+    const pngCache = await renderAllPNGsShort(page, frameStateMap, boundaryMap);
     await browser.close();
     console.log(`✅ ${pngCache.size} PNGs\n`);
 
     const frameDir = join(TMP, "frames_words");
     mkdirSync(frameDir, { recursive: true });
 
-    const emptyPng =
-      pngCache.get("empty_n") ||
-      pngCache.get("intro_f0");
+    const emptyPng = pngCache.get("empty_n") || pngCache.get("intro_f0");
 
     for (let f = 0; f < totalFrames; f++) {
       const ts  = boundaryMap[f] || null;
       const key = stateKey(frameStateMap[f], f, ts);
       const src  = pngCache.get(key) || emptyPng;
-      const dest = join(
-        frameDir,
-        `frame_${String(f).padStart(6, "0")}.png`
-      );
+      const dest = join(frameDir, `frame_${String(f).padStart(6, "0")}.png`);
       linkFrame(src, dest);
     }
 
-    const capMov = join(TMP, "cap_words.mov");
+    const capMov    = join(TMP, "cap_words.mov");
     framesToMov(frameDir, capMov);
 
     console.log("🔧 Overlaying words on BG video [SHORT]...");
-    overlayOnBg(bgVideoPath, capMov, audio, outputPath);
+    const tempFinal = join(TMP, "final_temp.mp4");
+    overlayOnBg(bgVideoPath, capMov, audio, tempFinal);
+
+    console.log("📱 Applying iPhone 17 Pro Max metadata...");
+    applyMetadata(tempFinal, outputPath);
 
     console.log(`\n🎉 Final [SHORT] → ${outputPath}\n`);
   } finally {
@@ -1679,7 +1740,6 @@ async function handleWordsOnlyMode() {
   }
 }
 
-// ✅ words_only — LONG
 async function handleLongWordsOnlyMode() {
   const bgVideoPath = videos[0];
   if (!bgVideoPath) {
@@ -1715,18 +1775,19 @@ async function handleLongWordsOnlyMode() {
       const sentence = sentenceMap[f] || "";
       const key      = longStateKey(wordSt, ts, sentence);
       const src      = pngCache.get(key) || emptyPng;
-      const dest     = join(
-        frameDir,
-        `frame_${String(f).padStart(6, "0")}.png`
-      );
+      const dest     = join(frameDir, `frame_${String(f).padStart(6, "0")}.png`);
       linkFrame(src, dest);
     }
 
-    const capMov = join(TMP, "cap_long.mov");
+    const capMov    = join(TMP, "cap_long.mov");
     framesToMov(frameDir, capMov);
 
     console.log("🔧 Overlaying words on BG video [LONG]...");
-    overlayOnBg(bgVideoPath, capMov, audio, outputPath);
+    const tempFinal = join(TMP, "final_temp.mp4");
+    overlayOnBg(bgVideoPath, capMov, audio, tempFinal);
+
+    console.log("📱 Applying iPhone 17 Pro Max metadata...");
+    applyMetadata(tempFinal, outputPath);
 
     console.log(`\n🎉 Final [LONG] → ${outputPath}\n`);
   } finally {
@@ -1746,9 +1807,7 @@ const MODE_HANDLERS = {
 };
 
 async function main() {
-  console.log(
-    `\n🚀 Mode: ${mode} | Content: ${content_mode.toUpperCase()}\n`
-  );
+  console.log(`\n🚀 Mode: ${mode} | Content: ${content_mode.toUpperCase()}\n`);
 
   const handler = MODE_HANDLERS[mode];
   if (!handler) {
