@@ -693,6 +693,10 @@ def _run_remotion_render(manifest_path, output_path):
         raise RuntimeError(
             f"Render timeout ({RENDER_TIMEOUT}s)"
         )
+
+    # ✅ إظهار output من render.mjs
+    log.info(f"\n[RENDER LOG]\n{r.stdout}\n[/RENDER LOG]")
+
     if r.returncode != 0:
         raise RuntimeError(
             f"Render failed:\n{r.stdout[-600:]}"
