@@ -811,8 +811,8 @@ function concatClipsWithTransitions(processedClips, clipPlan) {
   if (groupOutputs.length===1) return groupOutputs[0].file;
 
   // ── تطبيق major transitions بين groups ─────────────────────────
-  let current    = groupOutputs[0].file;
-  let currentDur = groupOutputs[0].dur;
+  let mergedFile = groupOutputs[0].file;
+  let mergedDur  = groupOutputs[0].dur;
 
   for (let i=1; i<groupOutputs.length; i++) {
     const trans    = groupOutputs[i-1].trans;
