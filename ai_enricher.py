@@ -9,6 +9,7 @@ Features:
   ✅ Street language descriptions per region
   ✅ Safe truncation (prevents truncated JSON)
   ✅ Auto-retry with key rotation on rate limits
+  ✅ Practical stock video keywords (Pexels/Pixabay ready)
 
 Operations:
   1.  Content Analysis
@@ -43,9 +44,9 @@ from tags_parser import (
     auto_correct_tag,
 )
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # CONFIGURATION
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 MODEL = "llama-3.3-70b-versatile"
 
@@ -68,19 +69,18 @@ SENTENCE_TAGS_CHARS     = 120
 DEFAULT_EMOJI_LEFT   = "🔥"
 DEFAULT_EMOJI_RIGHT  = "💥"
 DEFAULT_INTENSITY    = 7
-DEFAULT_VISUAL_STYLE = "cinematic dark dramatic close-up face"
+DEFAULT_VISUAL_STYLE = "person serious face talking camera"
 
 RATE_LIMIT_INDICATORS = ("429", "rate_limit")
-
-CAPTION_MAX_LENGTH = 60000
+CAPTION_MAX_LENGTH    = 60000
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # LANGUAGE MAPS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 LANG_NAMES: dict[str, str] = {
     "ar": "Arabic",
@@ -95,36 +95,143 @@ LANG_KEY: dict[str, str] = {
 }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# TAG VISUAL STYLES
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# TAG VISUAL STYLES — عملية للبحث في stock videos
+# ═══════════════════════════════════════════════════════════════════
 
 TAG_VISUAL_STYLE: dict[str, str] = {
-    "intrigue":    "dark mysterious close-up shadow whisper secret",
-    "desire":      "longing gaze reaching hand beautiful dream soft light",
-    "information": "clear face reaction person listening neutral expression",
-    "shock":       "sudden face expression change jaw drop eyes wide open",
-    "urgency":     "running person clock ticking intense stare fast movement",
-    "wisdom":      "old person thinking silhouette deep shadow slow motion",
-    "confident":   "strong eye contact camera powerful stance direct gaze",
-    "calm":        "slow breathing peaceful face gentle movement soft focus",
-    "emotional":   "tears on face trembling lip hand on heart pain visible",
-    "inspiration": "person rising up breakthrough moment sunrise dramatic",
-    "pause":        "person standing alone darkness dramatic silence moment",
-    "whisper":      "person whispering close up lips shadow mystery",
-    "curiosity":    "person looking through keyhole curious eyes questioning",
-    "storytelling": "person speaking firelight crowd listening engaged",
-    "dramatic":     "cinematic wide shot dramatic lighting storm approaching",
-    "revelation":   "person gasping truth revealed bright light darkness",
-    "tension":      "tight grip hands sweat close up nervous expression",
-    "climax":       "epic moment peak emotion powerful breakthrough scene",
-    "powerful":     "strong confident person unstoppable force determination",
+    "intrigue":    "person whispering secret curious close up face",
+    "desire":      "person reaching out longing wanting emotional",
+    "information": "person talking explaining serious face camera",
+    "shock":       "person shocked surprised wide eyes jaw drop reaction",
+    "urgency":     "person running fast stressed hurrying time pressure",
+    "wisdom":      "older person thinking contemplating slow calm",
+    "confident":   "confident person speaking assertive strong posture",
+    "calm":        "person breathing calm peaceful relaxed serene",
+    "emotional":   "person crying emotional tears face close up pain",
+    "inspiration": "person motivated determined success forward movement",
+    "pause":       "person standing alone silent thinking moment",
+    "whisper":     "person whispering close up lips secretive",
+    "curiosity":   "person curious questioning looking wondering",
+    "storytelling":"person speaking engaged crowd listening story",
+    "dramatic":    "intense emotional dramatic person scene powerful",
+    "revelation":  "person shocked truth realization wide eyes",
+    "tension":     "person nervous anxious stressed hands face",
+    "climax":      "intense emotional peak powerful breakthrough person",
+    "powerful":    "strong determined person confident unstoppable",
 }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# ABSTRACT WORDS — محظورة في visual keywords
+# ═══════════════════════════════════════════════════════════════════
+
+ABSTRACT_WORDS: set[str] = {
+    "mystery", "mysterious", "journey", "soul", "shadows",
+    "silence", "whisper", "darkness", "longing", "ethereal",
+    "abstract", "spiritual", "void", "abyss", "illusion",
+    "dream", "fantasy", "essence", "energy", "vibes",
+    "magic", "surreal", "haunting", "melancholy", "solitude",
+    "echo", "horizon", "twilight", "dusk", "mist",
+    "fog", "haze", "glow", "radiance", "aura",
+    "pulse", "rhythm", "flow", "whispers", "echoes",
+}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# VISUAL KEYWORDS EXAMPLES — حسب نوع المحتوى
+# ═══════════════════════════════════════════════════════════════════
+
+VISUAL_KEYWORDS_EXAMPLES: dict[str, list[str]] = {
+    "psychology": [
+        "person thinking deeply alone indoor",
+        "facial expression emotion change close up",
+        "body language behavior human interaction",
+    ],
+    "relationships": [
+        "two people serious conversation face",
+        "person listening attentively nodding",
+        "couple disagreement discussion indoor",
+    ],
+    "motivation": [
+        "person determined walking forward purposeful",
+        "focused person working hard success",
+        "motivated person overcoming challenge obstacle",
+    ],
+    "social_skills": [
+        "person speaking confidently group people",
+        "confident handshake eye contact meeting",
+        "person assertive body language speaking",
+    ],
+    "business": [
+        "professional person office working serious",
+        "business meeting people discussing table",
+        "entrepreneur focused determined working",
+    ],
+    "lifestyle": [
+        "person daily routine habit morning",
+        "healthy person active lifestyle movement",
+        "person organizing planning focused",
+    ],
+    "education": [
+        "person studying learning focused reading",
+        "student concentrating thinking problem",
+        "person explaining teaching whiteboard",
+    ],
+    "health": [
+        "person healthy active movement exercise",
+        "person feeling good energetic positive",
+        "wellness routine person calm breathing",
+    ],
+    "finance": [
+        "person serious financial planning thinking",
+        "professional calculating analyzing focused",
+        "person stressed worried financial pressure",
+    ],
+    "spirituality": [
+        "person calm meditation peaceful breathing",
+        "person reflecting thinking quiet moment",
+        "serene person nature peaceful outdoor",
+    ],
+    "default": [
+        "person serious face close up talking",
+        "emotional person expression dramatic",
+        "person speaking camera direct confident",
+    ],
+}
+
+
+def _get_topic_examples(content_type: str) -> list[str]:
+    return VISUAL_KEYWORDS_EXAMPLES.get(
+        content_type,
+        VISUAL_KEYWORDS_EXAMPLES["default"],
+    )
+
+
+def _filter_abstract_keywords(keywords: list[str]) -> list[str]:
+    """فلترة الـ keywords المجردة وإبقاء العملية."""
+    result = []
+    for kw in keywords:
+        words        = kw.lower().split()
+        abstract_count = sum(1 for w in words if w in ABSTRACT_WORDS)
+        total          = len(words)
+
+        if abstract_count == 0:
+            # ✅ لا كلمات مجردة — نقبل الـ keyword
+            result.append(kw)
+        elif abstract_count < total:
+            # ✅ بعض الكلمات عملية — نحذف المجردة
+            clean = [w for w in words if w not in ABSTRACT_WORDS]
+            if len(clean) >= 2:
+                result.append(" ".join(clean))
+        # ❌ كل الكلمات مجردة — نرفض الـ keyword
+
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════════
 # STREET STYLES
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 STREET_STYLE: dict[str, dict] = {
     "ar": {
@@ -167,34 +274,31 @@ STREET_STYLE: dict[str, dict] = {
 }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # DEFAULTS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 DEFAULT_ACCENT_COLORS = [
-    "#FF003C",
-    "#FFD700",
-    "#00FFFF",
-    "#39FF14",
+    "#FF003C", "#FFD700", "#00FFFF", "#39FF14",
 ]
 
 HOOK_FALLBACK         = "shocking dramatic moment"
-HOOK_FALLBACK_KEYWORD = "dramatic close-up emotional moment dark"
+HOOK_FALLBACK_KEYWORD = "person emotional dramatic close up face"
 
 _HEX_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # EXCEPTIONS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 class AIEnrichmentError(Exception):
     pass
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # GROQ API KEY ROTATION
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 _groq_key_idx: int       = 0
 _GROQ_KEYS:    list[str] = []
@@ -249,9 +353,9 @@ def _is_rate_limit_error(error: str) -> bool:
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # JSON HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _clean_json(raw: str) -> str:
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
@@ -283,9 +387,9 @@ def _parse_json_response(
         raise AIEnrichmentError(f"❌ {operation}: {e}")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # CORE GROQ CALLER
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _call_groq(
     prompt:         str,
@@ -349,9 +453,9 @@ def _call_groq(
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # SAFE TRUNCATE
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _safe_truncate(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
@@ -373,9 +477,9 @@ def _safe_title(title: str, max_chars: int = TITLE_MAX_CHARS) -> str:
     return title[:max_chars].strip() + "..."
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # DATA EXTRACTION HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _extract_string_list(
     data:      list,
@@ -437,9 +541,9 @@ def _extract_en_value(
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 1️⃣ CONTENT ANALYSIS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 REQUIRED_ANALYSIS_FIELDS = (
     "content_type",
@@ -499,9 +603,9 @@ def analyze_content(
     return data
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 2️⃣ TAG SUGGESTION
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _normalize_suggested_tag(tag: str) -> str:
     tag = str(tag).strip().lower()
@@ -558,9 +662,9 @@ def suggest_tags_for_sentences(
     return cleaned_tags
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 3️⃣ POWER WORDS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _filter_power_words(words: list, count: int) -> list[str]:
     seen:   set[str]  = set()
@@ -622,9 +726,9 @@ def generate_power_words(
     return result
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 4️⃣ VISUAL KEYWORDS — ✅ طلب واحد لكل الجمل
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# 4️⃣ VISUAL KEYWORDS — مُحسَّن جذرياً
+# ═══════════════════════════════════════════════════════════════════
 
 def generate_visual_keywords(
     sentences: list[str],
@@ -633,8 +737,8 @@ def generate_visual_keywords(
     tags:      Optional[list[str]] = None,
 ) -> list[list[str]]:
     """
-    ✅ توليد visual keywords لكل الجمل في طلب واحد فقط.
-    بدلاً من N طلبات منفصلة — يوفر Rate Limits بشكل كبير.
+    ✅ توليد visual keywords عملية للبحث في Pexels/Pixabay.
+    طلب واحد فقط لكل الجمل — يوفر Rate Limits.
     """
     if not sentences:
         raise AIEnrichmentError(
@@ -644,62 +748,87 @@ def generate_visual_keywords(
     n            = len(sentences)
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "neutral")
+    safe_title   = _safe_title(title, TITLE_SHORT_CHARS)
 
     log.info(
         f"  🎬 Generating B-Roll keywords: {n} sentences..."
     )
 
-    # بناء قائمة الجمل مع tags و visual hints
+    # ✅ أمثلة عملية حسب نوع المحتوى
+    topic_examples = _get_topic_examples(content_type)
+    examples_str   = "\n".join(
+        f'  GOOD: "{ex}"' for ex in topic_examples
+    )
+
+    # بناء قائمة الجمل مع context
     sentences_text = ""
     for i, sentence in enumerate(sentences):
-        tag = (
+        tag           = (
             tags[i] if tags and i < len(tags)
             else "information"
         )
-        visual_style  = TAG_VISUAL_STYLE.get(
+        visual_hint   = TAG_VISUAL_STYLE.get(
             tag, DEFAULT_VISUAL_STYLE
         )
         safe_sentence = _safe_truncate(
             sentence, SENTENCE_KEYWORDS_CHARS
         )
         sentences_text += (
-            f"{i+1}. [{tag}] \"{safe_sentence}\"\n"
-            f"   Visual hint: {visual_style}\n\n"
+            f"Sentence {i+1}:\n"
+            f"  Emotion tag: [{tag}]\n"
+            f"  Text: \"{safe_sentence}\"\n"
+            f"  Visual direction: {visual_hint}\n\n"
         )
 
+    # ✅ Prompt محسّن مع أمثلة واضحة وقواعد صارمة
     prompt = (
-        f"Generate B-Roll stock video keywords "
-        f"for ALL {n} sentences at once.\n\n"
-        f"Video type: {content_type} | "
-        f"Emotion: {emotion}\n\n"
-        f"Rules:\n"
-        f"- English only\n"
-        f"- 3-6 words per keyword\n"
-        f"- Dark cinematic style\n"
-        f"- Exactly 3 keywords per sentence\n"
-        f"- Concrete visuals (no abstract words)\n\n"
-        f"Sentences:\n{sentences_text}"
-        f"Return ONLY a JSON array of {n} arrays "
-        f"(one per sentence):\n"
-        f'[["kw1","kw2","kw3"],["kw1","kw2","kw3"],...]'
+        f"You are a professional video editor searching stock footage.\n"
+        f"Generate PRACTICAL search keywords for Pexels and Pixabay.\n\n"
+        f"Video topic: \"{safe_title}\"\n"
+        f"Content type: {content_type} | Main emotion: {emotion}\n\n"
+        f"=== CRITICAL RULES ===\n"
+        f"1. Keywords must work as REAL search queries on Pexels/Pixabay\n"
+        f"2. ALWAYS include: person/people OR face OR hands\n"
+        f"3. Include a clear ACTION or EMOTION word\n"
+        f"4. 3-5 words per keyword\n"
+        f"5. English only\n"
+        f"6. Be SPECIFIC and CONCRETE\n\n"
+        f"=== FORBIDDEN WORDS (never use these) ===\n"
+        f"mystery, shadows, silence, soul, journey, ethereal, "
+        f"longing, abyss, whisper, darkness, dream, essence\n\n"
+        f"=== GOOD EXAMPLES for {content_type} content ===\n"
+        f"{examples_str}\n\n"
+        f"=== BAD EXAMPLES (too abstract, avoid) ===\n"
+        f'  BAD: "dark shadows mysterious atmosphere"\n'
+        f'  BAD: "longing eyes silent whisper"\n'
+        f'  BAD: "soul journey endless horizon"\n'
+        f'  GOOD: "person serious face talking camera"\n'
+        f'  GOOD: "two people conversation disagreement"\n'
+        f'  GOOD: "emotional person crying close up"\n\n'
+        f"=== SENTENCES TO PROCESS ({n} total) ===\n"
+        f"{sentences_text}"
+        f"=== OUTPUT FORMAT ===\n"
+        f"Return ONLY a JSON array of {n} arrays, "
+        f"3 keywords per sentence:\n"
+        f'[["keyword1 action concrete","keyword2","keyword3"],...]'
     )
 
+    # ✅ Fallbacks عملية وليست مجردة
     fallbacks = [
-        "dramatic close up face dark cinematic",
-        "person emotional expression shadow",
-        "mysterious silhouette dark background",
+        "person serious face talking camera",
+        "emotional person close up expression",
+        "confident person speaking direct camera",
     ]
 
     try:
         raw = _call_groq(
             prompt,
-            # ✅ tokens أكثر قليلاً لأن الجواب يحتوي كل الجمل
-            max_tokens     = 800,
-            temperature    = 0.5,
-            operation_name = f"Keywords (all {n} sentences)",
+            max_tokens     = 1200,
+            temperature    = 0.3,  # ✅ منخفض = أكثر دقة وعملية
+            operation_name = f"Visual Keywords ({n} sentences)",
         )
 
-        data   = _parse_json_response(raw, list, "Keywords")
+        data   = _parse_json_response(raw, list, "Visual Keywords")
         result: list[list[str]] = []
 
         for i in range(n):
@@ -709,35 +838,44 @@ def generate_visual_keywords(
             )
 
             if i < len(data) and isinstance(data[i], list):
-                kws = [
+                # ✅ فلترة الكلمات المجردة
+                raw_kws = [
                     str(k).strip()
-                    for k in data[i][:3]
+                    for k in data[i][:5]
                     if str(k).strip()
                 ]
+                kws = _filter_abstract_keywords(raw_kws)
+
+                # إذا بقي أقل من 3 بعد الفلترة — أضف fallbacks
                 while len(kws) < 3:
-                    kws.append(fallbacks[len(kws) % 3])
+                    fb = fallbacks[len(kws) % 3]
+                    if fb not in kws:
+                        kws.append(fb)
+                    else:
+                        kws.append(
+                            f"person {tag} expression face"
+                        )
             else:
                 kws = list(fallbacks)
 
             result.append(kws[:3])
-            log.info(f"     [{i+1}/{n}] [{tag}] → {kws}")
+            log.info(f"     [{i+1}/{n}] [{tag}] → {kws[:3]}")
 
         log.info(
-            f"  ✅ B-Roll Keywords: {len(result)} sentences × 3"
+            f"  ✅ Visual Keywords: {len(result)} sentences × 3"
         )
         return result
 
     except Exception as e:
         log.warning(
-            f"  ⚠️  Keywords batch failed: {e} "
-            f"— using fallbacks"
+            f"  ⚠️  Keywords batch failed: {e} — using fallbacks"
         )
         return [list(fallbacks) for _ in range(n)]
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 5️⃣ + 6️⃣ + 7️⃣ — BILINGUAL CONTENT
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _generate_bilingual_content(
     operation_name: str,
@@ -912,9 +1050,9 @@ def generate_hashtags(
     return result
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 8️⃣ CAPTIONS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _extract_caption(data: dict, lang: str, lang_key: str) -> str:
     for key in (lang_key, lang, "ar", "fr"):
@@ -986,8 +1124,8 @@ def generate_captions(
     if not en_caption:
         en_caption = lang_caption
 
-    lang_tags = hashtags.get(lang_key, hashtags.get(lang, []))
-    en_tags   = hashtags.get("en", [])
+    lang_tags    = hashtags.get(lang_key, hashtags.get(lang, []))
+    en_tags      = hashtags.get("en", [])
 
     lang_caption = _append_hashtags_to_caption(lang_caption, lang_tags)
     en_caption   = _append_hashtags_to_caption(en_caption, en_tags)
@@ -1005,9 +1143,9 @@ def generate_captions(
     return result
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 9️⃣ STREET DESCRIPTION
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def generate_street_description(
     title:   str,
@@ -1066,9 +1204,9 @@ def generate_street_description(
         )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 🔟 ACCENT COLORS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _validate_hex_colors(colors: list, limit: int = 4) -> list[str]:
     valid: list[str] = []
@@ -1079,7 +1217,9 @@ def _validate_hex_colors(colors: list, limit: int = 4) -> list[str]:
     return valid
 
 
-def _fill_default_colors(colors: list[str], target: int = 4) -> list[str]:
+def _fill_default_colors(
+    colors: list[str], target: int = 4,
+) -> list[str]:
     while len(colors) < target:
         for default in DEFAULT_ACCENT_COLORS:
             if default not in colors:
@@ -1120,9 +1260,9 @@ def suggest_accent_colors(context: dict) -> list[str]:
     return final
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 1️⃣1️⃣ HOOK KEYWORD
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 PROMPT_PREFIXES_TO_STRIP = (
     "keyword:", "answer:", "result:", "→", ":",
@@ -1151,26 +1291,33 @@ def generate_hook_keyword(
     safe_title   = _safe_title(title, TITLE_SHORT_CHARS)
 
     prompt = (
-        f"ONE powerful visual keyword for first 3 seconds.\n\n"
-        f'Title: "{safe_title}" | Type: {content_type} | '
+        f"ONE powerful visual keyword for first 3 seconds of video.\n\n"
+        f'Topic: "{safe_title}" | Type: {content_type} | '
         f"Emotion: {emotion}\n\n"
         f"Rules:\n"
-        f"- 3-6 words MAX\n"
+        f"- 3-5 words ONLY\n"
         f"- English only\n"
-        f"- Shocking or intense\n"
-        f"- Concrete visual\n"
-        f"- Dark cinematic\n\n"
-        f"Return ONLY the keyword (no quotes, no JSON):\n"
-        f"Example: crying woman eyes closeup dark"
+        f"- Must work as Pexels/Pixabay search query\n"
+        f"- Include: person + action/emotion\n"
+        f"- Intense and concrete\n\n"
+        f"Examples:\n"
+        f"  'person shocked face close up'\n"
+        f"  'crying person emotional scene'\n"
+        f"  'determined person walking forward'\n\n"
+        f"Return ONLY the keyword phrase (no quotes, no JSON):"
     )
 
     raw     = _call_groq(
         prompt,
         max_tokens     = 50,
-        temperature    = 0.8,
+        temperature    = 0.5,
         operation_name = "Hook Keyword",
     )
     keyword = _clean_keyword_response(raw)
+
+    # ✅ فلترة الكلمات المجردة من الـ hook keyword
+    filtered = _filter_abstract_keywords([keyword])
+    keyword  = filtered[0] if filtered else HOOK_FALLBACK_KEYWORD
 
     if not keyword or len(keyword) > 80:
         keyword = HOOK_FALLBACK_KEYWORD
@@ -1179,9 +1326,9 @@ def generate_hook_keyword(
     return keyword
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 1️⃣2️⃣ CUSTOM HOOK
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def generate_custom_hook(
     title:   str,
@@ -1232,9 +1379,9 @@ def generate_custom_hook(
         return safe_title
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # 🎯 MASTER ENRICHMENT FUNCTION
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _build_attractive_title(title: str) -> dict:
     return {
@@ -1336,9 +1483,8 @@ def enrich_record(
     """
     الدالة الرئيسية للإثراء بالـ AI.
 
-    ✅ Groq  → كل العمليات (12 عملية)
-    ✅ Gemini → TTS فقط (في tts.py)
-    ✅ Keywords: طلب واحد لكل الجمل (توفير Rate Limits)
+    ✅ Keywords: practical + searchable في Pexels/Pixabay
+    ✅ طلب واحد فقط لكل الجمل (توفير Rate Limits)
     """
     title   = record.get("title", "")
     content = record.get("content", "").strip()
@@ -1362,7 +1508,7 @@ def enrich_record(
     # 3. Power Words
     power_words = generate_power_words(content, analysis, lang)
 
-    # 4. Visual Keywords ✅ طلب واحد فقط
+    # 4. Visual Keywords ✅ طلب واحد + practical
     sentences, tags = _prepare_keywords_input(tagged, content)
     visual_keywords = generate_visual_keywords(
         sentences = sentences,
@@ -1409,7 +1555,6 @@ def enrich_record(
         title, content, analysis, lang,
     )
 
-    # Build attractive title
     attractive_title = _build_attractive_title(title)
 
     if verbose:
