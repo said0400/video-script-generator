@@ -62,9 +62,11 @@ const OUTRO_FRAMES       = Math.floor(1.0 * FPS);
 const HOOK_FRAMES        = Math.floor(3.0 * FPS);
 const TITLE_SLIDE_FRAMES = Math.floor(0.6 * FPS);
 
+// ── Transition durations ───────────────────────────────────────────────────
 const MINOR_DUR = isShort ? 0.28 : 0.38;
 const MAJOR_DUR = isShort ? 0.50 : 0.65;
 
+// ── Minor xfade pool ───────────────────────────────────────────────────────
 const MINOR_XFADE_TYPES = [
   "fade",
   "smoothleft",
@@ -169,8 +171,23 @@ const safeOut = outputPath
 const TMP = join(tmpdir(), `vsg_${safeOut}`);
 mkdirSync(TMP, { recursive:true });
 
+// ── Log header ─────────────────────────────────────────────────────────────
 console.log(`📌 ${emoji_left} ${display_title} ${emoji_right}`);
-console.log(`🌐 Lang:${lang.toUpperCase()} | Mode:${mode} | Content:${content_mode.toUpperCase()} | ${WIDTH}×${HEIGHT}`);
+console.log(
+  `🌐 Lang:${lang.toUpperCase()} | ` +
+  `Mode:${mode} | ` +
+  `Content:${content_mode.toUpperCase()} | ` +
+  `${WIDTH}×${HEIGHT}`
+);
+
+// ✅ تمييز نوع النسخة في الـ logs
+if (content_mode === "short" && mode.includes("bg")) {
+  console.log("  📱 Portrait mode (Facebook/Reels)");
+} else if (content_mode === "short") {
+  console.log("  📱 Short/Portrait mode");
+} else {
+  console.log("  📺 Landscape mode (YouTube)");
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GPS & METADATA
@@ -327,7 +344,7 @@ function isPowerWord(w) {
   });
 }
 
-// ✅ linkFrame محسّن
+// ✅ linkFrame بدون dynamic import — محسّن
 function linkFrame(src, dst) {
   if (!src || !existsSync(src)) return;
   if (existsSync(dst)) return;
@@ -351,6 +368,7 @@ console.log(`🎵 Audio:${realAudioDuration.toFixed(3)}s | Frames:${totalFrames}
 const CTA_TAGS = ["confident","inspiration","powerful"];
 
 function detectVideoSections() {
+  // ✅ fallback ذكي إذا لم يكن هناك aligned
   if (!aligned || aligned.length===0) {
     const totalClips = (clip_durations && clip_durations.length>0)
       ? clip_durations.length
@@ -424,6 +442,7 @@ function buildClipPlan() {
     durations = Array.from({length:n}, () => avg);
   }
 
+  // ✅ مزامنة عدد الـ sections مع عدد الـ durations
   const count = durations.length;
   const syncedSections = Array.from({length:count}, (_,i) => {
     return sections[i] || {
@@ -541,7 +560,7 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip=false) {
       normOut,
     ]);
 
-    const normalizeOk = rNorm.status===0 && existsSync(normOut);
+    const normalizeOk  = rNorm.status===0 && existsSync(normOut);
     const effectsInput = normalizeOk ? normOut : videoPath;
 
     if (!normalizeOk) {
@@ -549,7 +568,7 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip=false) {
     }
 
     // ── Stage 1: Effects ────────────────────────────────────────
-    // ✅ إذا استخدمنا الفيديو الأصلي نضيف scale+crop في البداية
+    // ✅ إذا استخدمنا الفيديو الأصلي نضيف scale+crop أولاً
     const rescaleFilters = normalizeOk ? [] : [
       `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
       `crop=${WIDTH}:${HEIGHT}`,
@@ -630,28 +649,24 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip=false) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function applyMajorTransition(clipA, clipB, durA, transType, transDur, outputFile) {
-  const offset      = Math.max(0.1, durA - transDur);
-  const X           = transDur.toFixed(3);
-  const O           = offset.toFixed(3);
-  // ✅ إصلاح: enable يعمل على timeline الـ output (يبدأ من 0)
-  const flashEnd    = (transDur * 0.3).toFixed(3);
+  const offset   = Math.max(0.1, durA - transDur);
+  const X        = transDur.toFixed(3);
+  const O        = offset.toFixed(3);
 
   let filterComplex;
 
   switch (transType) {
     case "slide_flash": {
+      // ✅ slideleft نظيف — خروج يسار + دخول يمين
       filterComplex =
         `[0:v]format=yuv420p[v0];`+
         `[1:v]format=yuv420p[v1];`+
         `[v0][v1]xfade=transition=slideleft`+
-        `:duration=${X}:offset=${O}[xf];`+
-        `[xf]curves=`+
-        `r='0/0 0.5/0.54 1/1':g='0/0 0.5/0.51 1/1':b='0/0 0.5/0.51 1/1'`+
-        `:enable='between(t,${O},${(offset+parseFloat(flashEnd)).toFixed(3)})'`+
-        `[out]`;
+        `:duration=${X}:offset=${O}[out]`;
       break;
     }
     case "zoom_reveal": {
+      // ✅ fadeblack نظيف — فصل واضح بين المقاطع
       filterComplex =
         `[0:v]format=yuv420p[v0];`+
         `[1:v]format=yuv420p[v1];`+
@@ -660,6 +675,7 @@ function applyMajorTransition(clipA, clipB, durA, transType, transDur, outputFil
       break;
     }
     case "slide_clean": {
+      // ✅ smoothleft — push ناعم
       filterComplex =
         `[0:v]format=yuv420p[v0];`+
         `[1:v]format=yuv420p[v1];`+
@@ -711,9 +727,9 @@ function concatClipsWithTransitions(processedClips, clipPlan) {
 
   console.log(`\n✨ Merging ${processedClips.length} clips with transitions...`);
 
-  // ── تقسيم إلى groups ───────────────────────────────────────────
-  const groups   = [];
-  let   grpBuf   = [{ clip:processedClips[0], dur:clipPlan[0].duration }];
+  // ── تقسيم إلى groups بناءً على major transitions ─────────────
+  const groups = [];
+  let   grpBuf = [{ clip:processedClips[0], dur:clipPlan[0].duration }];
 
   for (let i=0; i<processedClips.length-1; i++) {
     const trans = clipPlan[i].transition;
@@ -871,8 +887,8 @@ function mergeAudio(videoPath, audioPath, outputFile) {
     if (r.status===0) v=lp;
   }
 
-  const tmp = join(TMP,"merged_temp.mp4");
-  const rMerge = runFFmpeg([
+  const tmp     = join(TMP,"merged_temp.mp4");
+  const rMerge  = runFFmpeg([
     "-y","-i",v,"-i",audioPath,
     "-map","0:v:0","-map","1:a:0",
     "-c:v","copy","-c:a","aac","-b:a","192k",
@@ -1524,7 +1540,11 @@ async function renderPNGsLong(page, fsm, bm, sm) {
 
 async function handleBgOnlyMode() {
   const plan = buildClipPlan();
-  console.log(`\n📊 Processing ${plan.length} clips [${content_mode.toUpperCase()}]`);
+  console.log(
+    `\n📊 Processing ${plan.length} clips ` +
+    `[${content_mode.toUpperCase()}] ` +
+    `${isShort ? "📱 Portrait" : "📺 Landscape"}`
+  );
 
   const processedClips = [];
   for (const clip of plan) {
@@ -1550,7 +1570,9 @@ async function handleBgOnlyMode() {
 
   console.log("\n🎵 Merging audio...");
   mergeAudio(merged, audio, outputPath);
-  console.log(`\n🎉 BG [${content_mode.toUpperCase()}] → ${outputPath}\n`);
+  console.log(
+    `\n🎉 BG [${content_mode.toUpperCase()}] → ${outputPath}\n`
+  );
 }
 
 async function handleWordsOnlyMode() {
@@ -1560,13 +1582,23 @@ async function handleWordsOnlyMode() {
     process.exit(1);
   }
 
+  console.log(
+    `\n📱 Words overlay [${content_mode.toUpperCase()}] ` +
+    `${isShort ? "Portrait (1080×1920)" : "Landscape (1920×1080)"}`
+  );
+
   const words = buildWordList();
   const fsm   = buildFrameStateMap(words);
   const bm    = buildSentenceBoundaryMap();
 
   const {browser,page} = await launchBrowser();
   try {
-    console.log("\n🖼️ Rendering PNGs [SHORT]...");
+    // ✅ يستخدم buildHTMLShort للـ portrait (short)
+    // ويستخدم buildHTMLLong للـ landscape (long)
+    // كلاهما صحيح — content_mode يحدد الـ builder
+    console.log(
+      `\n🖼️ Rendering PNGs [${content_mode.toUpperCase()}]...`
+    );
     const cache = await renderPNGsShort(page, fsm, bm);
     console.log(`✅ ${cache.size} PNGs\n`);
 
@@ -1590,7 +1622,7 @@ async function handleWordsOnlyMode() {
 
     console.log("\n📱 Applying metadata...");
     applyMetadata(wv, outputPath);
-    console.log(`\n🎉 Final [SHORT] → ${outputPath}\n`);
+    console.log(`\n🎉 Final [${content_mode.toUpperCase()}] → ${outputPath}\n`);
 
   } finally {
     try {
@@ -1607,6 +1639,8 @@ async function handleLongWordsOnlyMode() {
     console.error("❌ long_words_only requires videos[0]");
     process.exit(1);
   }
+
+  console.log("\n📺 Words overlay [LONG] Landscape (1920×1080)");
 
   const words = buildWordList();
   const fsm   = buildFrameStateMap(words);
@@ -1665,11 +1699,13 @@ const MODE_HANDLERS = {
 
 async function main() {
   console.log(`\n🚀 Mode:${mode} | Content:${content_mode.toUpperCase()}\n`);
+
   const handler = MODE_HANDLERS[mode];
   if (!handler) {
     console.error(`❌ Unknown mode: ${mode}`);
     process.exit(1);
   }
+
   await handler();
 }
 
