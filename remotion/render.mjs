@@ -78,85 +78,41 @@ const HOOK_FRAMES        = Math.floor(3.0 * FPS);
 const TITLE_SLIDE_FRAMES = Math.floor(0.6 * FPS);
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ CINEMATIC TRANSITIONS — مجموعة كاملة ومتنوعة
+// ✅ CINEMATIC TRANSITIONS — مجموعة كاملة
 // ═══════════════════════════════════════════════════════════════════════════
 
-const CINEMATIC_TRANSITIONS_ALL = [
-  "fade",
-  "fadeblack",
-  "fadegrays",
-  "smoothleft",
-  "smoothright",
-  "smoothup",
-  "smoothdown",
-  "wipeleft",
-  "wiperight",
-  "circleopen",
-  "circleclose",
-  "circlecrop",
-  "rectcrop",
-  "distance",
-  "fadefast",
-  "slideright",
-  "slideleft",
-  "slideup",
-  "slidedown",
-  "pixelize",
-];
-
-// انتقالات خاصة للـ Long (أنعم وأكثر سينمائية)
 const CINEMATIC_TRANSITIONS_LONG = [
-  "fade",
-  "fadeblack",
-  "fadegrays",
-  "smoothleft",
-  "smoothright",
-  "smoothup",
-  "smoothdown",
-  "wipeleft",
-  "wiperight",
-  "circleopen",
-  "fadefast",
-  "distance",
+  "fade", "fadeblack", "fadegrays",
+  "smoothleft", "smoothright", "smoothup", "smoothdown",
+  "wipeleft", "wiperight",
+  "circleopen", "fadefast", "distance",
 ];
 
-// انتقالات قوية للـ Short
 const CINEMATIC_TRANSITIONS_SHORT = [
-  "fade",
-  "fadeblack",
-  "smoothleft",
-  "smoothright",
-  "wipeleft",
-  "wiperight",
-  "circleopen",
-  "circleclose",
-  "circlecrop",
-  "rectcrop",
-  "slideright",
-  "slideleft",
+  "fade", "fadeblack",
+  "smoothleft", "smoothright", "smoothup", "smoothdown",
+  "wipeleft", "wiperight",
+  "circleopen", "circleclose", "circlecrop", "rectcrop",
+  "slideright", "slideleft", "slideup", "slidedown",
   "pixelize",
-  "smoothup",
-  "smoothdown",
-  "slideup",
-  "slidedown",
 ];
 
 // انتقالات خاصة حسب الـ tag
-const TAG_TRANSITIONS: Record<string, string[]> = {
-  shock:       ["circleopen", "pixelize", "rectcrop", "fadeblack"],
-  urgency:     ["wipeleft",   "wiperight", "slideright", "slideleft"],
-  revelation:  ["circleopen", "circleclose", "distance", "fadeblack"],
-  climax:      ["circleopen", "pixelize", "rectcrop", "circlecrop"],
-  dramatic:    ["fadeblack",  "fadegrays",  "smoothleft", "distance"],
-  tension:     ["wipeleft",   "smoothleft", "slideup",    "fadeblack"],
-  emotional:   ["fade",       "fadegrays",  "smoothup",   "smoothdown"],
-  calm:        ["fade",       "fadegrays",  "smoothleft", "smoothright"],
-  wisdom:      ["fade",       "smoothleft", "fadegrays",  "distance"],
-  information: ["smoothleft", "smoothright","fade",       "wipeleft"],
-  inspiration: ["circleopen", "smoothup",   "slideup",    "wiperight"],
-  storytelling:["smoothleft", "fade",       "smoothright","wipeleft"],
-  confident:   ["wipeleft",   "slideright", "circleopen", "smoothright"],
-  default:     ["fade",       "smoothleft", "wipeleft",   "fadeblack"],
+const TAG_TRANSITIONS = {
+  shock:        ["circleopen", "pixelize", "rectcrop", "fadeblack"],
+  urgency:      ["wipeleft",   "wiperight", "slideright", "slideleft"],
+  revelation:   ["circleopen", "circleclose", "distance", "fadeblack"],
+  climax:       ["circleopen", "pixelize", "rectcrop", "circlecrop"],
+  dramatic:     ["fadeblack",  "fadegrays",  "smoothleft", "distance"],
+  tension:      ["wipeleft",   "smoothleft", "slideup",    "fadeblack"],
+  emotional:    ["fade",       "fadegrays",  "smoothup",   "smoothdown"],
+  calm:         ["fade",       "fadegrays",  "smoothleft", "smoothright"],
+  wisdom:       ["fade",       "smoothleft", "fadegrays",  "distance"],
+  information:  ["smoothleft", "smoothright","fade",       "wipeleft"],
+  inspiration:  ["circleopen", "smoothup",   "slideup",    "wiperight"],
+  storytelling: ["smoothleft", "fade",       "smoothright","wipeleft"],
+  confident:    ["wipeleft",   "slideright", "circleopen", "smoothright"],
+  default:      ["fade",       "smoothleft", "wipeleft",   "fadeblack"],
 };
 
 // ✅ seed ثابت لكل فيديو = عشوائية متكررة
@@ -175,26 +131,19 @@ function _nextRand() {
 }
 
 /**
- * ✅ اختيار انتقال عشوائي ذكي:
- * - يراعي الـ tag للجملة الحالية
- * - لا يكرر نفس الانتقال مباشرة
+ * ✅ اختيار انتقال عشوائي ذكي
  */
-function pickTransition(
-  prevType: string | null = null,
-  tag:      string        = "default",
-): string {
-  const tagPool = TAG_TRANSITIONS[tag] || TAG_TRANSITIONS.default;
+function pickTransition(prevType, tag) {
+  if (prevType === undefined) prevType = null;
+  if (!tag) tag = "default";
+
+  const tagPool  = TAG_TRANSITIONS[tag] || TAG_TRANSITIONS.default;
   const modePool = isLong
     ? CINEMATIC_TRANSITIONS_LONG
     : CINEMATIC_TRANSITIONS_SHORT;
 
-  // دمج الـ pool: 60% tag-specific + 40% mode-generic
-  const combined = [
-    ...tagPool,
-    ...tagPool,
-    ...modePool,
-  ];
-
+  // دمج: 60% tag-specific + 40% mode-generic
+  const combined = [...tagPool, ...tagPool, ...modePool];
   const filtered = combined.filter(t => t !== prevType);
   const pool     = filtered.length > 0 ? filtered : combined;
 
@@ -323,7 +272,8 @@ function buildiPhoneMetadata() {
 // UTILITIES
 // ═══════════════════════════════════════════════════════════════════════════
 
-function safeKey(str: string, maxLen = 25): string {
+function safeKey(str, maxLen) {
+  if (maxLen === undefined) maxLen = 25;
   return (str || "")
     .slice(0, maxLen * 2)
     .replace(/[^a-zA-Z0-9\u0600-\u06FF]/g, "_")
@@ -331,33 +281,33 @@ function safeKey(str: string, maxLen = 25): string {
     .slice(0, maxLen);
 }
 
-const esc = (s: any) => (s || "").toString()
+const esc = s => (s || "").toString()
   .replace(/&/g, "&amp;").replace(/</g, "&lt;")
   .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
   .replace(/'/g, "&#039;");
 
-function normalizeWord(w: string): string {
+function normalizeWord(w) {
   return (w || "").toString()
     .replace(/[.,!?؟،;:"'(){}[\]<>«»…]/g, "")
     .trim().toLowerCase();
 }
 
-const isArabic = (t: string) => /[\u0600-\u06FF]/.test(t);
-const isFrench = (t: string) => /[àâçéèêëîïôùûüÿœæ]/i.test(t);
+const isArabic = t => /[\u0600-\u06FF]/.test(t);
+const isFrench = t => /[àâçéèêëîïôùûüÿœæ]/i.test(t);
 
-function getFontFamily(text: string): string {
+function getFontFamily(text) {
   return isArabic(text)
     ? `"Noto Naskh Arabic","Amiri",serif`
     : `"Noto Sans","DejaVu Sans",sans-serif`;
 }
-function getDir(text: string):  string { return isArabic(text) ? "rtl" : "ltr"; }
-function getLang(text: string): string {
+function getDir(text)  { return isArabic(text) ? "rtl" : "ltr"; }
+function getLang(text) {
   if (isArabic(text)) return "ar";
   if (isFrench(text)) return "fr";
   return "en";
 }
 
-function probeDuration(fp: string): number {
+function probeDuration(fp) {
   if (!fp || !existsSync(fp)) return 0;
   const r = spawnSync("ffprobe", [
     "-v", "error",
@@ -368,7 +318,7 @@ function probeDuration(fp: string): number {
   return parseFloat(r.stdout.toString().trim()) || 0;
 }
 
-function hasAudioStream(fp: string): boolean {
+function hasAudioStream(fp) {
   if (!fp || !existsSync(fp)) return false;
   const r = spawnSync("ffprobe", [
     "-v", "error", "-select_streams", "a",
@@ -378,35 +328,39 @@ function hasAudioStream(fp: string): boolean {
   return r.stdout.toString().trim().includes("audio");
 }
 
-function runFFmpeg(args: string[]) {
+function runFFmpeg(args) {
   return spawnSync("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
 }
 
-function isPowerWord(w: string): boolean {
+function isPowerWord(w) {
   if (!power_words || !power_words.length) return false;
   const n = normalizeWord(w);
   if (n.length < 2) return false;
-  return power_words.some((pw: string) => {
+  return power_words.some(pw => {
     const p = normalizeWord(pw);
-    return p && (n === p || (p.length >= 3 && n.includes(p)) || (n.length >= 3 && p.includes(n)));
+    return p && (
+      n === p ||
+      (p.length >= 3 && n.includes(p)) ||
+      (n.length >= 3 && p.includes(n))
+    );
   });
 }
 
-function linkFrame(src: string, dst: string): void {
+function linkFrame(src, dst) {
   if (!src || !existsSync(src)) return;
   if (existsSync(dst)) return;
-  try   { symlinkSync(src, dst); }
+  try { symlinkSync(src, dst); }
   catch { try { copyFileSync(src, dst); } catch {} }
 }
 
-function applyMetadata(inp: string, out: string): void {
+function applyMetadata(inp, out) {
   const m = buildiPhoneMetadata();
   const r = runFFmpeg(["-y", "-i", inp, "-c", "copy", ...m, out]);
   if (r.status !== 0) {
     console.log("  ⚠️ Metadata fail — copying as-is");
     copyFileSync(inp, out);
   } else {
-    console.log(`  ✅ Metadata: 📱 iPhone 17 Pro Max | 📍 ${location.city}`);
+    console.log(`  ✅ Metadata: 📱 iPhone | 📍 ${location.city}`);
   }
 }
 
@@ -426,78 +380,79 @@ console.log(`🎵 Audio:${realAudioDuration.toFixed(3)}s | Frames:${totalFrames}
 
 const SLOW_FACTOR = 1.25;
 
-const buildZoomOutFilter = (dur: number, idx: number): string => {
+function buildZoomOutFilter(dur, idx) {
   const fr = Math.ceil(dur * FPS);
   const sz = (1.12 + (idx % 4) * 0.02).toFixed(3);
   return (
     `scale=w='trunc((iw*(${sz}-(${sz}-1.01)*min(on,${fr})/${fr}))/2)*2':` +
     `h='trunc((ih*(${sz}-(${sz}-1.01)*min(on,${fr})/${fr}))/2)*2'`
   );
-};
+}
 
-const buildCameraShakeFilter = (idx: number): string => {
-  // حركة خفيفة جداً — لا اهتزاز مزعج
+function buildCameraShakeFilter(idx) {
   const f1 = (0.3 + (idx % 3) * 0.1).toFixed(2);
   const f2 = (0.2 + (idx % 2) * 0.15).toFixed(2);
-  const ax  = 1 + (idx % 2);
-  const ay  = 1 + (idx % 2);
+  const ax = 1 + (idx % 2);
+  const ay = 1 + (idx % 2);
   return (
     `crop=${WIDTH}:${HEIGHT}:` +
     `'(iw-${WIDTH})/2+${ax}*sin(2*PI*${f1}*t)':` +
     `'(ih-${HEIGHT})/2+${ay}*sin(2*PI*${f2}*t+1)'`
   );
-};
+}
 
-// ✅ Cinematic film look — أقوى وأغمق
-const buildFilmLookFilter = (): string =>
-  `curves=r='0/0 0.25/0.20 0.5/0.50 0.75/0.80 1/0.94':` +
-  `g='0/0 0.25/0.20 0.5/0.48 0.75/0.78 1/0.91':` +
-  `b='0/0.04 0.25/0.26 0.5/0.50 0.75/0.80 1/0.97'`;
+function buildFilmLookFilter() {
+  return (
+    `curves=r='0/0 0.25/0.20 0.5/0.50 0.75/0.80 1/0.94':` +
+    `g='0/0 0.25/0.20 0.5/0.48 0.75/0.78 1/0.91':` +
+    `b='0/0.04 0.25/0.26 0.5/0.50 0.75/0.80 1/0.97'`
+  );
+}
 
-// ✅ Color grading — أكثر دراماتيكية
-const buildColorGrading = (isHookClip: boolean): string =>
-  isHookClip
+function buildColorGrading(isHookClip) {
+  return isHookClip
     ? `eq=contrast=1.22:brightness=-0.04:saturation=0.75`
     : `eq=contrast=1.18:brightness=-0.03:saturation=0.80`;
+}
 
-// ✅ Vignette أقوى
-const buildVignetteFilter    = ():       string => `vignette=PI/4:eval=frame`;
-const buildFilmGrainFilter   = (idx: number): string => `noise=alls=${4 + (idx % 3)}:allf=t+u`;
-const buildOriginalityFilter = (idx: number): string => {
+function buildVignetteFilter()  { return `vignette=PI/4:eval=frame`; }
+function buildFilmGrainFilter(idx) {
+  return `noise=alls=${4 + (idx % 3)}:allf=t+u`;
+}
+function buildOriginalityFilter(idx) {
   const h  = idx % 2 === 0 ? 2 : -2;
   const s  = (1.02 + (idx % 3) * 0.01).toFixed(2);
   const sh = (0.22 + (idx % 2) * 0.06).toFixed(2);
   return `hue=h=${h}:s=${s},unsharp=3:3:${sh}:3:3:0.0`;
-};
+}
 
-// ✅ Dramatic lighting — dark cinematic
-const buildDramaticLightingFilter = (): string =>
-  `geq=r='clip(r(X,Y)*0.95+if(lte(X,W/2),80*(1-X/(W/2)),0),0,255)':` +
-  `g='clip(g(X,Y)*0.90,0,255)':` +
-  `b='clip(b(X,Y)*0.88+if(gte(X,W/2),60*((X-W/2)/(W/2)),0),0,255)'`;
+function buildDramaticLightingFilter() {
+  return (
+    `geq=r='clip(r(X,Y)*0.95+if(lte(X,W/2),80*(1-X/(W/2)),0),0,255)':` +
+    `g='clip(g(X,Y)*0.90,0,255)':` +
+    `b='clip(b(X,Y)*0.88+if(gte(X,W/2),60*((X-W/2)/(W/2)),0),0,255)'`
+  );
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ✅ LONG BG — Cinematic + Random Transitions
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildLongBgVideo(
-  clipPlan: any[],
-  audioPath: string,
-  outputFile: string,
-): string {
+function buildLongBgVideo(clipPlan, audioPath, outputFile) {
   console.log(
     `\n🚀 Long BG: ${clipPlan.length} clips → cinematic pipeline`
   );
 
-  const normalizedClips: string[] = [];
+  const normalizedClips = [];
 
-  // ── Step 1: Normalize كل clip ─────────────────────────────────
+  // ── Step 1: Normalize كل clip ──────────────────────────────────
   for (const clip of clipPlan) {
-    const { index: i, duration: d, videoPath: v } = clip;
-    const normOut = join(TMP, `ln_${String(i).padStart(3, "0")}.mp4`);
+    const i = clip.index;
+    const d = clip.duration;
+    const v = clip.videoPath;
 
-    const srcDur  = probeDuration(v);
-    // ✅ احسب كم نحتاج من المصدر قبل التبطئة
+    const normOut   = join(TMP, `ln_${String(i).padStart(3, "0")}.mp4`);
+    const srcDur    = probeDuration(v);
     const srcNeeded = d / SLOW_FACTOR;
     const loopArgs  = srcDur > 0 && srcDur < srcNeeded * 1.3
       ? ["-stream_loop", "-1"]
@@ -508,13 +463,12 @@ function buildLongBgVideo(
 
     process.stdout.write(`  [${i + 1}/${clipPlan.length}] ${d.toFixed(1)}s... `);
 
-    // ✅ نطبق setpts أولاً ثم fade
     const vf = [
       `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
       `crop=${WIDTH}:${HEIGHT}`,
       "setsar=1",
       `fps=${FPS}`,
-      `setpts=${SLOW_FACTOR}*PTS`,           // ✅ تبطئة أولاً
+      `setpts=${SLOW_FACTOR}*PTS`,
       buildZoomOutFilter(d, i),
       buildCameraShakeFilter(i),
       buildColorGrading(false),
@@ -528,7 +482,7 @@ function buildLongBgVideo(
 
     const r = runFFmpeg([
       "-y", ...loopArgs, "-i", v,
-      "-t", srcNeeded.toFixed(3),            // ✅ input duration قبل التبطئة
+      "-t", srcNeeded.toFixed(3),
       "-vf", vf,
       "-r", String(FPS),
       "-c:v", "libx264", "-preset", "fast", "-crf", "20",
@@ -537,7 +491,6 @@ function buildLongBgVideo(
     ]);
 
     if (r.status === 0 && existsSync(normOut)) {
-      // ✅ trim للمدة الصحيحة بعد التبطئة
       const trimOut = join(TMP, `lt_${String(i).padStart(3, "0")}.mp4`);
       const rTrim   = runFFmpeg([
         "-y", "-i", normOut,
@@ -554,7 +507,6 @@ function buildLongBgVideo(
       }
       process.stdout.write("✓\n");
     } else {
-      // Fallback بسيط
       console.log(`⚠️ → simple scale`);
       const fallOut = join(TMP, `lf_${String(i).padStart(3, "0")}.mp4`);
       runFFmpeg([
@@ -572,14 +524,14 @@ function buildLongBgVideo(
     }
   }
 
-  // ── Step 2: ✅ Concat مع xfade transitions عشوائية ──────────────
+  // ── Step 2: Concat ─────────────────────────────────────────────
   console.log(`\n✨ Cinematic concat: ${normalizedClips.length} clips...`);
 
-  let lastTransition: string | null = null;
-  const XFADE_DUR = 0.5; // مدة الانتقال للـ Long
+  let lastTransition = null;
+  const XFADE_DUR    = 0.5;
 
-  // استخدم concat مباشر إذا عدد clips كبير جداً (FFmpeg يعاني مع filter_complex كبير)
-  if (normalizedClips.length > 50) {
+  // ✅ للـ Long videos الكبيرة → استخدم concat demuxer (أسرع)
+  if (normalizedClips.length > 30) {
     console.log("  📋 Large clip count — using concat demuxer");
     const listFile  = join(TMP, "long_list.txt");
     const concatRaw = join(TMP, "long_raw.mp4");
@@ -604,22 +556,21 @@ function buildLongBgVideo(
     return _finalizeLongVideo(concatRaw, audioPath, outputFile);
   }
 
-  // ── xfade filter_complex للـ clips الأقل من 50 ──────────────────
+  // ── xfade للـ clips الأقل ──────────────────────────────────────
   try {
-    // بناء filter_complex مع انتقالات عشوائية
     const inputs  = normalizedClips.flatMap(f => ["-i", f]);
-    let   current = "[0:v]";
-    const filters : string[] = [];
-    let   cumOff  = 0;
+    let current   = "[0:v]";
+    const filters = [];
+    let cumOff    = 0;
 
     for (let i = 0; i < normalizedClips.length - 1; i++) {
-      const tag  = (aligned && i < aligned.length)
+      const tag = (aligned && i < aligned.length)
         ? (aligned[i].tag || "default")
         : "default";
-      const xft  = pickTransition(lastTransition, tag);
+      const xft      = pickTransition(lastTransition, tag);
       lastTransition = xft;
 
-      const dur    = clipPlan[i]?.duration || 3.0;
+      const dur    = clipPlan[i] ? clipPlan[i].duration : 3.0;
       cumOff      += Math.max(0.001, dur - XFADE_DUR);
       const outLbl = i === normalizedClips.length - 2
         ? "[vfinal]"
@@ -650,12 +601,9 @@ function buildLongBgVideo(
       return _finalizeLongVideo(concatXfade, audioPath, outputFile);
     }
 
-    // Fallback إذا فشل xfade
-    console.log("  ⚠️ xfade failed — fallback concat");
     throw new Error("xfade failed");
 
   } catch {
-    // Simple concat fallback
     const listFile  = join(TMP, "long_list_fb.txt");
     const concatRaw = join(TMP, "long_raw_fb.mp4");
     writeFileSync(
@@ -672,12 +620,8 @@ function buildLongBgVideo(
   }
 }
 
-function _finalizeLongVideo(
-  videoSource: string,
-  audioPath:   string,
-  outputFile:  string,
-): string {
-  // ── Step 3: Dramatic lighting على الفيديو الكامل ───────────────
+function _finalizeLongVideo(videoSource, audioPath, outputFile) {
+  // Dramatic lighting
   const litOut = join(TMP, "long_lit.mp4");
   const rLit   = runFFmpeg([
     "-y", "-i", videoSource,
@@ -694,10 +638,10 @@ function _finalizeLongVideo(
   console.log(
     rLit.status === 0
       ? "  ✅ Cinematic lighting applied"
-      : "  ⚠️  Lighting skipped"
+      : "  ⚠️ Lighting skipped"
   );
 
-  // ── Step 4: دمج الصوت ──────────────────────────────────────────
+  // دمج الصوت
   const ad = probeDuration(audioPath);
   const vd = probeDuration(videoFinal);
   console.log(`🎵 Audio:${ad.toFixed(1)}s | Video:${vd.toFixed(1)}s`);
@@ -729,14 +673,9 @@ function _finalizeLongVideo(
     copyFileSync(videoInput, tmpMerge);
   }
 
-  // ── Step 5: Metadata ───────────────────────────────────────────
   applyMetadata(tmpMerge, outputFile);
 
-  // ── Cleanup ────────────────────────────────────────────────────
-  const toDelete = [litOut, tmpMerge];
-  toDelete.forEach(f => {
-    try { spawnSync("rm", ["-f", f], { stdio: "ignore" }); } catch {}
-  });
+  try { spawnSync("rm", ["-f", litOut, tmpMerge], { stdio: "ignore" }); } catch {}
 
   console.log(`\n✅ Long BG done → ${outputFile}`);
   return outputFile;
@@ -746,30 +685,30 @@ function _finalizeLongVideo(
 // ✅ ASS SUBTITLES — للـ Long videos
 // ═══════════════════════════════════════════════════════════════════════════
 
-const TAG_ASS_COLORS: Record<string, string> = {
-  shock:       "&H00FFFFFF",
-  urgency:     "&H000022FF",
-  intrigue:    "&H0000D7FF",
-  emotional:   "&H00AB8FFF",
-  confident:   "&H00FFFFFF",
-  inspiration: "&H0000D7FF",
-  wisdom:      "&H00FFB182",
-  desire:      "&H0047B3FF",
-  calm:        "&H00EADE80",
-  information: "&H00FFFFFF",
-  pause:       "&H00C5BEB0",
-  whisper:     "&H00D893CE",
-  curiosity:   "&H0076F1FF",
-  storytelling:"&H0080CCFF",
-  dramatic:    "&H009A9AEF",
-  revelation:  "&H00C8C8FF",
-  tension:     "&H004370FF",
-  climax:      "&H00FFFFFF",
-  powerful:    "&H00F1ECEC",
-  default:     "&H00FFFFFF",
+const TAG_ASS_COLORS = {
+  shock:        "&H00FFFFFF",
+  urgency:      "&H000022FF",
+  intrigue:     "&H0000D7FF",
+  emotional:    "&H00AB8FFF",
+  confident:    "&H00FFFFFF",
+  inspiration:  "&H0000D7FF",
+  wisdom:       "&H00FFB182",
+  desire:       "&H0047B3FF",
+  calm:         "&H00EADE80",
+  information:  "&H00FFFFFF",
+  pause:        "&H00C5BEB0",
+  whisper:      "&H00D893CE",
+  curiosity:    "&H0076F1FF",
+  storytelling: "&H0080CCFF",
+  dramatic:     "&H009A9AEF",
+  revelation:   "&H00C8C8FF",
+  tension:      "&H004370FF",
+  climax:       "&H00FFFFFF",
+  powerful:     "&H00F1ECEC",
+  default:      "&H00FFFFFF",
 };
 
-function secondsToAssTime(s: number): string {
+function secondsToAssTime(s) {
   const h   = Math.floor(s / 3600);
   const m   = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
@@ -780,7 +719,7 @@ function secondsToAssTime(s: number): string {
   );
 }
 
-function escapeAssText(text: string): string {
+function escapeAssText(text) {
   return (text || "")
     .toString()
     .replace(/\\/g, "\\\\")
@@ -789,9 +728,9 @@ function escapeAssText(text: string): string {
     .replace(/\r?\n/g, "\\N");
 }
 
-function buildAssFile(): string {
+function buildAssFile() {
   const isAr     = isArabic(display_title);
-  const fontName  = isAr ? "Noto Naskh Arabic" : "Noto Sans";
+  const fontName = isAr ? "Noto Naskh Arabic" : "Noto Sans";
 
   const wordSize  = (content_mode === "long" && platform === "yt") ? 70 : 85;
   const titleSize = (content_mode === "long" && platform === "yt") ? 36 : 46;
@@ -829,7 +768,7 @@ function buildAssFile(): string {
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
   ].join("\r\n");
 
-  const events: string[] = [];
+  const events = [];
 
   // العنوان طوال الفيديو
   const titleText = escapeAssText(
@@ -874,14 +813,13 @@ function buildAssFile(): string {
     console.log(`  ✅ ASS: ${wordCount} words`);
 
   } else if (sentences.length > 0) {
-    // Fallback: جمل موزعة بالتساوي
     console.log("  ℹ️ ASS: fallback to sentences");
     const perSent = effectiveDuration / Math.max(sentences.length, 1);
-    sentences.forEach((sent: string, si: number) => {
+    sentences.forEach((sent, si) => {
       const sentWords = sent.split(/\s+/).filter(Boolean);
       const sentStart = si * perSent;
       const perWord   = perSent / Math.max(sentWords.length, 1);
-      sentWords.forEach((w: string, wi: number) => {
+      sentWords.forEach((w, wi) => {
         const s = sentStart + wi * perWord;
         const e = s + perWord;
         events.push(
@@ -900,11 +838,7 @@ function buildAssFile(): string {
 // ✅ LONG WORDS OVERLAY — FFmpeg + ASS
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildLongWordsOverlay(
-  bgVideoPath: string,
-  audioPath:   string,
-  outputFile:  string,
-): string {
+function buildLongWordsOverlay(bgVideoPath, audioPath, outputFile) {
   console.log("\n📝 Long Words: FFmpeg ASS overlay...");
 
   const assContent = buildAssFile();
@@ -917,9 +851,8 @@ function buildLongWordsOverlay(
     "/usr/share/fonts",
     "/usr/local/share/fonts",
   ];
-  const fontsDir  = fontsDirs.find(d => existsSync(d)) || "/usr/share/fonts";
+  const fontsDir = fontsDirs.find(d => existsSync(d)) || "/usr/share/fonts";
 
-  // ✅ escape مسار ASS بشكل صحيح مع المسافات
   const assEscaped = assFile
     .replace(/\\/g, "/")
     .replace(/:/g,  "\\:")
@@ -953,7 +886,7 @@ function buildLongWordsOverlay(
 
   if (r.status !== 0) {
     console.log("  ⚠️ ASS overlay failed");
-    console.log(`  Error: ${r.stderr?.toString().slice(-300)}`);
+    console.log(`  Error: ${r.stderr ? r.stderr.toString().slice(-300) : 'unknown'}`);
     if (bgHasAudio) {
       copyFileSync(bgVideoPath, tmpOut);
     } else {
@@ -981,7 +914,7 @@ function buildLongWordsOverlay(
 
 const CTA_TAGS = ["confident", "inspiration", "powerful"];
 
-function detectVideoSections(): any[] {
+function detectVideoSections() {
   if (!aligned || aligned.length === 0) {
     const totalClips = (clip_durations && clip_durations.length > 0)
       ? clip_durations.length
@@ -993,9 +926,9 @@ function detectVideoSections(): any[] {
     }));
   }
   const total = aligned.length;
-  return aligned.map((seg: any, i: number) => {
+  return aligned.map((seg, i) => {
     const tag = seg.tag || "information";
-    let sectionType: string;
+    let sectionType;
     if      (i === 0)                                    sectionType = "hook";
     else if (i === total - 1)                            sectionType = "cta";
     else if (i === total - 2 && CTA_TAGS.includes(tag)) sectionType = "cta";
@@ -1014,16 +947,13 @@ function detectVideoSections(): any[] {
 // SHORT: CLIP PLAN
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildClipPlan(): any[] {
-  // ✅ Validate videos
+function buildClipPlan() {
   if (!videos || videos.length === 0) {
     console.error("❌ No videos in manifest");
     process.exit(1);
   }
 
-  const validVideos = videos.filter(
-    (v: string) => v && existsSync(v)
-  );
+  const validVideos = videos.filter(v => v && existsSync(v));
   if (validVideos.length === 0) {
     console.error("❌ All video files missing");
     process.exit(1);
@@ -1031,9 +961,9 @@ function buildClipPlan(): any[] {
 
   const sections = detectVideoSections();
 
-  let durations: number[];
+  let durations;
   if (clip_durations && clip_durations.length > 0) {
-    durations = clip_durations.map((d: number) => Math.max(d, 0.5));
+    durations = clip_durations.map(d => Math.max(d, 0.5));
   } else {
     const n = Math.max(1, Math.floor(effectiveDuration / clip_duration));
     durations = Array.from({ length: n }, () => effectiveDuration / n);
@@ -1048,19 +978,18 @@ function buildClipPlan(): any[] {
     }
   );
 
-  let   offset = 0;
-  let   lastTrans: string | null = null;
+  let offset    = 0;
+  let lastTrans = null;
 
-  const plan = durations.map((d: number, i: number) => {
+  const plan = durations.map((d, i) => {
     const sec     = syncedSections[i];
     const nextSec = syncedSections[i + 1] || null;
 
-    let trans: any = null;
+    let trans = null;
     if (nextSec) {
       const transType = pickTransition(lastTrans, sec.tag);
       lastTrans       = transType;
 
-      // Major transitions بين sections مختلفة
       const isMajor = sec.type !== nextSec.type;
       trans = {
         level:    isMajor ? "major" : "minor",
@@ -1070,12 +999,12 @@ function buildClipPlan(): any[] {
     }
 
     const entry = {
-      index:     i,
-      start:     parseFloat(offset.toFixed(3)),
-      duration:  parseFloat(d.toFixed(3)),
-      videoPath: validVideos[i % validVideos.length],
-      isHook:    i === 0 && has_hook && isShort,
-      section:   sec,
+      index:      i,
+      start:      parseFloat(offset.toFixed(3)),
+      duration:   parseFloat(d.toFixed(3)),
+      videoPath:  validVideos[i % validVideos.length],
+      isHook:     i === 0 && has_hook && isShort,
+      section:    sec,
       transition: trans,
     };
     offset += d;
@@ -1083,10 +1012,8 @@ function buildClipPlan(): any[] {
   });
 
   console.log(`\n📋 Clip plan: ${plan.length} clips [${content_mode.toUpperCase()}/${platform.toUpperCase()}]`);
-  plan.slice(0, 5).forEach((c: any) => {
-    const tLabel = c.transition
-      ? `→ [${c.transition.type}]`
-      : "→ [END]";
+  plan.slice(0, 5).forEach(c => {
+    const tLabel = c.transition ? `→ [${c.transition.type}]` : "→ [END]";
     console.log(
       `   [${c.index + 1}] ${c.start.toFixed(2)}s ` +
       `(${c.duration.toFixed(2)}s) [${c.section.type}] ${tLabel}`
@@ -1103,19 +1030,15 @@ function buildClipPlan(): any[] {
 // SHORT: PROCESS BACKGROUND CLIP
 // ═══════════════════════════════════════════════════════════════════════════
 
-function processBackground(
-  videoPath:   string,
-  dur:         number,
-  outputFile:  string,
-  idx:         number,
-  isHookClip:  boolean = false,
-): string {
-  const d        = Math.max(dur, 0.5);
-  const fadeIn   = Math.min(0.15, d * 0.05);
-  const fadeOut  = Math.min(0.15, d * 0.05);
-  const srcDur   = probeDuration(videoPath);
+function processBackground(videoPath, dur, outputFile, idx, isHookClip) {
+  if (isHookClip === undefined) isHookClip = false;
+
+  const d         = Math.max(dur, 0.5);
+  const fadeIn    = Math.min(0.15, d * 0.05);
+  const fadeOut   = Math.min(0.15, d * 0.05);
+  const srcDur    = probeDuration(videoPath);
   const srcNeeded = d / SLOW_FACTOR;
-  const loopArgs = srcDur > 0 && srcDur < srcNeeded * 1.3
+  const loopArgs  = srcDur > 0 && srcDur < srcNeeded * 1.3
     ? ["-stream_loop", "-1"]
     : [];
 
@@ -1123,7 +1046,6 @@ function processBackground(
   const stage1  = join(TMP, `s1_${String(idx).padStart(3, "0")}.mp4`);
 
   try {
-    // Normalize
     const rNorm = runFFmpeg([
       "-y", ...loopArgs, "-i", videoPath,
       "-t", (srcNeeded * 1.4).toFixed(3),
@@ -1139,22 +1061,24 @@ function processBackground(
     const normalizeOk  = rNorm.status === 0 && existsSync(normOut);
     const effectsInput = normalizeOk ? normOut : videoPath;
 
-    const vf = [
-      ...(!normalizeOk ? [
-        `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
-        `crop=${WIDTH}:${HEIGHT}`, "setsar=1",
-      ] : []),
-      `setpts=${SLOW_FACTOR}*PTS`,
-      buildZoomOutFilter(d, idx),
-      buildCameraShakeFilter(idx),
-      buildColorGrading(isHookClip),
-      buildFilmLookFilter(),
-      buildVignetteFilter(),
-      buildFilmGrainFilter(idx),
-      buildOriginalityFilter(idx),
-      `fade=t=in:st=0:d=${fadeIn.toFixed(3)}`,
-      `fade=t=out:st=${(d - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
-    ].join(",");
+    const vfParts = [];
+    if (!normalizeOk) {
+      vfParts.push(`scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`);
+      vfParts.push(`crop=${WIDTH}:${HEIGHT}`);
+      vfParts.push("setsar=1");
+    }
+    vfParts.push(`setpts=${SLOW_FACTOR}*PTS`);
+    vfParts.push(buildZoomOutFilter(d, idx));
+    vfParts.push(buildCameraShakeFilter(idx));
+    vfParts.push(buildColorGrading(isHookClip));
+    vfParts.push(buildFilmLookFilter());
+    vfParts.push(buildVignetteFilter());
+    vfParts.push(buildFilmGrainFilter(idx));
+    vfParts.push(buildOriginalityFilter(idx));
+    vfParts.push(`fade=t=in:st=0:d=${fadeIn.toFixed(3)}`);
+    vfParts.push(`fade=t=out:st=${(d - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`);
+
+    const vf = vfParts.join(",");
 
     const r = runFFmpeg([
       "-y", "-i", effectsInput,
@@ -1222,18 +1146,19 @@ function processBackground(
 // SHORT: CONCAT WITH CINEMATIC TRANSITIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
-function concatClipsWithTransitions(
-  processedClips: string[],
-  clipPlan:       any[],
-): string | null {
+function concatClipsWithTransitions(processedClips, clipPlan) {
   if (processedClips.length === 0) return null;
   if (processedClips.length === 1) return processedClips[0];
 
   console.log(`\n✨ Cinematic merge: ${processedClips.length} clips...`);
 
-  // ── تجميع groups بين Major transitions ────────────────────────
-  const groups: any[] = [];
-  let   grpBuf: any[] = [{ clip: processedClips[0], dur: clipPlan[0].duration, tag: clipPlan[0].section?.tag || "default" }];
+  // ── تجميع groups بين Major transitions ──────────────────────
+  const groups = [];
+  let grpBuf   = [{
+    clip: processedClips[0],
+    dur:  clipPlan[0].duration,
+    tag:  (clipPlan[0].section && clipPlan[0].section.tag) || "default",
+  }];
 
   for (let i = 0; i < processedClips.length - 1; i++) {
     const trans = clipPlan[i].transition;
@@ -1242,39 +1167,38 @@ function concatClipsWithTransitions(
       grpBuf = [{
         clip: processedClips[i + 1],
         dur:  clipPlan[i + 1].duration,
-        tag:  clipPlan[i + 1].section?.tag || "default",
+        tag:  (clipPlan[i + 1].section && clipPlan[i + 1].section.tag) || "default",
       }];
     } else {
       grpBuf.push({
         clip: processedClips[i + 1],
         dur:  clipPlan[i + 1].duration,
-        tag:  clipPlan[i + 1].section?.tag || "default",
+        tag:  (clipPlan[i + 1].section && clipPlan[i + 1].section.tag) || "default",
       });
     }
   }
   groups.push({ clips: grpBuf, nextTrans: null });
 
-  const groupOutputs: any[] = [];
-  let   gIdx = 0;
+  const groupOutputs = [];
+  let gIdx           = 0;
 
-  // ── Minor transitions داخل كل group ──────────────────────────
   for (const group of groups) {
-    const { clips } = group;
+    const clips = group.clips;
 
     if (clips.length === 1) {
       groupOutputs.push({
-        file: clips[0].clip,
-        dur:  clips[0].dur,
+        file:  clips[0].clip,
+        dur:   clips[0].dur,
         trans: group.nextTrans,
       });
       continue;
     }
 
-    const X  = 0.28;
-    const fl : string[] = [];
-    let cumOff = 0;
-    let lbl    = "[0:v]";
-    let lastTrans: string | null = null;
+    const X        = 0.28;
+    const fl       = [];
+    let cumOff     = 0;
+    let lbl        = "[0:v]";
+    let lastTrans  = null;
 
     for (let i = 1; i < clips.length; i++) {
       const prevDur = Math.max(clips[i - 1].dur, X + 0.05);
@@ -1282,11 +1206,10 @@ function concatClipsWithTransitions(
         ? Math.max(0.001, prevDur - X)
         : Math.max(0.001, cumOff + prevDur - X);
 
-      // ✅ انتقال عشوائي ذكي حسب الـ tag
-      const xft  = pickTransition(lastTrans, clips[i - 1].tag);
-      lastTrans  = xft;
+      const xft = pickTransition(lastTrans, clips[i - 1].tag);
+      lastTrans = xft;
 
-      const out  = i === clips.length - 1 ? "[vout]" : `[v${i}]`;
+      const out = i === clips.length - 1 ? "[vout]" : `[v${i}]`;
       fl.push(
         `${lbl}[${i}:v]xfade=transition=${xft}:` +
         `duration=${X.toFixed(3)}:offset=${cumOff.toFixed(3)}${out}`
@@ -1295,12 +1218,10 @@ function concatClipsWithTransitions(
     }
 
     const groupOut = join(TMP, `grp_${gIdx}.mp4`);
-    const totDur   = clips.reduce(
-      (s: number, c: any) => s + c.dur, 0
-    ) - X * (clips.length - 1);
+    const totDur   = clips.reduce((s, c) => s + c.dur, 0) - X * (clips.length - 1);
 
     const r = runFFmpeg([
-      "-y", ...clips.flatMap((c: any) => ["-i", c.clip]),
+      "-y", ...clips.flatMap(c => ["-i", c.clip]),
       "-filter_complex", fl.join(";"),
       "-map", "[vout]",
       "-c:v", "libx264", "-preset", "fast", "-crf", "18",
@@ -1310,7 +1231,7 @@ function concatClipsWithTransitions(
 
     if (r.status !== 0) {
       const ls = join(TMP, `gls_${gIdx}.txt`);
-      writeFileSync(ls, clips.map((c: any) => `file '${c.clip}'`).join("\n"));
+      writeFileSync(ls, clips.map(c => `file '${c.clip}'`).join("\n"));
       spawnSync("ffmpeg", [
         "-y", "-f", "concat", "-safe", "0",
         "-i", ls, "-c", "copy", groupOut,
@@ -1338,8 +1259,8 @@ function concatClipsWithTransitions(
     const nextFile = groupOutputs[i].file;
     const majorOut = join(TMP, `maj_${i}.mp4`);
 
-    const transType = trans?.type || pickTransition(null, "default");
-    const transDur  = trans?.duration || 0.5;
+    const transType = (trans && trans.type) || pickTransition(null, "default");
+    const transDur  = (trans && trans.duration) || 0.5;
     const offset    = Math.max(0.1, mergedDur - transDur);
 
     const fc = (
@@ -1360,7 +1281,6 @@ function concatClipsWithTransitions(
     ]);
 
     if (r.status !== 0) {
-      // Fallback: concat بسيط
       const ls = join(TMP, `maj_ls_${i}.txt`);
       writeFileSync(ls, `file '${mergedFile}'\nfile '${nextFile}'`);
       spawnSync("ffmpeg", [
@@ -1387,11 +1307,7 @@ function concatClipsWithTransitions(
 // SHORT: MERGE AUDIO
 // ═══════════════════════════════════════════════════════════════════════════
 
-function mergeAudio(
-  videoPath:  string,
-  audioPath:  string,
-  outputFile: string,
-): void {
+function mergeAudio(videoPath, audioPath, outputFile) {
   const ad = probeDuration(audioPath);
   const vd = probeDuration(videoPath);
   console.log(`🎵 Audio:${ad.toFixed(3)}s | Video:${vd.toFixed(3)}s`);
@@ -1428,12 +1344,7 @@ function mergeAudio(
 // SHORT: OVERLAY ON BG
 // ═══════════════════════════════════════════════════════════════════════════
 
-function overlayOnBg(
-  bgVideo:    string,
-  captionMov: string,
-  audioPath:  string,
-  outputFile: string,
-): string {
+function overlayOnBg(bgVideo, captionMov, audioPath, outputFile) {
   const fc         = "[1:v]format=rgba[cap];[0:v][cap]overlay=0:0:format=auto,format=yuv420p[out]";
   const bgHasAudio = hasAudioStream(bgVideo);
 
@@ -1462,7 +1373,7 @@ function overlayOnBg(
   return outputFile;
 }
 
-function framesToMov(frameDir: string, outputMov: string): string {
+function framesToMov(frameDir, outputMov) {
   runFFmpeg([
     "-y", "-framerate", String(FPS),
     "-i", `${frameDir}/frame_%06d.png`,
@@ -1477,7 +1388,7 @@ function framesToMov(frameDir: string, outputMov: string): string {
 // SHORT: EMOTION & WORD STYLES
 // ═══════════════════════════════════════════════════════════════════════════
 
-const EMOTION_COLORS: Record<string, any> = {
+const EMOTION_COLORS = {
   curiosity: { word:"#FFD700", glow:"rgba(255,215,0,0.5)",  power:"#FF1744" },
   fear:      { word:"#FF4444", glow:"rgba(255,68,68,0.5)",  power:"#FFD700" },
   hope:      { word:"#00E676", glow:"rgba(0,230,118,0.5)",  power:"#FFFFFF" },
@@ -1493,7 +1404,7 @@ const EMOTION_COLORS: Record<string, any> = {
 const emotion = (analysis.primary_emotion || "").toLowerCase();
 const COLORS  = EMOTION_COLORS[emotion] || EMOTION_COLORS.default;
 
-const TAG_WORD_STYLES: Record<string, any> = {
+const TAG_WORD_STYLES = {
   shock:       { colorWord:"#FFFFFF", colorGlow:"rgba(255,50,50,0.9)",    scaleMult:1.30, glowSpread:80, strokeColor:"rgba(255,0,0,0.8)",   strokeWidth:5, brightness:1.4  },
   urgency:     { colorWord:"#FF2200", colorGlow:"rgba(255,34,0,0.8)",     scaleMult:1.20, glowSpread:60, strokeColor:"rgba(0,0,0,0.9)",      strokeWidth:4, brightness:1.3  },
   intrigue:    { colorWord:"#FFD700", colorGlow:"rgba(255,215,0,0.7)",    scaleMult:1.0,  glowSpread:50, strokeColor:"rgba(0,0,0,0.95)",     strokeWidth:4, brightness:1.0  },
@@ -1521,11 +1432,11 @@ const POWER_STYLE = {
   scaleMult: 1.15, glowSpread: 90,
   strokeColor: "rgba(0,0,0,0.5)", strokeWidth: 2, brightness: 1.5,
 };
-function getWordStyle(tag: string) {
+function getWordStyle(tag) {
   return TAG_WORD_STYLES[tag] || DEFAULT_WORD_STYLE;
 }
 
-const TAG_TRANSITION_CFG: Record<string, any> = {
+const TAG_TRANSITION_CFG = {
   shock:       { flashColor:"rgba(255,255,255,1.0)",  flashFrames:9,  shakeAmount:18, scaleBoost:1.12 },
   urgency:     { flashColor:"rgba(220,0,0,0.85)",     flashFrames:7,  shakeAmount:12, scaleBoost:1.08 },
   intrigue:    { flashColor:"rgba(0,0,0,0.6)",        flashFrames:10, shakeAmount:5,  scaleBoost:1.04 },
@@ -1555,8 +1466,8 @@ const DEFAULT_TRANSITION_CFG = {
 // SHORT: WORD LIST & FRAME STATE
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildWordList(): any[] {
-  const words: any[] = [];
+function buildWordList() {
+  const words = [];
   for (const seg of aligned) {
     if (!seg.words || !seg.words.length) continue;
     const segTag = seg.tag || "information";
@@ -1577,17 +1488,17 @@ function buildWordList(): any[] {
   if (!words.length && sentences.length) {
     const all = sentences.join(" ").split(/\s+/).filter(Boolean);
     const pw  = effectiveDuration / Math.max(all.length, 1);
-    all.forEach((w: string, i: number) => words.push({
+    all.forEach((w, i) => words.push({
       word: w, start: i * pw, end: (i + 1) * pw,
       tag: "information", isPower: isPowerWord(w),
     }));
   }
-  words.sort((a: any, b: any) => a.start - b.start);
+  words.sort((a, b) => a.start - b.start);
   console.log(`📊 Words: ${words.length}`);
   return words;
 }
 
-function findWordAtTime(words: any[], t: number): any | null {
+function findWordAtTime(words, t) {
   let lo = 0, hi = words.length - 1;
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
@@ -1598,7 +1509,7 @@ function findWordAtTime(words: any[], t: number): any | null {
   return null;
 }
 
-function buildFrameStateMap(words: any[]): any[] {
+function buildFrameStateMap(words) {
   const map = new Array(totalFrames).fill(null);
   for (let f = 0; f < totalFrames; f++) {
     const t = f / FPS;
@@ -1620,9 +1531,9 @@ function buildFrameStateMap(words: any[]): any[] {
   return map;
 }
 
-function buildSentenceBoundaryMap(): Map<number, any> {
+function buildSentenceBoundaryMap() {
   if (!aligned || !aligned.length) return new Map();
-  const map = new Map<number, any>();
+  const map = new Map();
   for (let i = 0; i < aligned.length - 1; i++) {
     const seg = aligned[i];
     const et  = parseFloat(seg.end || 0);
@@ -1648,7 +1559,7 @@ function buildSentenceBoundaryMap(): Map<number, any> {
 // SHORT: ANIMATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-function computeTitleAnimation(gf: number): any {
+function computeTitleAnimation(gf) {
   if (gf < INTRO_FRAMES) {
     const t = gf / INTRO_FRAMES;
     const e = 1 - Math.pow(1 - t, 3);
@@ -1661,7 +1572,7 @@ function computeTitleAnimation(gf: number): any {
   return { opacity: 1.0, translateY: 0 };
 }
 
-function computeWordAnimation(progress: number, scaleMult: number): any {
+function computeWordAnimation(progress, scaleMult) {
   if (progress < 0.15) {
     const t = progress / 0.15;
     const e = 1 - Math.pow(1 - t, 2);
@@ -1674,11 +1585,12 @@ function computeWordAnimation(progress: number, scaleMult: number): any {
   return { scale: scaleMult, opacity: 1.0, translateY: 0 };
 }
 
-function computeTransitionEffect(transState: any, gf: number): any {
+function computeTransitionEffect(transState, gf) {
   if (!transState) {
     return { flashOpacity: 0, flashColor: "rgba(0,0,0,0)", shakeX: 0, shakeY: 0, transScale: 1.0 };
   }
-  const { config: c, progress: tp } = transState;
+  const c  = transState.config;
+  const tp = transState.progress;
   let fo = tp < 0.3 ? tp / 0.3 : 1 - (tp - 0.3) / 0.7;
   fo = Math.max(0, Math.min(1, fo));
   let sx = 0, sy = 0;
@@ -1705,11 +1617,11 @@ const SHORT_FONT_SIZES = [
   { maxLen: 99, ar:  76, en:  72 },
 ];
 
-function computeFontSize(word: string, isAr: boolean, scaleMult: number): number {
+function computeFontSize(word, isAr, scaleMult) {
   if (!word) return 100;
   let base = 100;
-  for (const { maxLen, ar, en } of SHORT_FONT_SIZES) {
-    if (word.length <= maxLen) { base = isAr ? ar : en; break; }
+  for (const fs of SHORT_FONT_SIZES) {
+    if (word.length <= fs.maxLen) { base = isAr ? fs.ar : fs.en; break; }
   }
   return Math.max(60, Math.min(220, Math.round(base * scaleMult)));
 }
@@ -1718,7 +1630,7 @@ function computeFontSize(word: string, isAr: boolean, scaleMult: number): number
 // SHORT: HTML BUILDER
 // ═══════════════════════════════════════════════════════════════════════════
 
-const HOOK_DEFAULTS: Record<string, string> = {
+const HOOK_DEFAULTS = {
   ar: "🔴 لا تتجاوز هذا",
   fr: "🔴 Ne ratez pas ça",
   en: "🔴 Don't skip this",
@@ -1728,12 +1640,12 @@ const getHookText = () =>
   HOOK_DEFAULTS[lang] ||
   HOOK_DEFAULTS.en;
 
-function stateKey(state: any, gf: number, ts: any): string {
+function stateKey(state, gf, ts) {
   if (gf < INTRO_FRAMES)                return `intro_f${gf}`;
   if (gf >= totalFrames - OUTRO_FRAMES) return `outro_f${gf}`;
   if (ts) {
     const pb = ts.progress < 0.5 ? "in" : "out";
-    return `tr_${ts.tag}_${pb}_${safeKey(state ? state.word : "empty", 15)}_${state?.isPower ? 1 : 0}`;
+    return `tr_${ts.tag}_${pb}_${safeKey(state ? state.word : "empty", 15)}_${state && state.isPower ? 1 : 0}`;
   }
   const h = gf < HOOK_FRAMES ? "h" : "n";
   if (!state) return `empty_${h}`;
@@ -1742,20 +1654,14 @@ function stateKey(state: any, gf: number, ts: any): string {
   return `w_${safeKey(state.word, 15)}_${state.tag}_${state.isPower ? 1 : 0}_${h}_${b}`;
 }
 
-function buildHTMLShort(params: {
-  word:            string | null;
-  tag?:            string;
-  isPower?:        boolean;
-  isHook?:         boolean;
-  globalFrame?:    number;
-  progress?:       number;
-  transitionState?: any;
-}): string {
-  const {
-    word, tag = "information", isPower = false,
-    isHook = false, globalFrame = 0, progress = 0.5,
-    transitionState = null,
-  } = params;
+function buildHTMLShort(params) {
+  const word            = params.word;
+  const tag             = params.tag || "information";
+  const isPower         = params.isPower || false;
+  const isHook          = params.isHook || false;
+  const globalFrame     = params.globalFrame || 0;
+  const progress        = params.progress !== undefined ? params.progress : 0.5;
+  const transitionState = params.transitionState || null;
 
   const ar   = word ? isArabic(word) : false;
   const dir  = word ? getDir(word)   : "ltr";
@@ -1837,7 +1743,7 @@ async function launchBrowser() {
   return { browser, page };
 }
 
-async function warmupFonts(page: any): Promise<void> {
+async function warmupFonts(page) {
   const cases = [
     { word: "مرحبا", lang: "ar", tag: "shock",      isPower: true  },
     { word: "Hello", lang: "en", tag: "information", isPower: false },
@@ -1850,25 +1756,25 @@ async function warmupFonts(page: any): Promise<void> {
     const p = join(TMP, `init_${tc.lang}.html`);
     writeFileSync(p, html, "utf-8");
     await page.goto(`file://${p}`, { waitUntil: "networkidle", timeout: 10000 });
-    await page.evaluate(() => (document as any).fonts.ready);
+    await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(100);
   }
   console.log("✅ Fonts loaded");
 }
 
-async function renderPNGsShort(page: any, fsm: any[], bm: Map<number, any>): Promise<Map<string, string>> {
-  const unique = new Map<string, any>();
+async function renderPNGsShort(page, fsm, bm) {
+  const unique = new Map();
   for (let f = 0; f < fsm.length; f++) {
     const ts = bm.get(f) || null;
     const k  = stateKey(fsm[f], f, ts);
     if (!unique.has(k)) {
       unique.set(k, {
-        word:            fsm[f]?.word ?? null,
-        tag:             fsm[f]?.tag ?? "information",
-        isPower:         fsm[f]?.isPower ?? false,
+        word:            fsm[f] ? fsm[f].word : null,
+        tag:             fsm[f] ? fsm[f].tag : "information",
+        isPower:         fsm[f] ? fsm[f].isPower : false,
         isHook:          f < HOOK_FRAMES,
         globalFrame:     f,
-        progress:        fsm[f]?.progress ?? 0.5,
+        progress:        fsm[f] ? fsm[f].progress : 0.5,
         transitionState: ts,
       });
     }
@@ -1877,15 +1783,15 @@ async function renderPNGsShort(page: any, fsm: any[], bm: Map<number, any>): Pro
   console.log(`\n📸 ${unique.size} unique states [SHORT]`);
   await warmupFonts(page);
 
-  const cache = new Map<string, string>();
-  let   done  = 0;
+  const cache = new Map();
+  let done    = 0;
 
   for (const [k, s] of unique) {
     const html = buildHTMLShort(s);
     const hp   = join(TMP, `${k}.html`);
     writeFileSync(hp, html, "utf-8");
     await page.goto(`file://${hp}`, { waitUntil: "load", timeout: 5000 });
-    await page.evaluate(() => (document as any).fonts.ready);
+    await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(30);
     const pp = join(TMP, `${k}.png`);
     await page.screenshot({ path: pp, type: "png", omitBackground: true });
@@ -1903,7 +1809,7 @@ async function renderPNGsShort(page: any, fsm: any[], bm: Map<number, any>): Pro
 // MODE HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function handleBgOnlyMode(): Promise<void> {
+async function handleBgOnlyMode() {
   const plan = buildClipPlan();
 
   if (isLong) {
@@ -1915,10 +1821,13 @@ async function handleBgOnlyMode(): Promise<void> {
 
   // Short: clip بـ clip
   console.log(`\n📊 Processing ${plan.length} clips [SHORT]`);
-  const processedClips: string[] = [];
+  const processedClips = [];
 
   for (const clip of plan) {
-    const { index: i, duration: d, videoPath: v, isHook: h } = clip;
+    const i = clip.index;
+    const d = clip.duration;
+    const v = clip.videoPath;
+    const h = clip.isHook;
     process.stdout.write(
       `  [${i + 1}/${plan.length}] ${d.toFixed(2)}s ` +
       `[${clip.section.type}]${h ? " 🔥" : ""}... `
@@ -1940,7 +1849,7 @@ async function handleBgOnlyMode(): Promise<void> {
   console.log(`\n🎉 BG [SHORT] → ${outputPath}\n`);
 }
 
-async function handleWordsOnlyMode(): Promise<void> {
+async function handleWordsOnlyMode() {
   const bgVideo = videos[0];
   if (!bgVideo || !existsSync(bgVideo)) {
     console.error("❌ words_only requires videos[0] (BG video)");
@@ -1960,7 +1869,10 @@ async function handleWordsOnlyMode(): Promise<void> {
   const fsm   = buildFrameStateMap(words);
   const bm    = buildSentenceBoundaryMap();
 
-  const { browser, page } = await launchBrowser();
+  const launched = await launchBrowser();
+  const browser  = launched.browser;
+  const page     = launched.page;
+
   try {
     console.log(`\n🖼️ Rendering PNGs...`);
     const cache = await renderPNGsShort(page, fsm, bm);
@@ -1995,7 +1907,7 @@ async function handleWordsOnlyMode(): Promise<void> {
       if (browser && browser.isConnected()) {
         await browser.close();
       }
-    } catch (e: any) {
+    } catch (e) {
       console.warn("Browser close error:", e.message);
     } finally {
       try {
@@ -2009,14 +1921,14 @@ async function handleWordsOnlyMode(): Promise<void> {
 // MAIN
 // ═══════════════════════════════════════════════════════════════════════════
 
-const MODE_HANDLERS: Record<string, () => Promise<void>> = {
+const MODE_HANDLERS = {
   bg_only:         handleBgOnlyMode,
   long_bg_only:    handleBgOnlyMode,
   words_only:      handleWordsOnlyMode,
   long_words_only: handleWordsOnlyMode,
 };
 
-async function main(): Promise<void> {
+async function main() {
   console.log(
     `\n🚀 Mode:${mode} | ` +
     `${content_mode.toUpperCase()}/${platform.toUpperCase()}\n`
