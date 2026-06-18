@@ -1,3 +1,4 @@
+# .github/workflows/ar_short.yml
 name: 🇸🇦 Arabic Short Videos
 
 on:
@@ -114,7 +115,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: ✅ Verify stable-ts
-        run: python -c "import stable_whisper; print('✅ OK')"
+        run: python -c "import stable_whisper; print('✅ stable-ts OK')"
 
       - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -153,15 +154,20 @@ jobs:
           CURRENT_LANG:          "ar"
 
         run: |
+          # ── Build FLAGS ──────────────────────────────────────────
           FLAGS="--lang ar --content-mode short --platform yt --auto-next"
 
-          [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}"   = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && FLAGS="$FLAGS --publish-yt"
+          [ "${{ github.event.inputs.force }}"    = "true" ] && \
+            FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}" = "true" ] && \
+            FLAGS="$FLAGS --force-ai"
 
           PUBLISH_FB="${{ github.event.inputs.publish_fb }}"
           PUBLISH_YT="${{ github.event.inputs.publish_yt }}"
+
+          [ "$PUBLISH_FB" = "true" ] && FLAGS="$FLAGS --publish-fb"
+          [ "$PUBLISH_YT" = "true" ] && FLAGS="$FLAGS --publish-yt"
+
           if [ "$PUBLISH_FB" = "false" ] && [ "$PUBLISH_YT" = "false" ]; then
             FLAGS="$FLAGS --no-publish"
           fi
@@ -170,6 +176,7 @@ jobs:
           [ -n "$VN" ] && FLAGS="$FLAGS --video-number $VN"
 
           echo "🚀 FLAGS: $FLAGS"
+
           python main.py scripts/videos_ar.xlsx \
             --output-dir output $FLAGS
 
