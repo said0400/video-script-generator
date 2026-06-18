@@ -1,9 +1,10 @@
+# .github/workflows/ar_long_fb.yml
 name: 🇸🇦 Arabic Long — Facebook (9:16)
 
 on:
-  # ✅ يعمل بعد انتهاء Long YT بساعة
   schedule:
-    - cron: "0 0 * * *"    # Long FB — كل يوم 00:00 UTC (بعد YT بساعتين)
+    # ✅ يبدأ بعد Long YT بساعتين (22:00 + 2h = 00:00)
+    - cron: "0 0 * * *"
 
   workflow_dispatch:
     inputs:
@@ -38,7 +39,7 @@ jobs:
   generate:
     name: 🇸🇦 Arabic Long Facebook
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 90
 
     steps:
 
@@ -99,7 +100,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: ✅ Verify stable-ts
-        run: python -c "import stable_whisper; print('✅ OK')"
+        run: python -c "import stable_whisper; print('✅ stable-ts OK')"
 
       - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -112,8 +113,8 @@ jobs:
           if [ -f "package-lock.json" ]; then npm ci
           else npm install; fi
 
-      - name: 🌐 Install Playwright Chromium
-        run: python -m playwright install chromium --with-deps
+      # ✅ Long FB لا يحتاج Playwright
+      # لأن render.mjs يستخدم FFmpeg للـ Long
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
@@ -127,9 +128,30 @@ jobs:
         uses: dawidd6/action-download-artifact@v6
         with:
           name: ar-long-shared-*
-          if_no_artifact_found: ignore
+          if_no_artifact_found: warn
           search_artifacts: true
           path: output_long
+
+      - name: 🔍 Verify shared files exist
+        run: |
+          echo "📁 Contents of output_long:"
+          ls -la output_long/ 2>/dev/null || echo "  (empty or not found)"
+
+          # التحقق من وجود الملفات المطلوبة
+          AUDIO_FOUND=$(find output_long -name "*_audio_mixed*.aac" 2>/dev/null | head -1)
+          CACHE_FOUND=$(find output_long -name "*_whisperx_cache.json" 2>/dev/null | head -1)
+
+          if [ -z "$AUDIO_FOUND" ]; then
+            echo "⚠️  Audio file not found — Long YT must run first"
+          else
+            echo "✅ Audio found: $AUDIO_FOUND"
+          fi
+
+          if [ -z "$CACHE_FOUND" ]; then
+            echo "⚠️  WhisperX cache not found — Long YT must run first"
+          else
+            echo "✅ WhisperX cache found: $CACHE_FOUND"
+          fi
 
       - name: 🇸🇦 Generate Arabic Long Facebook
         env:
@@ -144,16 +166,21 @@ jobs:
           CURRENT_LANG:          "ar"
 
         run: |
+          # ── Build FLAGS ──────────────────────────────────────────
           FLAGS="--lang ar --content-mode long --platform fb --auto-next"
 
-          [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
-          [ "${{ github.event.inputs.publish_fb }}" = "false" ] && FLAGS="$FLAGS --no-publish"
+          [ "${{ github.event.inputs.force }}"    = "true" ] && \
+            FLAGS="$FLAGS --force"
+
+          PUBLISH_FB="${{ github.event.inputs.publish_fb }}"
+          [ "$PUBLISH_FB" = "true"  ] && FLAGS="$FLAGS --publish-fb"
+          [ "$PUBLISH_FB" = "false" ] && FLAGS="$FLAGS --no-publish"
 
           VN="${{ github.event.inputs.video_number }}"
           [ -n "$VN" ] && FLAGS="$FLAGS --video-number $VN"
 
           echo "🚀 FLAGS: $FLAGS"
+
           python main.py scripts/videos_ar_long.xlsx \
             --output-dir output_long $FLAGS
 
