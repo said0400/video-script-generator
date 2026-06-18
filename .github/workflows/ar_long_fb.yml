@@ -1,0 +1,178 @@
+name: 🇸🇦 Arabic Long — Facebook (9:16)
+
+on:
+  # ✅ يعمل بعد انتهاء Long YT بساعة
+  schedule:
+    - cron: "0 0 * * *"    # Long FB — كل يوم 00:00 UTC (بعد YT بساعتين)
+
+  workflow_dispatch:
+    inputs:
+      video_number:
+        description: "🎬 Video number (empty = auto next)"
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "⚡ Force re-render?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      publish_fb:
+        description: "📘 Publish to Facebook?"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+concurrency:
+  group: video-ar-long-fb
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION:   "20"
+  TORCH_VERSION:  "2.5.1"
+
+jobs:
+  generate:
+    name: 🇸🇦 Arabic Long Facebook
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🧹 Free disk space
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 🔧 Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            ffmpeg libsndfile1 xvfb \
+            fonts-noto fonts-noto-core \
+            fonts-hosny-amiri fonts-sil-scheherazade
+          sudo fc-cache -fv
+
+      - name: 💾 Cache stable-ts models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/stable-ts
+            ~/.cache/huggingface
+            ~/.cache/torch
+            ~/.cache/whisper
+          key: stable-ts-models-v2-${{ runner.os }}
+          restore-keys: stable-ts-models-
+
+      - name: 🔥 Install PyTorch ${{ env.TORCH_VERSION }} (CPU)
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install \
+            torch==${{ env.TORCH_VERSION }} \
+            torchaudio==${{ env.TORCH_VERSION }} \
+            --index-url https://download.pytorch.org/whl/cpu
+
+      - name: 📦 Install openai-whisper
+        run: |
+          pip install "setuptools<81.0.0" wheel
+          pip install openai-whisper==20240930 --no-build-isolation
+          pip install --upgrade setuptools
+
+      - name: 📦 Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: ✅ Verify stable-ts
+        run: python -c "import stable_whisper; print('✅ OK')"
+
+      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Install Node dependencies
+        working-directory: remotion
+        run: |
+          if [ -f "package-lock.json" ]; then npm ci
+          else npm install; fi
+
+      - name: 🌐 Install Playwright Chromium
+        run: python -m playwright install chromium --with-deps
+
+      - name: 📥 Restore DB
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vsg-database-ar-long
+          if_no_artifact_found: ignore
+          search_artifacts: true
+
+      # ✅ استعادة الملفات المشتركة من Long YT
+      - name: 📥 Restore shared files from Long YT
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: ar-long-shared-*
+          if_no_artifact_found: ignore
+          search_artifacts: true
+          path: output_long
+
+      - name: 🇸🇦 Generate Arabic Long Facebook
+        env:
+          GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY:          ${{ secrets.GROQ_API_KEY }}
+          PIXABAY_API_KEY:       ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY:        ${{ secrets.PEXELS_API_KEY }}
+          FB_PAGE_ID:            ${{ secrets.FB_PAGE_ID_AR }}
+          FB_PAGE_TOKEN:         ${{ secrets.FB_PAGE_TOKEN_AR }}
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          CURRENT_LANG:          "ar"
+
+        run: |
+          FLAGS="--lang ar --content-mode long --platform fb --auto-next"
+
+          [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.publish_fb }}" = "false" ] && FLAGS="$FLAGS --no-publish"
+
+          VN="${{ github.event.inputs.video_number }}"
+          [ -n "$VN" ] && FLAGS="$FLAGS --video-number $VN"
+
+          echo "🚀 FLAGS: $FLAGS"
+          python main.py scripts/videos_ar_long.xlsx \
+            --output-dir output_long $FLAGS
+
+      - name: 📤 Upload Facebook video
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ar-long-fb-video-${{ github.run_number }}
+          path: |
+            output_long/**/*_long_fb_published.mp4
+            output_long/**/*_long_fb_final.mp4
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: 💾 Save Database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsg-database-ar-long
+          path: vsg.db
+          retention-days: 90
+          overwrite: true
