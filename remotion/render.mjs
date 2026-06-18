@@ -40,6 +40,9 @@ const {
   analysis       = {},
   mode           = "words_only",
   content_mode   = "short",
+  platform       = "yt",
+  width          = null,
+  height         = null,
 } = props;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -47,14 +50,28 @@ const {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const FPS = 30;
-const DIMENSIONS = {
-  short: { width: 1080, height: 1920 },
-  long:  { width: 1920, height: 1080 },
-};
-const { width: WIDTH, height: HEIGHT } =
-  DIMENSIONS[content_mode] || DIMENSIONS.short;
 
-const isLong  = content_mode === "long";
+// ✅ الأبعاد تأتي من manifest أو تُحسب من content_mode + platform
+const DIMENSIONS_MAP = {
+  "long_yt":  { width: 1920, height: 1080 },
+  "long_fb":  { width: 1080, height: 1920 },
+  "short":    { width: 1080, height: 1920 },
+  "short_yt": { width: 1080, height: 1920 },
+  "short_fb": { width: 1080, height: 1920 },
+};
+
+function getDimensions() {
+  // ✅ أولوية للأبعاد القادمة من manifest مباشرة
+  if (width && height) return { width, height };
+
+  const key = `${content_mode}_${platform}`;
+  return DIMENSIONS_MAP[key] || DIMENSIONS_MAP["short"];
+}
+
+const { width: WIDTH, height: HEIGHT } = getDimensions();
+
+// ✅ isLong = long YT فقط (landscape)
+const isLong  = content_mode === "long" && platform === "yt";
 const isShort = !isLong;
 
 const INTRO_FRAMES       = Math.floor(1.0 * FPS);
@@ -171,12 +188,23 @@ const safeOut = outputPath
 const TMP = join(tmpdir(), `vsg_${safeOut}`);
 mkdirSync(TMP, { recursive: true });
 
+// ── Log header ─────────────────────────────────────────────────────────────
 console.log(`📌 ${emoji_left} ${display_title} ${emoji_right}`);
 console.log(
-  `🌐 Lang:${lang.toUpperCase()} | Mode:${mode} | ` +
-  `Content:${content_mode.toUpperCase()} | ${WIDTH}×${HEIGHT}`
+  `🌐 Lang:${lang.toUpperCase()} | ` +
+  `Mode:${mode} | ` +
+  `Content:${content_mode.toUpperCase()} | ` +
+  `Platform:${platform.toUpperCase()} | ` +
+  `${WIDTH}×${HEIGHT}`
 );
-console.log(isLong ? "  📺 Landscape (YouTube)" : "  📱 Portrait (Short/Facebook)");
+
+if (isLong) {
+  console.log("  📺 Landscape — Long YouTube (1920×1080)");
+} else if (content_mode === "long" && platform === "fb") {
+  console.log("  📱 Portrait — Long Facebook (1080×1920)");
+} else {
+  console.log("  📱 Portrait — Short (1080×1920)");
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GPS & METADATA
@@ -202,7 +230,7 @@ function buildiPhoneMetadata() {
     Math.random().toString(16).substring(2, 14),
   ].join("-").toUpperCase();
   const g = () => (Math.random() * 0.02 - 0.01).toFixed(6);
-  const a = () => (Math.random() * 0.1 - 0.05).toFixed(6);
+  const a = () => (Math.random() * 0.1  - 0.05).toFixed(6);
   const lonSign = location.lonRef === "W" ? "-" : "";
   return [
     "-map_metadata", "-1",
@@ -348,7 +376,9 @@ function linkFrame(src, dst) {
 const realAudioDuration = probeDuration(audio);
 const effectiveDuration = realAudioDuration > 1 ? realAudioDuration : duration_s;
 const totalFrames       = Math.ceil(effectiveDuration * FPS);
-console.log(`🎵 Audio:${realAudioDuration.toFixed(3)}s | Frames:${totalFrames}`);
+console.log(
+  `🎵 Audio:${realAudioDuration.toFixed(3)}s | Frames:${totalFrames}`
+);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SECTION DETECTION
@@ -377,10 +407,10 @@ function detectVideoSections() {
   return aligned.map((seg, i) => {
     const tag = seg.tag || "information";
     let sectionType;
-    if      (i === 0)                                  sectionType = "hook";
-    else if (i === total - 1)                          sectionType = "cta";
+    if      (i === 0)                                    sectionType = "hook";
+    else if (i === total - 1)                            sectionType = "cta";
     else if (i === total - 2 && CTA_TAGS.includes(tag)) sectionType = "cta";
-    else                                               sectionType = "body";
+    else                                                 sectionType = "body";
     return {
       type:  sectionType,
       start: parseFloat(seg.start || 0),
@@ -453,7 +483,10 @@ function buildClipPlan() {
     return entry;
   });
 
-  console.log(`\n📋 Clip plan: ${plan.length} clips [${content_mode.toUpperCase()}]`);
+  console.log(
+    `\n📋 Clip plan: ${plan.length} clips ` +
+    `[${content_mode.toUpperCase()}/${platform.toUpperCase()}]`
+  );
   plan.forEach(c => {
     const tLabel = c.transition
       ? `→ [${c.transition.level.toUpperCase()}:${c.transition.type}]`
@@ -554,10 +587,9 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip = false) 
     const effectsInput = normalizeOk ? normOut : videoPath;
 
     if (!normalizeOk) {
-      console.log(`  ⚠️ Normalize fail [${idx}] — using original`);
+      console.log(`  ⚠️ Normalize fail [${idx}]`);
     }
 
-    // rescaleFilters إذا استخدمنا الأصل مباشرة
     const rescaleFilters = normalizeOk ? [] : [
       `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
       `crop=${WIDTH}:${HEIGHT}`,
@@ -594,7 +626,6 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip = false) 
       if (existsSync(normOut)) {
         copyFileSync(normOut, stage1);
       } else {
-        // last resort
         runFFmpeg([
           "-y", "-stream_loop", "-1", "-i", videoPath,
           "-t", d.toFixed(3),
@@ -700,7 +731,6 @@ function concatClipsWithTransitions(processedClips, clipPlan) {
 
   console.log(`\n✨ Merging ${processedClips.length} clips with transitions...`);
 
-  // تقسيم إلى groups
   const groups = [];
   let   grpBuf = [{ clip: processedClips[0], dur: clipPlan[0].duration }];
 
@@ -723,7 +753,6 @@ function concatClipsWithTransitions(processedClips, clipPlan) {
     console.log(`      Group[${i + 1}]: ${g.clips.length} clips ${label}`);
   });
 
-  // دمج كل group بـ minor xfade
   const groupOutputs = [];
   let   gIdx         = 0;
 
@@ -731,7 +760,11 @@ function concatClipsWithTransitions(processedClips, clipPlan) {
     const { clips } = group;
 
     if (clips.length === 1) {
-      groupOutputs.push({ file: clips[0].clip, dur: clips[0].dur, trans: group.nextTrans });
+      groupOutputs.push({
+        file:  clips[0].clip,
+        dur:   clips[0].dur,
+        trans: group.nextTrans,
+      });
       continue;
     }
 
@@ -775,16 +808,21 @@ function concatClipsWithTransitions(processedClips, clipPlan) {
         "-c", "copy", groupOut,
       ], { stdio: "ignore" });
     } else {
-      console.log(`  ✨ Group[${groupOutputs.length + 1}]: ${clips.length} clips merged`);
+      console.log(
+        `  ✨ Group[${groupOutputs.length + 1}]: ${clips.length} clips merged`
+      );
     }
 
-    groupOutputs.push({ file: groupOut, dur: Math.max(totDur, 0.5), trans: group.nextTrans });
+    groupOutputs.push({
+      file:  groupOut,
+      dur:   Math.max(totDur, 0.5),
+      trans: group.nextTrans,
+    });
     gIdx++;
   }
 
   if (groupOutputs.length === 1) return groupOutputs[0].file;
 
-  // تطبيق major transitions بين groups
   let mergedFile = groupOutputs[0].file;
   let mergedDur  = groupOutputs[0].dur;
 
@@ -794,7 +832,10 @@ function concatClipsWithTransitions(processedClips, clipPlan) {
     const majorOut = join(TMP, `maj_${i}.mp4`);
 
     if (trans && trans.level === "major") {
-      applyMajorTransition(mergedFile, nextFile, mergedDur, trans.type, trans.duration, majorOut);
+      applyMajorTransition(
+        mergedFile, nextFile, mergedDur,
+        trans.type, trans.duration, majorOut
+      );
     } else {
       const X   = MINOR_DUR;
       const O   = Math.max(0.1, mergedDur - X);
@@ -997,7 +1038,10 @@ function buildFrameStateMap(words) {
     }
   }
   const cov = map.filter(Boolean).length;
-  console.log(`Coverage: ${cov}/${totalFrames} (${((cov / totalFrames) * 100).toFixed(1)}%)`);
+  console.log(
+    `Coverage: ${cov}/${totalFrames} ` +
+    `(${((cov / totalFrames) * 100).toFixed(1)}%)`
+  );
   return map;
 }
 
@@ -1014,7 +1058,11 @@ function buildSentenceBoundaryMap() {
     for (let f = 0; f < cfg.flashFrames; f++) {
       const fr = ef + f;
       if (fr >= 0 && fr < totalFrames && !map.has(fr)) {
-        map.set(fr, { tag, config: cfg, progress: f / Math.max(cfg.flashFrames - 1, 1) });
+        map.set(fr, {
+          tag,
+          config:   cfg,
+          progress: f / Math.max(cfg.flashFrames - 1, 1),
+        });
       }
     }
   }
@@ -1023,7 +1071,9 @@ function buildSentenceBoundaryMap() {
 }
 
 function buildSentenceMap() {
-  if (!aligned || aligned.length === 0) return new Array(totalFrames).fill(null);
+  if (!aligned || aligned.length === 0) {
+    return new Array(totalFrames).fill(null);
+  }
   const map = new Array(totalFrames).fill(null);
   for (const seg of aligned) {
     const ss = Math.floor(parseFloat(seg.start || 0) * FPS);
@@ -1080,7 +1130,10 @@ function computeTransitionEffect(transState, gf) {
   }
   let ts = 1.0;
   if (c.scaleBoost > 1.0 && tp < 0.5) ts = 1 + (c.scaleBoost - 1) * (1 - tp * 2);
-  return { flashOpacity: fo, flashColor: c.flashColor, shakeX: sx, shakeY: sy, transScale: ts };
+  return {
+    flashOpacity: fo, flashColor: c.flashColor,
+    shakeX: sx, shakeY: sy, transScale: ts,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1132,25 +1185,37 @@ function stateKey(state, gf, ts) {
   if (gf >= totalFrames - OUTRO_FRAMES) return `outro_f${gf}`;
   if (ts) {
     const pb = ts.progress < 0.5 ? "in" : "out";
-    return `tr_${ts.tag}_${pb}_${safeKey(state ? state.word : "empty", 15)}_${state?.isPower ? 1 : 0}`;
+    return (
+      `tr_${ts.tag}_${pb}_` +
+      `${safeKey(state ? state.word : "empty", 15)}_` +
+      `${state?.isPower ? 1 : 0}`
+    );
   }
   const h = gf < HOOK_FRAMES ? "h" : "n";
   if (!state) return `empty_${h}`;
   const p = state.progress;
   const b = p < 0.15 ? "pop" : p > 0.85 ? "fade" : "hold";
-  return `w_${safeKey(state.word, 15)}_${state.tag}_${state.isPower ? 1 : 0}_${h}_${b}`;
+  return (
+    `w_${safeKey(state.word, 15)}_${state.tag}_` +
+    `${state.isPower ? 1 : 0}_${h}_${b}`
+  );
 }
 
 function longStateKey(ws, ts, sn) {
-  const wk = ws ? `${safeKey(ws.word, 15)}_${ws.tag}_${ws.isPower ? 1 : 0}` : "empty";
+  const wk = ws
+    ? `${safeKey(ws.word, 15)}_${ws.tag}_${ws.isPower ? 1 : 0}`
+    : "empty";
   const sk = safeKey(sn, 25);
   const tk = ts ? `tr_${ts.tag}_${Math.floor(ts.progress * 4)}` : "n";
-  const pb = ws ? (ws.progress < 0.15 ? "pop" : ws.progress > 0.85 ? "fade" : "hold") : "hold";
+  const pb = ws
+    ? (ws.progress < 0.15 ? "pop" : ws.progress > 0.85 ? "fade" : "hold")
+    : "hold";
   return `long_${wk}_${tk}_${pb}_${sk}`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HTML BUILDER — SHORT
+// HTML BUILDER — SHORT (Portrait: 1080×1920)
+// يُستخدم لـ: Short + Long FB
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTMLShort({
@@ -1165,7 +1230,9 @@ function buildHTMLShort({
   const tf   = getFontFamily(display_title);
   const ts   = isPower ? POWER_STYLE : getWordStyle(tag);
   const ta   = computeTitleAnimation(globalFrame);
-  const wa   = word ? computeWordAnimation(progress, ts.scaleMult) : { scale: 1, opacity: 0, translateY: 0 };
+  const wa   = word
+    ? computeWordAnimation(progress, ts.scaleMult)
+    : { scale: 1, opacity: 0, translateY: 0 };
   const tr   = computeTransitionEffect(transitionState, globalFrame);
   const fs   = computeFontSize(word, ar, ts.scaleMult, false);
   const fsc  = wa.scale * tr.transScale;
@@ -1204,7 +1271,8 @@ function buildHTMLShort({
         `line-height:1.15;letter-spacing:${ar ? "1px" : "3px"};display:block;` +
         `word-break:break-word;` +
         `-webkit-text-stroke:${ts.strokeWidth}px ${ts.strokeColor};paint-order:stroke fill;` +
-        `text-shadow:0 0 ${ts.glowSpread}px ${ts.colorGlow},0 0 ${ts.glowSpread * 1.5}px ${ts.colorGlow};` +
+        `text-shadow:0 0 ${ts.glowSpread}px ${ts.colorGlow},` +
+        `0 0 ${ts.glowSpread * 1.5}px ${ts.colorGlow};` +
         `filter:brightness(${ts.brightness});`
       );
 
@@ -1224,14 +1292,17 @@ html,body{width:${WIDTH}px;height:${HEIGHT}px;overflow:hidden;background:transpa
 .wt{${wts}}
 </style></head><body>
 <div class="ot"></div><div class="ob"></div><div class="flash"></div>
-<div class="tc"><div class="tt"><span class="te">${emoji_left}</span><span>${esc(display_title)}</span><span class="te">${emoji_right}</span></div></div>
+<div class="tc"><div class="tt">
+<span class="te">${emoji_left}</span><span>${esc(display_title)}</span><span class="te">${emoji_right}</span>
+</div></div>
 ${isHook ? `<div class="hb">${esc(ht)}</div>` : ""}
 ${word ? `<div class="wc"><div class="wp"><span class="wt">${esc(word)}</span></div></div>` : ""}
 </body></html>`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HTML BUILDER — LONG
+// HTML BUILDER — LONG (Landscape: 1920×1080)
+// يُستخدم لـ: Long YT فقط
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildHTMLLong({
@@ -1285,14 +1356,17 @@ function buildHTMLLong({
     `font-family:${font};font-size:${fs}px;font-weight:900;color:${ts.colorWord};` +
     `line-height:1.2;letter-spacing:${ar ? "1px" : "2px"};display:block;word-break:break-word;` +
     `-webkit-text-stroke:${ts.strokeWidth}px ${ts.strokeColor};paint-order:stroke fill;` +
-    `text-shadow:0 0 ${ts.glowSpread}px ${ts.colorGlow},0 0 ${ts.glowSpread * 1.5}px ${ts.colorGlow};` +
+    `text-shadow:0 0 ${ts.glowSpread}px ${ts.colorGlow},` +
+    `0 0 ${ts.glowSpread * 1.5}px ${ts.colorGlow};` +
     `filter:brightness(${ts.brightness});`
   );
 
   const sentHTML = currentSentence
     ? currentSentence.split(/\s+/).map(w => {
         const h = normalizeWord(w) === normalizeWord(highlightedWord);
-        return h ? `<span class="sh">${esc(w)}</span>` : `<span class="sw">${esc(w)}</span>`;
+        return h
+          ? `<span class="sh">${esc(w)}</span>`
+          : `<span class="sw">${esc(w)}</span>`;
       }).join(" ")
     : "";
 
@@ -1321,7 +1395,7 @@ ${td === "rtl"
   : `<span class="te">${emoji_left}</span><span>${esc(display_title)}</span>`
 }
 </div><span class="tline"></span></div>
-${word ? `<div class="wc"><span class="wt">${esc(word)}</span></div>` : ""}
+${word     ? `<div class="wc"><span class="wt">${esc(word)}</span></div>` : ""}
 ${sentHTML ? `<div class="subtitle">${sentHTML}</div>` : ""}
 </body></html>`;
 }
@@ -1379,7 +1453,7 @@ async function renderPNGsShort(page, fsm, bm) {
       });
     }
   }
-  console.log(`\n📸 ${unique.size} unique states [SHORT]`);
+  console.log(`\n📸 ${unique.size} unique states [SHORT/FB]`);
   await warmupFonts(page, buildHTMLShort);
 
   const cache = new Map();
@@ -1421,7 +1495,7 @@ async function renderPNGsLong(page, fsm, bm, sm) {
       });
     }
   }
-  console.log(`\n📸 ${unique.size} unique states [LONG]`);
+  console.log(`\n📸 ${unique.size} unique states [LONG/YT]`);
   await warmupFonts(page, buildHTMLLong);
 
   const cache = new Map();
@@ -1450,15 +1524,17 @@ async function renderPNGsLong(page, fsm, bm, sm) {
 async function handleBgOnlyMode() {
   const plan = buildClipPlan();
   console.log(
-    `\n📊 Processing ${plan.length} clips [${content_mode.toUpperCase()}] ` +
-    `${isShort ? "📱 Portrait" : "📺 Landscape"}`
+    `\n📊 Processing ${plan.length} clips ` +
+    `[${content_mode.toUpperCase()}/${platform.toUpperCase()}] ` +
+    `${isLong ? "📺 Landscape" : "📱 Portrait"}`
   );
 
   const processedClips = [];
   for (const clip of plan) {
     const { index: i, duration: d, videoPath: v, isHook: h } = clip;
     process.stdout.write(
-      `  [${i + 1}/${plan.length}] ${d.toFixed(2)}s [${clip.section.type}]${h ? " 🔥" : ""}... `
+      `  [${i + 1}/${plan.length}] ` +
+      `${d.toFixed(2)}s [${clip.section.type}]${h ? " 🔥" : ""}... `
     );
     const bg = join(TMP, `bg_${String(i).padStart(3, "0")}.mp4`);
     processBackground(v, d, bg, i, h);
@@ -1474,7 +1550,9 @@ async function handleBgOnlyMode() {
 
   console.log("\n🎵 Merging audio...");
   mergeAudio(merged, audio, outputPath);
-  console.log(`\n🎉 BG [${content_mode.toUpperCase()}] → ${outputPath}\n`);
+  console.log(
+    `\n🎉 BG [${content_mode.toUpperCase()}/${platform.toUpperCase()}] → ${outputPath}\n`
+  );
 }
 
 async function handleWordsOnlyMode() {
@@ -1484,9 +1562,14 @@ async function handleWordsOnlyMode() {
     process.exit(1);
   }
 
+  // ✅ Short + Long FB → buildHTMLShort (portrait)
+  // ✅ Long YT → buildHTMLLong (landscape)
+  const useShortHTML = !isLong; // isLong = long + yt
+
   console.log(
-    `\n📱 Words overlay [${content_mode.toUpperCase()}] ` +
-    `${isShort ? "Portrait (1080×1920)" : "Landscape (1920×1080)"}`
+    `\n${isLong ? "📺" : "📱"} Words overlay ` +
+    `[${content_mode.toUpperCase()}/${platform.toUpperCase()}] ` +
+    `${WIDTH}×${HEIGHT}`
   );
 
   const words = buildWordList();
@@ -1495,84 +1578,64 @@ async function handleWordsOnlyMode() {
 
   const { browser, page } = await launchBrowser();
   try {
-    console.log(`\n🖼️ Rendering PNGs [${content_mode.toUpperCase()}]...`);
-    const cache = await renderPNGsShort(page, fsm, bm);
-    console.log(`✅ ${cache.size} PNGs\n`);
+    if (useShortHTML) {
+      // ── Short + Long FB ──────────────────────────────────────
+      console.log(`\n🖼️ Rendering PNGs [${isLong ? "LONG/FB" : "SHORT"}]...`);
+      const cache = await renderPNGsShort(page, fsm, bm);
+      console.log(`✅ ${cache.size} PNGs\n`);
 
-    const fd = join(TMP, "frames_words");
-    mkdirSync(fd, { recursive: true });
-    const ep = cache.get("empty_n") || cache.get("intro_f0");
+      const fd = join(TMP, "frames_words");
+      mkdirSync(fd, { recursive: true });
+      const ep = cache.get("empty_n") || cache.get("intro_f0");
 
-    for (let f = 0; f < totalFrames; f++) {
-      const ts  = bm.get(f) || null;
-      const k   = stateKey(fsm[f], f, ts);
-      const src = cache.get(k) || ep;
-      linkFrame(src, join(fd, `frame_${String(f).padStart(6, "0")}.png`));
+      for (let f = 0; f < totalFrames; f++) {
+        const ts  = bm.get(f) || null;
+        const k   = stateKey(fsm[f], f, ts);
+        const src = cache.get(k) || ep;
+        linkFrame(src, join(fd, `frame_${String(f).padStart(6, "0")}.png`));
+      }
+
+      const cm = join(TMP, "cap_words.mov");
+      framesToMov(fd, cm);
+      console.log("🔧 Overlaying words...");
+      const wv = join(TMP, "with_words.mp4");
+      overlayOnBg(bv, cm, audio, wv);
+      console.log("\n📱 Applying metadata...");
+      applyMetadata(wv, outputPath);
+
+    } else {
+      // ── Long YT ─────────────────────────────────────────────
+      const sm = buildSentenceMap();
+      console.log(`\n🖼️ Rendering PNGs [LONG/YT]...`);
+      const cache = await renderPNGsLong(page, fsm, bm, sm);
+      console.log(`✅ ${cache.size} PNGs [LONG/YT]\n`);
+
+      const fd = join(TMP, "frames_long");
+      mkdirSync(fd, { recursive: true });
+      const ep = cache.get("long_empty_n_hold_") || [...cache.values()][0];
+
+      for (let f = 0; f < totalFrames; f++) {
+        const ts  = bm.get(f) || null;
+        const ws  = fsm[f];
+        const sn  = sm[f] || "";
+        const k   = longStateKey(ws, ts, sn);
+        const src = cache.get(k) || ep;
+        linkFrame(src, join(fd, `frame_${String(f).padStart(6, "0")}.png`));
+      }
+
+      const cm = join(TMP, "cap_long.mov");
+      framesToMov(fd, cm);
+      console.log("🔧 Overlaying words [LONG/YT]...");
+      const wv = join(TMP, "with_words_long.mp4");
+      overlayOnBg(bv, cm, audio, wv);
+      console.log("\n📱 Applying metadata...");
+      applyMetadata(wv, outputPath);
     }
 
-    const cm = join(TMP, "cap_words.mov");
-    framesToMov(fd, cm);
-
-    console.log("🔧 Overlaying words...");
-    const wv = join(TMP, "with_words.mp4");
-    overlayOnBg(bv, cm, audio, wv);
-
-    console.log("\n📱 Applying metadata...");
-    applyMetadata(wv, outputPath);
-    console.log(`\n🎉 Final [${content_mode.toUpperCase()}] → ${outputPath}\n`);
-
-  } finally {
-    try {
-      if (browser && browser.isConnected()) await browser.close();
-    } catch (e) {
-      console.warn("Browser close error:", e.message);
-    }
-  }
-}
-
-async function handleLongWordsOnlyMode() {
-  const bv = videos[0];
-  if (!bv) {
-    console.error("❌ long_words_only requires videos[0]");
-    process.exit(1);
-  }
-
-  console.log("\n📺 Words overlay [LONG] Landscape (1920×1080)");
-
-  const words = buildWordList();
-  const fsm   = buildFrameStateMap(words);
-  const bm    = buildSentenceBoundaryMap();
-  const sm    = buildSentenceMap();
-
-  const { browser, page } = await launchBrowser();
-  try {
-    console.log("\n🖼️ Rendering PNGs [LONG]...");
-    const cache = await renderPNGsLong(page, fsm, bm, sm);
-    console.log(`✅ ${cache.size} PNGs [LONG]\n`);
-
-    const fd = join(TMP, "frames_long");
-    mkdirSync(fd, { recursive: true });
-    const ep = cache.get("long_empty_n_hold_") || [...cache.values()][0];
-
-    for (let f = 0; f < totalFrames; f++) {
-      const ts  = bm.get(f) || null;
-      const ws  = fsm[f];
-      const sn  = sm[f] || "";
-      const k   = longStateKey(ws, ts, sn);
-      const src = cache.get(k) || ep;
-      linkFrame(src, join(fd, `frame_${String(f).padStart(6, "0")}.png`));
-    }
-
-    const cm = join(TMP, "cap_long.mov");
-    framesToMov(fd, cm);
-
-    console.log("🔧 Overlaying words [LONG]...");
-    const wv = join(TMP, "with_words_long.mp4");
-    overlayOnBg(bv, cm, audio, wv);
-
-    console.log("\n📱 Applying metadata...");
-    applyMetadata(wv, outputPath);
-    console.log(`\n🎉 Final [LONG] → ${outputPath}\n`);
+    console.log(
+      `\n🎉 Final [${content_mode.toUpperCase()}/${platform.toUpperCase()}] ` +
+      `→ ${outputPath}\n`
+    );
 
   } finally {
     try {
@@ -1591,11 +1654,15 @@ const MODE_HANDLERS = {
   bg_only:         handleBgOnlyMode,
   long_bg_only:    handleBgOnlyMode,
   words_only:      handleWordsOnlyMode,
-  long_words_only: handleLongWordsOnlyMode,
+  long_words_only: handleWordsOnlyMode, // ✅ نفس الدالة — تُحدد السلوك بـ isLong
 };
 
 async function main() {
-  console.log(`\n🚀 Mode:${mode} | Content:${content_mode.toUpperCase()}\n`);
+  console.log(
+    `\n🚀 Mode:${mode} | ` +
+    `Content:${content_mode.toUpperCase()} | ` +
+    `Platform:${platform.toUpperCase()}\n`
+  );
   const handler = MODE_HANDLERS[mode];
   if (!handler) {
     console.error(`❌ Unknown mode: ${mode}`);
