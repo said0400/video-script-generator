@@ -5,11 +5,14 @@ Features:
   ✅ Algenib voice for all languages
   ✅ Language-specific styles (AR, FR, EN)
   ✅ Multi-key rotation (up to 50 keys)
+  ✅ Supports both naming conventions:
+       - GEMINI_API_KEY1   (no underscore)
+       - GEMINI_API_KEY_1  (with underscore)
   ✅ Tag-aware voice instructions
   ✅ Auto-retry on rate limits
   ✅ Truncation detection
   ✅ Thread-safe
-  ✅ Compatible with google-genai 1.0.0+
+  ✅ Compatible with google-genai 0.x and 1.x
 """
 
 from __future__ import annotations
@@ -227,7 +230,7 @@ DEFAULT_VOICE_INSTRUCTION = (
 # API KEY ROTATION (Thread-safe)
 # ═════════════════════════════════════════════════════════════════════════════
 
-_key_lock = threading.Lock()
+_key_lock  = threading.Lock()
 _key_index: int       = 0
 _API_KEYS:  list[str] = []
 
@@ -236,22 +239,43 @@ def _load_keys() -> list[str]:
     """
     تحميل كل مفاتيح Gemini من البيئة.
 
-    يقرأ:
-        GEMINI_API_KEY
-        GEMINI_API_KEY_1
+    يدعم تسميتين معاً:
+        ✅ GEMINI_API_KEY        (الأساسي)
+        ✅ GEMINI_API_KEY1       (بدون شرطة سفلية)
+        ✅ GEMINI_API_KEY_1      (مع شرطة سفلية)
         ...
-        GEMINI_API_KEY_50
+        ✅ GEMINI_API_KEY50
+        ✅ GEMINI_API_KEY_50
+
+    Returns:
+        قائمة المفاتيح الفريدة (بدون تكرار)
     """
     keys: list[str] = []
+    seen: set[str]  = set()
 
+    # ✅ المفتاح الأساسي
     main_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if main_key:
+    if main_key and main_key not in seen:
         keys.append(main_key)
+        seen.add(main_key)
 
+    # ✅ المفاتيح المرقمة — يدعم التسميتين
     for i in range(1, MAX_KEYS_SCAN + 1):
-        key = os.environ.get(f"GEMINI_API_KEY_{i}", "").strip()
-        if key:
-            keys.append(key)
+        # بدون شرطة سفلية: GEMINI_API_KEY1, GEMINI_API_KEY2, ...
+        key_no_underscore = os.environ.get(
+            f"GEMINI_API_KEY{i}", ""
+        ).strip()
+        if key_no_underscore and key_no_underscore not in seen:
+            keys.append(key_no_underscore)
+            seen.add(key_no_underscore)
+
+        # مع شرطة سفلية: GEMINI_API_KEY_1, GEMINI_API_KEY_2, ...
+        key_with_underscore = os.environ.get(
+            f"GEMINI_API_KEY_{i}", ""
+        ).strip()
+        if key_with_underscore and key_with_underscore not in seen:
+            keys.append(key_with_underscore)
+            seen.add(key_with_underscore)
 
     return keys
 
@@ -318,7 +342,7 @@ def _rotate_key() -> None:
         new_idx = _key_index
 
     log.info(
-        f"  🔄 Gemini key rotated → #{new_idx} (of {n})"
+        f"  🔄 Gemini key rotated → #{new_idx + 1}/{n}"
     )
 
 
@@ -780,7 +804,8 @@ def synthesize_speech(
 
         log.info(
             f"\n  🎙️  TTS attempt "
-            f"[{attempt + 1}/{max_attempts}] | key #{cur_idx}"
+            f"[{attempt + 1}/{max_attempts}] | "
+            f"key #{cur_idx + 1}/{len(_API_KEYS) or 1}"
         )
 
         try:
@@ -829,7 +854,7 @@ def synthesize_speech(
         except Exception as e:
             if _is_rate_limit(e):
                 log.warning(
-                    f"  🛑 Rate limit on key #{cur_idx}"
+                    f"  🛑 Rate limit on key #{cur_idx + 1}"
                 )
                 _rotate_key()
                 time.sleep(2)
