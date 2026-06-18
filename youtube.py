@@ -2,13 +2,15 @@
 📺 YouTube Auto-Publisher
 
 Features:
-  ✅ Multi-channel support (AR, FR, EN) — each with own Gmail
-  ✅ Short → YouTube Shorts (auto-detected by duration)
+  ✅ Multi-channel support (AR, FR, EN) — each with own credentials
+  ✅ Short → YouTube Shorts (portrait + ≤60s + #Shorts tag)
   ✅ Long  → YouTube Long form video
+  ✅ Chunked resumable upload (no RAM overflow)
   ✅ Smart description from Groq (street language)
   ✅ Credential fallback (with/without language suffix)
-  ✅ Retry with exponential backoff
-  ✅ Resumable upload for large files
+  ✅ Retry with exponential backoff per chunk
+  ✅ Input validation on all public functions
+  ✅ Correct file size limits (Short: 500MB, Long: 128GB)
 """
 
 from __future__ import annotations
@@ -29,43 +31,65 @@ import requests
 YOUTUBE_TOKEN_URL  = "https://oauth2.googleapis.com/token"
 YOUTUBE_UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 
-# Video constraints
-MAX_FILE_MB   = 256
-MIN_FILE_MB   = 0.5
-MAX_DESC_LEN  = 5000
+# File size limits
+MIN_FILE_MB       = 0.5
+MAX_FILE_MB_SHORT = 500        # 500 MB للـ Short
+MAX_FILE_MB_LONG  = 128 * 1024 # 128 GB للـ Long
+
+# Chunked upload
+CHUNK_SIZE = 8 * 1024 * 1024   # 8 MB per chunk
+
+# Description / Title limits
+MAX_DESC_LEN  = 5_000
 MAX_TITLE_LEN = 100
 
 # YouTube Category IDs
-# https://developers.google.com/youtube/v3/docs/videoCategories/list
 CATEGORY_PEOPLE_BLOGS = "22"
 CATEGORY_EDUCATION    = "27"
-CATEGORY_HOWTO        = "26"
 
-# Tags حسب content_mode
-TAGS_SHORT = [
-    "shorts", "viral", "psychology", "motivation", "reels",
-]
-TAGS_LONG = [
-    "psychology", "motivation", "education", "mindset", "viral",
-]
+# Tags
+TAGS_SHORT = ["shorts", "viral", "psychology", "motivation", "reels"]
+TAGS_LONG  = ["psychology", "motivation", "education", "mindset", "viral"]
 
 # Timeouts
-TOKEN_TIMEOUT      = 30
-INIT_TIMEOUT       = 30
-UPLOAD_TIMEOUT     = 600  # 10 دقائق للرفع
-RETRY_DELAYS       = [10, 20, 30]  # ثواني
+TOKEN_TIMEOUT      = 30   # ثانية
+INIT_TIMEOUT       = 30   # ثانية
+CHUNK_TIMEOUT      = 120  # ثانية لكل chunk
 
-# HTTP Status codes
-HTTP_AUTH_ERRORS = (401, 403)
-HTTP_RATE_LIMIT  = 429
-HTTP_SUCCESS     = (200, 201)
+# HTTP
+HTTP_RESUME_INCOMPLETE = 308
+HTTP_SUCCESS           = (200, 201)
+HTTP_AUTH_ERRORS       = (401, 403)
+HTTP_RATE_LIMIT        = 429
 
-# Logging
-logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(message)s",
-)
+# Retry
+RETRY_DELAYS = [10, 20, 40]   # ثواني بين المحاولات
+MAX_RETRIES  = 3
+
+# Supported values
+_VALID_LANGS = frozenset({"ar", "fr", "en"})
+_VALID_MODES = frozenset({"short", "long"})
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# VALIDATION
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _validate_lang(lang: str) -> None:
+    if lang not in _VALID_LANGS:
+        raise ValueError(
+            f"Invalid lang '{lang}'. Must be one of: {sorted(_VALID_LANGS)}"
+        )
+
+
+def _validate_mode(mode: str) -> None:
+    if mode not in _VALID_MODES:
+        raise ValueError(
+            f"Invalid content_mode '{mode}'. Must be one of: {sorted(_VALID_MODES)}"
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -75,10 +99,9 @@ log = logging.getLogger(__name__)
 def _get_env(key_with_lang: str, key_generic: str) -> str:
     """
     قراءة متغير بيئة مع fallback.
-
     Priority:
-        1. KEY_WITH_LANG (مثل YOUTUBE_CLIENT_ID_AR)
-        2. KEY_GENERIC   (مثل YOUTUBE_CLIENT_ID)
+        1. KEY_WITH_LANG  (مثل YOUTUBE_CLIENT_ID_AR)
+        2. KEY_GENERIC    (مثل YOUTUBE_CLIENT_ID)
     """
     value = os.environ.get(key_with_lang, "").strip()
     if value:
@@ -86,41 +109,20 @@ def _get_env(key_with_lang: str, key_generic: str) -> str:
     return os.environ.get(key_generic, "").strip()
 
 
-def _get_creds(lang: str) -> tuple[str, str, str]:
+def _read_creds(lang: str) -> tuple[str, str, str]:
     """
-    قراءة YouTube credentials للغة معينة.
+    قراءة credentials من environment — دالة مشتركة.
 
     Returns:
         (client_id, client_secret, refresh_token)
-
-    Raises:
-        RuntimeError: إذا كانت credentials ناقصة
+        كل قيمة قد تكون "" إذا غير موجودة
     """
-    lang_upper = lang.upper()
-
-    client_id = _get_env(
-        f"YOUTUBE_CLIENT_ID_{lang_upper}",
-        "YOUTUBE_CLIENT_ID",
+    lu = lang.upper()
+    return (
+        _get_env(f"YOUTUBE_CLIENT_ID_{lu}",     "YOUTUBE_CLIENT_ID"),
+        _get_env(f"YOUTUBE_CLIENT_SECRET_{lu}", "YOUTUBE_CLIENT_SECRET"),
+        _get_env(f"YOUTUBE_REFRESH_TOKEN_{lu}", "YOUTUBE_REFRESH_TOKEN"),
     )
-    client_secret = _get_env(
-        f"YOUTUBE_CLIENT_SECRET_{lang_upper}",
-        "YOUTUBE_CLIENT_SECRET",
-    )
-    refresh_token = _get_env(
-        f"YOUTUBE_REFRESH_TOKEN_{lang_upper}",
-        "YOUTUBE_REFRESH_TOKEN",
-    )
-
-    if not all([client_id, client_secret, refresh_token]):
-        raise RuntimeError(
-            f"Missing YouTube credentials for {lang_upper}.\n"
-            f"  Set in GitHub Secrets:\n"
-            f"  • YOUTUBE_CLIENT_ID_{lang_upper}\n"
-            f"  • YOUTUBE_CLIENT_SECRET_{lang_upper}\n"
-            f"  • YOUTUBE_REFRESH_TOKEN_{lang_upper}"
-        )
-
-    return client_id, client_secret, refresh_token
 
 
 def credentials_available(lang: str) -> bool:
@@ -130,22 +132,31 @@ def credentials_available(lang: str) -> bool:
     Returns:
         True إذا كل المتغيرات موجودة
     """
-    lang_upper = lang.upper()
+    try:
+        _validate_lang(lang)
+    except ValueError:
+        return False
+    return all(_read_creds(lang))
 
-    client_id = _get_env(
-        f"YOUTUBE_CLIENT_ID_{lang_upper}",
-        "YOUTUBE_CLIENT_ID",
-    )
-    client_secret = _get_env(
-        f"YOUTUBE_CLIENT_SECRET_{lang_upper}",
-        "YOUTUBE_CLIENT_SECRET",
-    )
-    refresh_token = _get_env(
-        f"YOUTUBE_REFRESH_TOKEN_{lang_upper}",
-        "YOUTUBE_REFRESH_TOKEN",
-    )
 
-    return all([client_id, client_secret, refresh_token])
+def _get_creds(lang: str) -> tuple[str, str, str]:
+    """
+    قراءة credentials مع التحقق من اكتمالها.
+
+    Raises:
+        RuntimeError: إذا كانت credentials ناقصة
+    """
+    creds = _read_creds(lang)
+    if not all(creds):
+        lu = lang.upper()
+        raise RuntimeError(
+            f"Missing YouTube credentials for {lu}.\n"
+            f"  Set in GitHub Secrets:\n"
+            f"  • YOUTUBE_CLIENT_ID_{lu}\n"
+            f"  • YOUTUBE_CLIENT_SECRET_{lu}\n"
+            f"  • YOUTUBE_REFRESH_TOKEN_{lu}"
+        )
+    return creds
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -158,20 +169,19 @@ def _get_access_token(lang: str) -> str:
 
     Raises:
         RuntimeError: عند فشل التجديد
-        requests.exceptions.HTTPError: عند فشل HTTP
     """
     client_id, client_secret, refresh_token = _get_creds(lang)
 
     try:
         r = requests.post(
             YOUTUBE_TOKEN_URL,
-            data = {
+            data={
                 "client_id":     client_id,
                 "client_secret": client_secret,
                 "refresh_token": refresh_token,
                 "grant_type":    "refresh_token",
             },
-            timeout = TOKEN_TIMEOUT,
+            timeout=TOKEN_TIMEOUT,
         )
         r.raise_for_status()
 
@@ -179,15 +189,14 @@ def _get_access_token(lang: str) -> str:
         raise RuntimeError(
             f"YouTube token request timeout ({lang.upper()})"
         )
-
     except requests.exceptions.HTTPError as e:
+        code = e.response.status_code if e.response else "?"
         raise RuntimeError(
-            f"YouTube token error ({lang.upper()}): "
-            f"HTTP {e.response.status_code if e.response else '?'}"
+            f"YouTube token HTTP error ({lang.upper()}): {code}"
         )
 
-    data = r.json()
-    access_token = data.get("access_token", "")
+    data         = r.json()
+    access_token = data.get("access_token", "").strip()
 
     if not access_token:
         error = data.get("error", "unknown")
@@ -197,9 +206,7 @@ def _get_access_token(lang: str) -> str:
             f"{error} — {desc}"
         )
 
-    log.info(
-        f"  ✅ YouTube access token obtained ({lang.upper()})"
-    )
+    log.info(f"  ✅ YouTube token obtained ({lang.upper()})")
     return access_token
 
 
@@ -207,7 +214,10 @@ def _get_access_token(lang: str) -> str:
 # VIDEO VALIDATION
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _validate_video(video_path: str) -> tuple[float, int]:
+def _validate_video(
+    video_path:   str,
+    content_mode: str = "short",
+) -> tuple[float, int]:
     """
     التحقق من الفيديو قبل الرفع.
 
@@ -216,7 +226,7 @@ def _validate_video(video_path: str) -> tuple[float, int]:
 
     Raises:
         FileNotFoundError: إذا الفيديو غير موجود
-        ValueError: إذا الفيديو كبير/صغير جداً
+        ValueError:        إذا الحجم خارج الحدود
     """
     path = Path(video_path).resolve()
 
@@ -226,10 +236,16 @@ def _validate_video(video_path: str) -> tuple[float, int]:
     size_bytes = path.stat().st_size
     size_mb    = size_bytes / 1_048_576
 
-    if size_mb > MAX_FILE_MB:
+    max_mb = (
+        MAX_FILE_MB_SHORT
+        if content_mode == "short"
+        else MAX_FILE_MB_LONG
+    )
+
+    if size_mb > max_mb:
         raise ValueError(
             f"File too large: {size_mb:.1f} MB "
-            f"(max {MAX_FILE_MB} MB)"
+            f"(max {max_mb} MB for {content_mode})"
         )
 
     if size_mb < MIN_FILE_MB:
@@ -247,39 +263,29 @@ def _validate_video(video_path: str) -> tuple[float, int]:
 
 def _get_fallback_cta(lang: str, content_mode: str) -> str:
     """جلب CTA افتراضي حسب اللغة والنوع."""
-    cta_map = {
+    cta_map: dict[str, dict[str, str]] = {
         "ar": {
-            "long":  (
-                "اشترك في القناة وفعّل الجرس 🔔\n"
-                "شارك الفيديو مع أصحابك 🔥"
-            ),
+            "long":  "اشترك في القناة وفعّل الجرس 🔔\nشارك الفيديو مع أصحابك 🔥",
             "short": "اشترك وفعّل الجرس 🔔",
         },
         "fr": {
-            "long":  (
-                "Abonne-toi et active la cloche 🔔\n"
-                "Partage cette vidéo 🔥"
-            ),
+            "long":  "Abonne-toi et active la cloche 🔔\nPartage cette vidéo 🔥",
             "short": "Abonne-toi 🔔",
         },
         "en": {
-            "long":  (
-                "Subscribe and hit the bell 🔔\n"
-                "Share this video with your friends 🔥"
-            ),
+            "long":  "Subscribe and hit the bell 🔔\nShare this video 🔥",
             "short": "Subscribe and hit the bell 🔔",
         },
     }
+    return cta_map.get(lang, cta_map["en"]).get(
+        content_mode, cta_map["en"]["short"]
+    )
 
-    lang_data = cta_map.get(lang, cta_map["en"])
-    return lang_data.get(content_mode, lang_data["short"])
 
-
-def _get_fallback_tags(content_mode: str) -> str:
-    """جلب hashtags افتراضية حسب النوع."""
+def _get_fallback_hashtags(content_mode: str) -> str:
     if content_mode == "long":
         return "#psychology #motivation #mindset"
-    return "#shorts #viral #psychology"
+    return "#Shorts #viral #psychology"
 
 
 def build_youtube_description(
@@ -292,20 +298,24 @@ def build_youtube_description(
     بناء وصف YouTube.
 
     Priority:
-        1. street_description من Groq إذا متوفر
+        1. street_description من Groq
         2. Fallback: title + CTA + hashtags
     """
-    # استخدام Groq description إذا متوفر
+    # ✅ الوصف من Groq
     if street_description and street_description.strip():
-        return street_description.strip()[:MAX_DESC_LEN]
+        desc = street_description.strip()
+        # ✅ تأكد من وجود #Shorts للـ Short
+        if content_mode == "short" and "#shorts" not in desc.lower():
+            desc = f"#Shorts\n\n{desc}"
+        return desc[:MAX_DESC_LEN]
 
     # Fallback
     title    = record.get("title", "")
     cta      = _get_fallback_cta(lang, content_mode)
-    tags_str = _get_fallback_tags(content_mode)
+    hashtags = _get_fallback_hashtags(content_mode)
 
-    description = f"{title}\n\n{cta}\n\n{tags_str}"
-    return description[:MAX_DESC_LEN]
+    desc = f"{title}\n\n{cta}\n\n{hashtags}"
+    return desc[:MAX_DESC_LEN]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -322,26 +332,30 @@ def _build_metadata(
     بناء metadata الفيديو.
 
     Short:
-        - Tags: shorts + viral
+        - #Shorts في الـ description
         - Category: People & Blogs (22)
+        - Tags: shorts + viral + ...
 
     Long:
-        - Tags: psychology + motivation
         - Category: Education (27)
+        - Tags: psychology + motivation + ...
     """
-    default_lang = lang if lang in ("ar", "fr", "en") else "en"
+    default_lang = lang if lang in _VALID_LANGS else "en"
 
-    if content_mode == "long":
-        tags     = list(TAGS_LONG) + [lang]
-        category = CATEGORY_EDUCATION
-    else:
+    if content_mode == "short":
+        # ✅ تأكد من #Shorts لضمان التصنيف كـ Short
+        if "#shorts" not in description.lower():
+            description = f"#Shorts\n\n{description}"
         tags     = list(TAGS_SHORT) + [lang]
         category = CATEGORY_PEOPLE_BLOGS
+    else:
+        tags     = list(TAGS_LONG) + [lang]
+        category = CATEGORY_EDUCATION
 
     return {
         "snippet": {
             "title":                title[:MAX_TITLE_LEN],
-            "description":          description,
+            "description":          description[:MAX_DESC_LEN],
             "defaultLanguage":      default_lang,
             "defaultAudioLanguage": default_lang,
             "tags":                 tags,
@@ -356,81 +370,207 @@ def _build_metadata(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# UPLOAD
+# RESUMABLE UPLOAD — INIT
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _init_resumable_upload(
     metadata:     dict,
     access_token: str,
     size_bytes:   int,
+    retries:      int = MAX_RETRIES,
 ) -> str:
     """
     تهيئة resumable upload.
 
     Returns:
-        upload_url للخطوة التالية
+        upload_url لرفع الـ chunks
+
+    Raises:
+        RuntimeError: عند فشل الحصول على upload URL
     """
-    r = requests.post(
-        YOUTUBE_UPLOAD_URL,
-        params  = {
-            "uploadType": "resumable",
-            "part":       "snippet,status",
-        },
-        headers = {
-            "Authorization":           f"Bearer {access_token}",
-            "Content-Type":            "application/json; charset=UTF-8",
-            "X-Upload-Content-Type":   "video/mp4",
-            "X-Upload-Content-Length": str(size_bytes),
-        },
-        json    = metadata,
-        timeout = INIT_TIMEOUT,
+    last_error: Optional[str] = None
+
+    for attempt in range(retries):
+        try:
+            r = requests.post(
+                YOUTUBE_UPLOAD_URL,
+                params={
+                    "uploadType": "resumable",
+                    "part":       "snippet,status",
+                },
+                headers={
+                    "Authorization":           f"Bearer {access_token}",
+                    "Content-Type":            "application/json; charset=UTF-8",
+                    "X-Upload-Content-Type":   "video/mp4",
+                    "X-Upload-Content-Length": str(size_bytes),
+                },
+                json=metadata,
+                timeout=INIT_TIMEOUT,
+            )
+            r.raise_for_status()
+
+            upload_url = r.headers.get("Location", "").strip()
+            if not upload_url:
+                raise RuntimeError(
+                    "YouTube did not return upload URL"
+                )
+
+            log.info("  📡 Upload session initialized")
+            return upload_url
+
+        except Exception as e:
+            last_error = str(e)
+            if attempt < retries - 1:
+                wait = RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+                log.warning(
+                    f"  ⚠️  Init retry {attempt + 1}/{retries} "
+                    f"in {wait}s: {last_error[:80]}"
+                )
+                time.sleep(wait)
+
+    raise RuntimeError(
+        f"Failed to init upload after {retries} attempts: "
+        f"{last_error}"
     )
-    r.raise_for_status()
-
-    upload_url = r.headers.get("Location")
-    if not upload_url:
-        raise RuntimeError("YouTube did not return upload URL")
-
-    return upload_url
 
 
-def _upload_video_binary(
+# ═════════════════════════════════════════════════════════════════════════════
+# RESUMABLE UPLOAD — CHUNKED
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _upload_chunks(
     upload_url: str,
     video_path: Path,
     size_bytes: int,
 ) -> dict:
     """
-    رفع الفيديو الفعلي إلى upload_url.
+    رفع الفيديو على شكل chunks — لا يأكل RAM.
 
     Returns:
-        response data من YouTube
+        YouTube API response dict مع video_id
+
+    Raises:
+        RuntimeError: عند فشل الرفع
     """
+    uploaded    = 0
+    last_result : dict = {}
+
     with open(str(video_path), "rb") as f:
-        r = requests.put(
-            upload_url,
-            headers = {
-                "Content-Type":   "video/mp4",
-                "Content-Length": str(size_bytes),
-            },
-            data    = f,
-            timeout = UPLOAD_TIMEOUT,
-        )
+        while uploaded < size_bytes:
+            chunk      = f.read(CHUNK_SIZE)
+            chunk_size = len(chunk)
 
-    if r.status_code not in HTTP_SUCCESS:
-        raise RuntimeError(
-            f"YouTube upload failed: {r.status_code} — "
-            f"{r.text[:200]}"
-        )
+            if not chunk:
+                break
 
-    return r.json()
+            chunk_end = uploaded + chunk_size - 1
+            pct       = (uploaded / size_bytes) * 100
+
+            log.info(
+                f"  📤 Uploading chunk: "
+                f"{pct:.1f}% "
+                f"({uploaded // 1_048_576}MB / "
+                f"{size_bytes // 1_048_576}MB)"
+            )
+
+            # Retry لكل chunk
+            chunk_uploaded = False
+            for attempt in range(MAX_RETRIES):
+                try:
+                    r = requests.put(
+                        upload_url,
+                        headers={
+                            "Content-Type":  "video/mp4",
+                            "Content-Range": (
+                                f"bytes {uploaded}-"
+                                f"{chunk_end}/{size_bytes}"
+                            ),
+                        },
+                        data=chunk,
+                        timeout=CHUNK_TIMEOUT,
+                    )
+
+                    # 308 = Resume Incomplete → chunk تم، أكمل
+                    if r.status_code == HTTP_RESUME_INCOMPLETE:
+                        uploaded      += chunk_size
+                        chunk_uploaded = True
+                        break
+
+                    # 200/201 = اكتمل الرفع
+                    if r.status_code in HTTP_SUCCESS:
+                        last_result    = r.json()
+                        uploaded      += chunk_size
+                        chunk_uploaded = True
+                        break
+
+                    # Rate limit
+                    if r.status_code == HTTP_RATE_LIMIT:
+                        wait = RETRY_DELAYS[
+                            min(attempt, len(RETRY_DELAYS) - 1)
+                        ]
+                        log.warning(
+                            f"  ⚠️  Rate limit on chunk "
+                            f"— waiting {wait}s"
+                        )
+                        time.sleep(wait)
+                        continue
+
+                    # Auth error → لا فائدة من retry
+                    if r.status_code in HTTP_AUTH_ERRORS:
+                        raise RuntimeError(
+                            f"YouTube auth error: {r.status_code}"
+                        )
+
+                    # خطأ آخر
+                    raise RuntimeError(
+                        f"Chunk upload failed: "
+                        f"{r.status_code} — {r.text[:200]}"
+                    )
+
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    if attempt < MAX_RETRIES - 1:
+                        wait = RETRY_DELAYS[
+                            min(attempt, len(RETRY_DELAYS) - 1)
+                        ]
+                        log.warning(
+                            f"  ⚠️  Chunk error (attempt "
+                            f"{attempt + 1}/{MAX_RETRIES}): "
+                            f"{str(e)[:80]} — retry in {wait}s"
+                        )
+                        time.sleep(wait)
+                    else:
+                        raise RuntimeError(
+                            f"Chunk failed after {MAX_RETRIES} "
+                            f"attempts: {e}"
+                        )
+
+            if not chunk_uploaded:
+                raise RuntimeError(
+                    f"Failed to upload chunk at "
+                    f"offset {uploaded}"
+                )
+
+    return last_result
 
 
-def _build_video_url(video_id: str, content_mode: str) -> str:
-    """بناء URL الفيديو حسب النوع."""
+# ═════════════════════════════════════════════════════════════════════════════
+# BUILD VIDEO URL
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _build_video_url(
+    video_id:     str,
+    content_mode: str,
+) -> str:
     if content_mode == "short":
         return f"https://www.youtube.com/shorts/{video_id}"
     return f"https://www.youtube.com/watch?v={video_id}"
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# CORE UPLOAD
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _upload_video(
     video_path:   str,
@@ -443,65 +583,44 @@ def _upload_video(
     """
     رفع الفيديو إلى YouTube عبر Resumable Upload API.
 
-    Short → Shorts (تلقائياً إذا ≤ 60s + portrait)
-    Long  → Long form video
-
     Returns:
         {"id": video_id, "url": youtube_url}
+
+    Raises:
+        RuntimeError: عند فشل الرفع
     """
-    path = Path(video_path).resolve()
-    size_mb, size_bytes = _validate_video(str(path))
+    path               = Path(video_path).resolve()
+    size_mb, size_bytes = _validate_video(str(path), content_mode)
 
     log.info(
-        f"  📤 Uploading to YouTube "
-        f"[{content_mode.upper()}] ({size_mb:.1f} MB)..."
+        f"  📤 Uploading [{content_mode.upper()}] "
+        f"({size_mb:.1f} MB) to YouTube ({lang.upper()})..."
     )
 
-    metadata = _build_metadata(
-        title, description, lang, content_mode
-    )
+    metadata = _build_metadata(title, description, lang, content_mode)
 
-    # Step 1: Initialize
+    # Step 1: Initialize session
     upload_url = _init_resumable_upload(
         metadata, access_token, size_bytes
     )
 
-    log.info("  📡 Uploading binary...")
-
-    # Step 2: Upload
-    result = _upload_video_binary(upload_url, path, size_bytes)
+    # Step 2: Upload chunks
+    result = _upload_chunks(upload_url, path, size_bytes)
 
     # Step 3: Extract video ID
-    video_id = result.get("id", "")
+    video_id = result.get("id", "").strip()
     if not video_id:
         raise RuntimeError(
             f"YouTube response missing video ID: {result}"
         )
 
     url = _build_video_url(video_id, content_mode)
-
     log.info(
         f"  ✅ YouTube [{content_mode.upper()}] "
         f"published → {url}"
     )
 
     return {"id": video_id, "url": url}
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# ERROR HANDLING
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _is_auth_error(status_code: int) -> bool:
-    """التحقق إذا كان الخطأ متعلق بالتوكن."""
-    return status_code in HTTP_AUTH_ERRORS
-
-
-def _get_retry_wait(attempt: int) -> int:
-    """حساب وقت الانتظار قبل المحاولة التالية."""
-    if attempt >= len(RETRY_DELAYS):
-        return RETRY_DELAYS[-1]
-    return RETRY_DELAYS[attempt]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -514,39 +633,45 @@ def publish_to_youtube(
     lang:               str = "ar",
     street_description: str = "",
     content_mode:       str = "short",
-    retries:            int = 3,
+    retries:            int = MAX_RETRIES,
 ) -> dict:
     """
     نشر فيديو على YouTube.
 
     Args:
-        video_path:         مسار الفيديو
-        record:             dict مع title, number, ...
+        video_path:         مسار الفيديو المحلي
+        record:             dict يحتوي title, number, ...
         lang:               ar | fr | en
         street_description: وصف Groq (اختياري)
         content_mode:       short | long
-        retries:            عدد المحاولات
+        retries:            عدد المحاولات الخارجية
 
     Returns:
         {"id": video_id, "url": youtube_url}
 
     Raises:
         FileNotFoundError: إذا الفيديو غير موجود
-        RuntimeError: عند فشل النشر أو مشاكل auth
+        ValueError:        إذا المدخلات غير صحيحة
+        RuntimeError:      عند فشل النشر أو مشاكل auth
     """
-    # 1) التحقق من الفيديو
+    # ✅ Validate inputs
+    _validate_lang(lang)
+    _validate_mode(content_mode)
+
     path = Path(video_path).resolve()
     if not path.exists():
         raise FileNotFoundError(f"Video not found: {path}")
 
-    # 2) التحقق من credentials
     if not credentials_available(lang):
         raise RuntimeError(
             f"YouTube credentials not available for {lang.upper()}"
         )
 
-    # 3) بناء metadata
-    title = record.get("title", "")[:MAX_TITLE_LEN]
+    # Build metadata
+    title = str(record.get("title", ""))[:MAX_TITLE_LEN]
+    if not title:
+        raise ValueError("record['title'] cannot be empty")
+
     description = build_youtube_description(
         record             = record,
         lang               = lang,
@@ -554,22 +679,16 @@ def publish_to_youtube(
         content_mode       = content_mode,
     )
 
-    # 4) عرض معلومات النشر
-    type_label = (
-        "Shorts ⚡"
-        if content_mode == "short"
-        else "Long Form 🎬"
-    )
+    type_label = "Shorts ⚡" if content_mode == "short" else "Long Form 🎬"
 
     log.info(
         f"\n  📺 Publishing to YouTube "
         f"({lang.upper()}) [{content_mode.upper()}]..."
     )
-    log.info(f"     Title      : {title[:60]}")
-    log.info(f"     Description: {len(description)} chars")
-    log.info(f"     Type       : {type_label}")
+    log.info(f"     Title : {title[:60]}")
+    log.info(f"     Desc  : {len(description)} chars")
+    log.info(f"     Type  : {type_label}")
 
-    # 5) محاولات النشر
     last_error: Optional[str] = None
 
     for attempt in range(retries):
@@ -588,52 +707,68 @@ def publish_to_youtube(
             return result
 
         except requests.exceptions.HTTPError as e:
-            err_code = (
-                e.response.status_code if e.response else 0
-            )
-            err_msg = (
-                e.response.text[:200]
-                if e.response
-                else str(e)
-            )
-            last_error = err_msg
+            code      = e.response.status_code if e.response else 0
+            body      = e.response.text[:200] if e.response else str(e)
+            last_error = body
 
             log.warning(
-                f"  ⚠️  YouTube HTTP error "
-                f"(code={err_code}): {err_msg[:100]}"
+                f"  ⚠️  YouTube HTTP {code} "
+                f"(attempt {attempt + 1}/{retries}): "
+                f"{body[:100]}"
             )
 
-            # خطأ auth → نخرج فوراً
-            if _is_auth_error(err_code):
+            # Auth error → لا فائدة من retry
+            if code in HTTP_AUTH_ERRORS:
                 raise RuntimeError(
-                    f"YouTube auth error (code={err_code}). "
-                    f"Please refresh "
-                    f"YOUTUBE_REFRESH_TOKEN_{lang.upper()}."
+                    f"YouTube auth error (HTTP {code}). "
+                    f"Refresh YOUTUBE_REFRESH_TOKEN_{lang.upper()}."
                 )
 
-            # محاولة أخرى إذا متاح
             if attempt < retries - 1:
-                wait = _get_retry_wait(attempt)
+                wait = RETRY_DELAYS[
+                    min(attempt, len(RETRY_DELAYS) - 1)
+                ]
                 log.info(f"  ↩️  Retrying in {wait}s...")
                 time.sleep(wait)
 
         except requests.exceptions.Timeout:
-            last_error = "Upload timed out"
+            last_error = "Request timed out"
             log.warning(
-                f"  ⚠️  Timeout [{attempt + 1}/{retries}]"
+                f"  ⚠️  Timeout "
+                f"(attempt {attempt + 1}/{retries})"
             )
             if attempt < retries - 1:
                 time.sleep(20)
 
-        except (FileNotFoundError, ValueError) as e:
-            # أخطاء validation لا نعيد المحاولة فيها
-            raise RuntimeError(f"Validation failed: {e}")
+        except (FileNotFoundError, ValueError):
+            # لا نعيد المحاولة لأخطاء الـ validation
+            raise
+
+        except RuntimeError as e:
+            # Auth errors و upload failures
+            err_str    = str(e)
+            last_error = err_str
+
+            # Auth error → توقف فوراً
+            if "auth error" in err_str.lower():
+                raise
+
+            log.warning(
+                f"  ⚠️  Error (attempt {attempt + 1}/{retries}): "
+                f"{err_str[:100]}"
+            )
+            if attempt < retries - 1:
+                wait = RETRY_DELAYS[
+                    min(attempt, len(RETRY_DELAYS) - 1)
+                ]
+                time.sleep(wait)
 
         except Exception as e:
             last_error = str(e)
             log.warning(
-                f"  ⚠️  Error [{attempt + 1}/{retries}]: "
-                f"{str(e)[:100]}"
+                f"  ⚠️  Unexpected error "
+                f"(attempt {attempt + 1}/{retries}): "
+                f"{last_error[:100]}"
             )
             if attempt < retries - 1:
                 time.sleep(10)
@@ -650,23 +785,24 @@ def publish_to_youtube(
 
 def check_credentials(lang: str) -> bool:
     """
-    التحقق من صحة credentials.
-
-    يحاول جلب access_token كاختبار.
+    التحقق من صحة credentials عبر جلب access_token فعلياً.
 
     Returns:
         True إذا credentials صالحة
     """
     try:
-        access_token = _get_access_token(lang)
+        _validate_lang(lang)
+    except ValueError as e:
+        log.error(f"  ❌ {e}")
+        return False
 
-        if access_token:
+    try:
+        token = _get_access_token(lang)
+        if token:
             log.info(
-                f"  ✅ YouTube ({lang.upper()}): "
-                f"credentials OK"
+                f"  ✅ YouTube ({lang.upper()}): credentials OK"
             )
             return True
-
         return False
 
     except Exception as e:
