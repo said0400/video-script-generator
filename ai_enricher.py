@@ -1,6 +1,6 @@
 """
 🧠 Smart AI Assistant powered by Groq
-STABLE PRODUCTION VERSION
+STABLE PRODUCTION VERSION v2
 
 Features:
   ✅ Thread-safe Groq key rotation
@@ -9,9 +9,10 @@ Features:
        - GROQ_API_KEY_1  (with underscore)
   ✅ content_mode awareness (Short vs Long)
   ✅ Dynamic token calculation per request
-  ✅ Long videos processed in batches (no JSON truncation)
+  ✅ Long videos processed in batches
   ✅ Practical cinematic keywords only
-  ✅ Strong JSON validation
+  ✅ ROBUST JSON parsing (handles markdown wrapping + prefixes)
+  ✅ 3-attempt JSON recovery system
   ✅ No truncated JSON issues
   ✅ Safe fallback everywhere
   ✅ Uses llama-3.1-8b-instant (fast + high quota)
@@ -232,8 +233,6 @@ def _filter_abstract_keywords(keywords: list[str]) -> list[str]:
             clean = [w for w in words if w not in ABSTRACT_WORDS]
             if len(clean) >= 2:
                 result.append(" ".join(clean))
-        # ❌ كل الكلمات مجردة — نرفض الـ keyword
-
     return result
 
 
@@ -409,13 +408,58 @@ def _validate_mode(mode: str) -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# JSON HELPERS
+# 🆕 ROBUST JSON PARSING
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _clean_json(raw: str) -> str:
-    raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-    raw = re.sub(r"\s*```$", "", raw)
-    return raw.strip()
+    """
+    تنظيف رد Groq لاستخراج JSON صالح.
+
+    يتعامل مع:
+        - markdown code blocks (```json ... ```)
+        - نص قبل/بعد JSON
+        - prefixes مثل "Here's the output:"
+        - JSON inline في النص
+    """
+    if not raw:
+        return ""
+
+    text = raw.strip()
+
+    # ✅ إزالة markdown code blocks
+    text = re.sub(r"^```(?:json|JSON)?\s*\n?", "", text)
+    text = re.sub(r"\n?\s*```\s*$", "", text)
+
+    # ✅ البحث عن أول { أو [ كبداية JSON
+    json_start_obj = text.find("{")
+    json_start_arr = text.find("[")
+
+    # تحديد البداية الصحيحة
+    if json_start_obj == -1 and json_start_arr == -1:
+        return text.strip()
+
+    if json_start_obj == -1:
+        json_start = json_start_arr
+        end_char   = "]"
+    elif json_start_arr == -1:
+        json_start = json_start_obj
+        end_char   = "}"
+    else:
+        # خذ الأول
+        if json_start_obj < json_start_arr:
+            json_start = json_start_obj
+            end_char   = "}"
+        else:
+            json_start = json_start_arr
+            end_char   = "]"
+
+    # ✅ ابحث عن النهاية المقابلة
+    json_end = text.rfind(end_char)
+
+    if json_end > json_start:
+        text = text[json_start : json_end + 1]
+
+    return text.strip()
 
 
 def _parse_json_response(
@@ -423,6 +467,20 @@ def _parse_json_response(
     expected_type: type,
     operation:     str,
 ) -> Any:
+    """
+    Parse JSON response مع 3 محاولات للإصلاح.
+
+    يتعامل مع:
+        - JSON نظيف
+        - JSON مع markdown wrapping
+        - JSON مع نص قبل/بعد
+        - JSON مع \\n أو tabs زائدة
+        - JSON inline داخل نص
+    """
+    if not raw or not raw.strip():
+        raise AIEnrichmentError(f"❌ {operation}: empty response")
+
+    # ✅ Attempt 1: تنظيف عادي
     try:
         cleaned = _clean_json(raw)
         data    = json.loads(cleaned)
@@ -432,14 +490,45 @@ def _parse_json_response(
                 f"got {type(data).__name__}"
             )
         return data
-    except json.JSONDecodeError as e:
-        raise AIEnrichmentError(
-            f"❌ {operation} returned invalid JSON.\n"
-            f"   Error: {e}\n"
-            f"   Raw: {raw[:200]}..."
-        )
+    except json.JSONDecodeError:
+        pass
     except ValueError as e:
         raise AIEnrichmentError(f"❌ {operation}: {e}")
+
+    # ✅ Attempt 2: إزالة backticks وتجربة مرة أخرى
+    try:
+        no_ticks = raw.replace("```json", "").replace("```", "").strip()
+        cleaned  = _clean_json(no_ticks)
+        data     = json.loads(cleaned)
+        if not isinstance(data, expected_type):
+            raise ValueError(
+                f"Expected {expected_type.__name__}"
+            )
+        log.info(f"  ✓ {operation}: parsed after cleanup")
+        return data
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # ✅ Attempt 3: regex استخراج
+    try:
+        if expected_type == list:
+            match = re.search(r"\[.*\]", raw, re.DOTALL)
+        else:
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+
+        if match:
+            data = json.loads(match.group(0))
+            if isinstance(data, expected_type):
+                log.info(f"  ✓ {operation}: parsed via regex")
+                return data
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # ❌ كل المحاولات فشلت
+    raise AIEnrichmentError(
+        f"❌ {operation} returned invalid JSON.\n"
+        f"   Raw: {raw[:200]}..."
+    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -651,10 +740,10 @@ def analyze_content(
     safe_content = _safe_truncate(content, CONTENT_ANALYSIS_CHARS)
 
     prompt = (
-        f"Analyze this {lang_name} video content and return JSON.\n\n"
+        f"Analyze this {lang_name} video content and return JSON ONLY.\n\n"
         f"TITLE: {safe_title}\n\n"
         f"CONTENT:\n{safe_content}\n\n"
-        f'Return ONLY this JSON (no extra text):\n'
+        f"Return ONLY this JSON (no markdown, no explanation):\n"
         f'{{"content_type":"<psychology|relationships|business|'
         f'lifestyle|motivation|education|health|spirituality|'
         f'finance|social_skills>","primary_emotion":"<curiosity|'
@@ -727,7 +816,7 @@ def suggest_tags_for_sentences(
         f"Sentences ({len(sentences_needing_tags)} total):\n"
         f"{sentences_text}\n\n"
         f"Return ONLY a JSON array of exactly "
-        f"{len(sentences_needing_tags)} tags.\n"
+        f"{len(sentences_needing_tags)} tags (no markdown):\n"
         f'Example: ["intrigue","desire","confident"]'
     )
 
@@ -792,7 +881,7 @@ def generate_power_words(
         f"- Trigger strong emotions\n"
         f"- Must be in {lang_name}\n\n"
         f"Text:\n{safe_content}\n\n"
-        f"Return ONLY a JSON array of {count} words.\n"
+        f"Return ONLY a JSON array of {count} words (no markdown, no explanation).\n"
         f'Example: ["word1","word2","word3"]'
     )
 
@@ -830,7 +919,7 @@ def _generate_visual_keywords_batch(
     emotion      = context.get("primary_emotion", "neutral")
     safe_title   = _safe_title(title, TITLE_SHORT_CHARS)
 
-    # ✅ Dynamic max_tokens — احسب حسب عدد الجمل
+    # ✅ Dynamic max_tokens
     tokens_per_sentence = 35
     min_tokens          = 300
     max_allowed         = 4000
@@ -839,13 +928,13 @@ def _generate_visual_keywords_batch(
         min(n * tokens_per_sentence, max_allowed)
     )
 
-    # ✅ أمثلة عملية حسب نوع المحتوى
+    # ✅ أمثلة عملية
     topic_examples = _get_topic_examples(content_type)
     examples_str   = "\n".join(
         f'  GOOD: "{ex}"' for ex in topic_examples
     )
 
-    # بناء قائمة الجمل مع context
+    # بناء قائمة الجمل
     sentences_text = ""
     for i, sentence in enumerate(sentences):
         tag           = tags[i] if i < len(tags) else "information"
@@ -870,7 +959,7 @@ def _generate_visual_keywords_batch(
         f"4. 3-5 words per keyword\n"
         f"5. English only\n"
         f"6. Be SPECIFIC and CONCRETE\n\n"
-        f"=== FORBIDDEN WORDS (never use these) ===\n"
+        f"=== FORBIDDEN WORDS ===\n"
         f"mystery, shadows, silence, soul, journey, ethereal, "
         f"longing, abyss, whisper, darkness, dream, essence\n\n"
         f"=== GOOD EXAMPLES for {content_type} content ===\n"
@@ -878,19 +967,20 @@ def _generate_visual_keywords_batch(
         f"=== BAD EXAMPLES (too abstract, avoid) ===\n"
         f'  BAD: "dark shadows mysterious atmosphere"\n'
         f'  BAD: "longing eyes silent whisper"\n'
-        f'  BAD: "soul journey endless horizon"\n'
         f'  GOOD: "person serious face talking camera"\n'
-        f'  GOOD: "two people conversation disagreement"\n'
-        f'  GOOD: "emotional person crying close up"\n\n'
-        f"=== SENTENCES TO PROCESS ({n} total) ===\n"
+        f'  GOOD: "two people conversation disagreement"\n\n'
+        f"=== SENTENCES ({n} total) ===\n"
         f"{sentences_text}"
-        f"=== OUTPUT FORMAT ===\n"
-        f"Return ONLY a JSON array of {n} arrays, "
-        f"3 keywords per sentence:\n"
-        f'[["keyword1 action concrete","keyword2","keyword3"],...]'
+        f"=== OUTPUT FORMAT (CRITICAL!) ===\n"
+        f"Return ONLY a JSON array of {n} arrays.\n"
+        f"NO markdown wrapping (no ```json).\n"
+        f"NO explanation text before or after.\n"
+        f"Just the raw JSON array.\n\n"
+        f'Example for 2 sentences:\n'
+        f'[["person serious face","emotional close up","hands gesturing"],'
+        f'["two people talking","confident person speaking","focused worker"]]'
     )
 
-    # ✅ Fallbacks عملية
     fallbacks = [
         "person serious face talking camera",
         "emotional person close up expression",
@@ -1051,7 +1141,7 @@ def generate_pattern_interrupts(
         f'Title: "{safe_title}" | Type: {content_type} | '
         f"Emotion: {emotion}\n\n"
         f"Rules: 1-4 words MAX, shocking, can include emojis.\n\n"
-        f"Return ONLY JSON:\n"
+        f"Return ONLY JSON (no markdown):\n"
         f'{{"{lang_key}": ["phrase1",...], '
         f'"en": ["phrase1",...]}}'
     )
@@ -1085,7 +1175,7 @@ def generate_engagement_questions(
         f'Title: "{safe_title}" | Type: {content_type}\n'
         f"Rules: 3-7 words, encourage comments, "
         f"can include emojis.\n\n"
-        f"Return ONLY JSON:\n"
+        f"Return ONLY JSON (no markdown):\n"
         f'{{"{lang_key}": ["q1",...], "en": ["q1",...]}}'
     )
 
@@ -1128,7 +1218,7 @@ def generate_hashtags(
         f"Generate {count} hashtags in {lang_name} AND English.\n\n"
         f'Title: "{safe_title}" | Type: {content_type}\n'
         f"Rules: start with #, underscores for spaces.\n\n"
-        f"Return ONLY JSON:\n"
+        f"Return ONLY JSON (no markdown):\n"
         f'{{"{lang_key}": ["#tag1",...], '
         f'"en": ["#tag1",...]}}'
     )
@@ -1209,7 +1299,7 @@ def generate_captions(
         f"- 2-3 lines value\n"
         f"- Call-to-action + emojis\n"
         f"- NO hashtags in body\n\n"
-        f"Return ONLY JSON:\n"
+        f"Return ONLY JSON (no markdown):\n"
         f'{{"{lang_key}": "caption", "en": "caption"}}'
     )
 
@@ -1286,7 +1376,7 @@ def generate_street_description(
         f"6. {style['hashtag_lang']}: add 20-25 hashtags "
         f"at end separated by:\n.\n.\n.\n\n"
         f"Write in {style['style_name']} only. "
-        f"Output description directly, no JSON."
+        f"Output description directly, no JSON, no markdown."
     )
 
     try:
@@ -1347,7 +1437,7 @@ def suggest_accent_colors(context: dict) -> list[str]:
         f"Suggest 4 vibrant HEX colors.\n"
         f"Type: {content_type} | Emotion: {emotion} | "
         f"Intensity: {intensity}/10\n\n"
-        f"Return ONLY JSON array of 4 HEX codes:\n"
+        f"Return ONLY JSON array of 4 HEX codes (no markdown):\n"
         f'["#FF003C","#FFD700","#00FFFF","#39FF14"]'
     )
 
@@ -1417,7 +1507,7 @@ def generate_hook_keyword(
         f"  'person shocked face close up'\n"
         f"  'crying person emotional scene'\n"
         f"  'determined person walking forward'\n\n"
-        f"Return ONLY the keyword phrase (no quotes, no JSON):"
+        f"Return ONLY the keyword phrase (no quotes, no JSON, no markdown):"
     )
 
     try:
@@ -1429,7 +1519,6 @@ def generate_hook_keyword(
         )
         keyword = _clean_keyword_response(raw)
 
-        # ✅ فلترة الكلمات المجردة
         filtered = _filter_abstract_keywords([keyword])
         keyword  = filtered[0] if filtered else HOOK_FALLBACK_KEYWORD
 
@@ -1474,7 +1563,7 @@ def generate_custom_hook(
         f'GOOD Arabic: "90٪ من الناس لا يعرفون هذا السر"\n'
         f'GOOD French: "Ce que personne ne te dit..."\n'
         f'GOOD English: "Nobody tells you this truth"\n\n'
-        f"Return ONLY the hook sentence:"
+        f"Return ONLY the hook sentence (no quotes, no markdown):"
     )
 
     try:
@@ -1605,6 +1694,7 @@ def enrich_record(
     ✅ Keywords: practical + searchable في Pexels/Pixabay
     ✅ Long videos: batched لتجنب JSON truncation
     ✅ content_mode aware
+    ✅ ROBUST JSON parsing (3 attempts)
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
@@ -1679,7 +1769,6 @@ def enrich_record(
             title, content, analysis, lang,
         )
     else:
-        # ✅ Long: لا يحتاج hooks
         hook_keyword = (
             sentences[0][:60] if sentences
             else HOOK_FALLBACK_KEYWORD
