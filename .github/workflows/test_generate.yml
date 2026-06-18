@@ -87,7 +87,7 @@ jobs:
   generate:
     name: 🎬 ${{ matrix.lang }} / ${{ matrix.mode }}
     runs-on: ubuntu-latest
-    timeout-minutes: 350   # ✅ قريب من الحد الأقصى
+    timeout-minutes: 350
     needs: setup
 
     strategy:
@@ -196,7 +196,6 @@ jobs:
       - name: 📦 Install Node dependencies
         working-directory: remotion
         run: |
-          # ✅ لا نعتمد على package-lock.json
           if [ -f "package-lock.json" ]; then
             echo "Using npm ci"
             npm ci
@@ -223,9 +222,29 @@ jobs:
       # ── 14. Generate Video ───────────────────────────────────────
       - name: 🎬 Generate ${{ matrix.lang }} / ${{ matrix.mode }}
         env:
+          # ══════════════════════════════════════════════
+          # 🧠 AI Services
+          # ══════════════════════════════════════════════
           GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
           GROQ_API_KEY_1:    ${{ secrets.GROQ_API_KEY_1 }}
           GROQ_API_KEY_2:    ${{ secrets.GROQ_API_KEY_2 }}
+
+          # ══════════════════════════════════════════════
+          # 🎙️ Gemini TTS — يدعم الاثنين معاً
+          # ══════════════════════════════════════════════
+          # بدون شرطة سفلية (مطابق لـ GitHub Secrets)
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY1:   ${{ secrets.GEMINI_API_KEY1 }}
+          GEMINI_API_KEY2:   ${{ secrets.GEMINI_API_KEY2 }}
+          GEMINI_API_KEY3:   ${{ secrets.GEMINI_API_KEY3 }}
+          # مع شرطة سفلية (للتوافق المستقبلي)
+          GEMINI_API_KEY_1:  ${{ secrets.GEMINI_API_KEY1 }}
+          GEMINI_API_KEY_2:  ${{ secrets.GEMINI_API_KEY2 }}
+          GEMINI_API_KEY_3:  ${{ secrets.GEMINI_API_KEY3 }}
+
+          # ══════════════════════════════════════════════
+          # 📹 Video Sources
+          # ══════════════════════════════════════════════
           PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
           PEXELS_API_KEY_1:  ${{ secrets.PEXELS_API_KEY_1 }}
           PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
@@ -251,6 +270,17 @@ jobs:
           echo "📂 Output : $OUTPUT_DIR"
           echo "════════════════════════════════"
 
+          # ✅ تحقق من API keys
+          echo "🔑 API Keys check:"
+          [ -n "$GROQ_API_KEY" ]   && echo "  ✅ GROQ_API_KEY"     || echo "  ❌ GROQ_API_KEY"
+          [ -n "$GEMINI_API_KEY" ] && echo "  ✅ GEMINI_API_KEY"   || echo "  ❌ GEMINI_API_KEY"
+          [ -n "$GEMINI_API_KEY1" ] && echo "  ✅ GEMINI_API_KEY1" || echo "  ⚠️  GEMINI_API_KEY1"
+          [ -n "$GEMINI_API_KEY2" ] && echo "  ✅ GEMINI_API_KEY2" || echo "  ⚠️  GEMINI_API_KEY2"
+          [ -n "$GEMINI_API_KEY3" ] && echo "  ✅ GEMINI_API_KEY3" || echo "  ⚠️  GEMINI_API_KEY3"
+          [ -n "$PEXELS_API_KEY" ] && echo "  ✅ PEXELS_API_KEY"   || echo "  ❌ PEXELS_API_KEY"
+          [ -n "$PIXABAY_API_KEY" ] && echo "  ✅ PIXABAY_API_KEY" || echo "  ❌ PIXABAY_API_KEY"
+          echo "════════════════════════════════"
+
           # ✅ تحقق من وجود الملف
           if [ ! -f "$INPUT_FILE" ]; then
             echo "❌ File not found: $INPUT_FILE"
@@ -261,8 +291,7 @@ jobs:
 
           echo "✅ Input file found: $(du -h $INPUT_FILE | cut -f1)"
 
-          # ✅ بناء الـ command بشكل صحيح
-          # بدون array لتجنب مشاكل bash
+          # ✅ بناء الـ command
           CMD="python main.py \"$INPUT_FILE\""
           CMD="$CMD --lang $LANG"
           CMD="$CMD --content-mode $MODE"
@@ -317,7 +346,9 @@ jobs:
 
           if [ -d "$OUTPUT_DIR" ]; then
             find "$OUTPUT_DIR" -type f \
-              \( -name "*.mp4" -o -name "*.srt" -o -name "*.json" \) \
+              \( -name "*.mp4" -o -name "*.srt" \
+                 -o -name "*.json" -o -name "*.wav" \
+                 -o -name "*.aac" \) \
               | sort | while read f; do
                 SIZE=$(du -h "$f" | cut -f1)
                 echo "  $SIZE  $(basename $f)"
@@ -326,7 +357,8 @@ jobs:
             echo ""
             MP4=$(find "$OUTPUT_DIR" -name "*.mp4" | wc -l)
             SRT=$(find "$OUTPUT_DIR" -name "*.srt" | wc -l)
-            echo "  📹 MP4: $MP4 | 📝 SRT: $SRT"
+            AUD=$(find "$OUTPUT_DIR" \( -name "*.wav" -o -name "*.aac" \) | wc -l)
+            echo "  📹 MP4: $MP4 | 📝 SRT: $SRT | 🎵 Audio: $AUD"
           else
             echo "⚠️ No output directory found"
           fi
@@ -335,7 +367,7 @@ jobs:
           echo "💾 Disk:"
           df -h / | tail -1
 
-      # ── 16. Upload video ─────────────────────────────────────────
+      # ── 16. Upload final video ───────────────────────────────────
       - name: 📤 Upload final video
         if: always()
         uses: actions/upload-artifact@v4
@@ -347,7 +379,19 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-      # ── 17. Upload subtitles ─────────────────────────────────────
+      # ── 17. Upload audio ─────────────────────────────────────────
+      - name: 📤 Upload audio files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
+          path: |
+            output/${{ matrix.lang }}_${{ matrix.mode }}/**/*.wav
+            output/${{ matrix.lang }}_${{ matrix.mode }}/**/*.aac
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ── 18. Upload subtitles ─────────────────────────────────────
       - name: 📤 Upload subtitles
         if: always()
         uses: actions/upload-artifact@v4
@@ -357,7 +401,17 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      # ── 18. Upload all output ────────────────────────────────────
+      # ── 19. Upload thumbnails ────────────────────────────────────
+      - name: 📤 Upload thumbnails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thumb-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
+          path: output/${{ matrix.lang }}_${{ matrix.mode }}/**/*_thumbnail.png
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ── 20. Upload all output ────────────────────────────────────
       - name: 📤 Upload all output
         if: always()
         uses: actions/upload-artifact@v4
@@ -367,8 +421,7 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
 
-      # ── 19. Save DB ──────────────────────────────────────────────
-      # ✅ نحفظ DB بعد كل job منفصل لتجنب conflict
+      # ── 21. Save DB ──────────────────────────────────────────────
       - name: 💾 Save Database
         if: always()
         uses: actions/upload-artifact@v4
@@ -404,7 +457,9 @@ jobs:
           echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo ""
           echo "Artifacts:"
-          echo "  video-{lang}-{mode}-${{ github.run_number }}"
-          echo "  srt-{lang}-{mode}-${{ github.run_number }}"
-          echo "  output-{lang}-{mode}-${{ github.run_number }}"
+          echo "  📹 video-{lang}-{mode}-${{ github.run_number }}"
+          echo "  🎵 audio-{lang}-{mode}-${{ github.run_number }}"
+          echo "  📝 srt-{lang}-{mode}-${{ github.run_number }}"
+          echo "  🖼️ thumb-{lang}-{mode}-${{ github.run_number }}"
+          echo "  📂 output-{lang}-{mode}-${{ github.run_number }}"
           echo "════════════════════════════════════════"
