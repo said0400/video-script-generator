@@ -17,7 +17,7 @@ on:
         type: choice
         options: ["short", "long", "both"]
       video_number:
-        description: "رقم الفيديو (فارغ = أول فيديو)"
+        description: "رقم الفيديو (فارغ = أول فيديو تلقائياً)"
         required: false
         default: ""
         type: string
@@ -39,18 +39,18 @@ env:
 
 jobs:
 
-  # ════════════════════════════════════════════════════════════════════
-  # SETUP — مشترك بين كل اللغات
-  # ════════════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════════
+  # SETUP
+  # ══════════════════════════════════════════════════════════════════
 
   setup:
-    name: 🔧 Setup Environment
+    name: 🔧 Decide Matrix
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
 
     outputs:
-      langs:  ${{ steps.decide.outputs.langs }}
-      modes:  ${{ steps.decide.outputs.modes }}
+      langs: ${{ steps.decide.outputs.langs }}
+      modes: ${{ steps.decide.outputs.modes }}
 
     steps:
 
@@ -60,45 +60,49 @@ jobs:
           LANG="${{ github.event.inputs.lang }}"
           MODE="${{ github.event.inputs.content_mode }}"
 
-          # Languages
+          # ✅ Languages
           if [ "$LANG" = "all" ]; then
-            echo 'langs=["ar","fr","en"]' >> $GITHUB_OUTPUT
+            LANGS='["ar","fr","en"]'
           else
-            echo "langs=[\"$LANG\"]" >> $GITHUB_OUTPUT
+            LANGS="[\"$LANG\"]"
           fi
 
-          # Modes
+          # ✅ Modes
           if [ "$MODE" = "both" ]; then
-            echo 'modes=["short","long"]' >> $GITHUB_OUTPUT
+            MODES='["short","long"]'
           else
-            echo "modes=[\"$MODE\"]" >> $GITHUB_OUTPUT
+            MODES="[\"$MODE\"]"
           fi
 
-          echo "✅ Lang: $LANG | Mode: $MODE"
+          echo "langs=$LANGS" >> $GITHUB_OUTPUT
+          echo "modes=$MODES" >> $GITHUB_OUTPUT
 
-  # ════════════════════════════════════════════════════════════════════
-  # GENERATE — job لكل لغة + mode
-  # ════════════════════════════════════════════════════════════════════
+          echo "✅ Langs: $LANGS"
+          echo "✅ Modes: $MODES"
+
+  # ══════════════════════════════════════════════════════════════════
+  # GENERATE
+  # ══════════════════════════════════════════════════════════════════
 
   generate:
     name: 🎬 ${{ matrix.lang }} / ${{ matrix.mode }}
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 350   # ✅ قريب من الحد الأقصى
     needs: setup
 
     strategy:
-      fail-fast: false   # ✅ لو لغة فشلت، كمّل الباقي
+      fail-fast: false
       matrix:
         lang: ${{ fromJson(needs.setup.outputs.langs) }}
         mode: ${{ fromJson(needs.setup.outputs.modes) }}
 
     steps:
 
-      # ── 1. Checkout ────────────────────────────────────────────────
-      - name: 📥 Checkout repository
+      # ── 1. Checkout ──────────────────────────────────────────────
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      # ── 2. Free disk space ─────────────────────────────────────────
+      # ── 2. Free disk space ───────────────────────────────────────
       - name: 🧹 Free disk space
         run: |
           sudo rm -rf \
@@ -110,14 +114,14 @@ jobs:
           echo "💾 Disk after cleanup:"
           df -h /
 
-      # ── 3. Python ──────────────────────────────────────────────────
+      # ── 3. Python ────────────────────────────────────────────────
       - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      # ── 4. System deps ─────────────────────────────────────────────
+      # ── 4. System deps ───────────────────────────────────────────
       - name: 🔧 Install system dependencies
         run: |
           sudo apt-get update -q
@@ -133,11 +137,11 @@ jobs:
             libglib2.0-0 \
             libgbm1
           sudo fc-cache -fv
-          echo "✅ System deps installed"
+          echo "✅ System deps OK"
           ffmpeg -version | head -1
 
-      # ── 5. Cache models ────────────────────────────────────────────
-      - name: 💾 Cache Whisper/HuggingFace models
+      # ── 5. Cache models ──────────────────────────────────────────
+      - name: 💾 Cache Whisper models
         uses: actions/cache@v4
         with:
           path: |
@@ -150,7 +154,7 @@ jobs:
             whisper-models-v2-
             whisper-models-
 
-      # ── 6. PyTorch ─────────────────────────────────────────────────
+      # ── 6. PyTorch ───────────────────────────────────────────────
       - name: 🔥 Install PyTorch ${{ env.TORCH_VERSION }} (CPU)
         run: |
           pip install --upgrade pip setuptools wheel
@@ -158,24 +162,23 @@ jobs:
             torch==${{ env.TORCH_VERSION }} \
             torchaudio==${{ env.TORCH_VERSION }} \
             --index-url https://download.pytorch.org/whl/cpu
-          echo "✅ PyTorch installed"
-          python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+          python -c "import torch; print(f'✅ PyTorch: {torch.__version__}')"
 
-      # ── 7. openai-whisper ──────────────────────────────────────────
+      # ── 7. openai-whisper ────────────────────────────────────────
       - name: 📦 Install openai-whisper
         run: |
           pip install "setuptools<81.0.0" wheel
           pip install openai-whisper==20240930 --no-build-isolation
           pip install --upgrade setuptools
-          echo "✅ openai-whisper installed"
+          echo "✅ openai-whisper OK"
 
-      # ── 8. Python requirements ─────────────────────────────────────
+      # ── 8. Python requirements ───────────────────────────────────
       - name: 📦 Install Python requirements
         run: |
           pip install -r requirements.txt
-          echo "✅ Requirements installed"
+          echo "✅ Requirements OK"
 
-      # ── 9. Verify stable-ts ────────────────────────────────────────
+      # ── 9. Verify stable-ts ──────────────────────────────────────
       - name: ✅ Verify stable-ts
         run: |
           python -c "
@@ -183,32 +186,33 @@ jobs:
           print(f'✅ stable-ts: {stable_whisper.__version__}')
           "
 
-      # ── 10. Node.js ────────────────────────────────────────────────
+      # ── 10. Node.js ──────────────────────────────────────────────
       - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: remotion/package-lock.json
 
-      # ── 11. Node deps ──────────────────────────────────────────────
+      # ── 11. Node deps ────────────────────────────────────────────
       - name: 📦 Install Node dependencies
         working-directory: remotion
         run: |
+          # ✅ لا نعتمد على package-lock.json
           if [ -f "package-lock.json" ]; then
-            npm ci --prefer-offline
+            echo "Using npm ci"
+            npm ci
           else
+            echo "Using npm install"
             npm install
           fi
-          echo "✅ Node deps installed"
+          echo "✅ Node deps OK"
 
-      # ── 12. Playwright ─────────────────────────────────────────────
+      # ── 12. Playwright ───────────────────────────────────────────
       - name: 🌐 Install Playwright Chromium
         run: |
           python -m playwright install chromium --with-deps
-          echo "✅ Playwright installed"
+          echo "✅ Playwright OK"
 
-      # ── 13. Restore DB ─────────────────────────────────────────────
+      # ── 13. Restore DB ───────────────────────────────────────────
       - name: 📥 Restore Database
         uses: dawidd6/action-download-artifact@v6
         with:
@@ -216,117 +220,122 @@ jobs:
           if_no_artifact_found: ignore
           search_artifacts: true
 
-      # ── 14. Generate Video ─────────────────────────────────────────
+      # ── 14. Generate Video ───────────────────────────────────────
       - name: 🎬 Generate ${{ matrix.lang }} / ${{ matrix.mode }}
         env:
-          # ── AI ──
-          GROQ_API_KEY:     ${{ secrets.GROQ_API_KEY }}
-          GROQ_API_KEY_1:   ${{ secrets.GROQ_API_KEY_1 }}
-          GROQ_API_KEY_2:   ${{ secrets.GROQ_API_KEY_2 }}
-
-          # ── Video Sources ──
-          PEXELS_API_KEY:   ${{ secrets.PEXELS_API_KEY }}
-          PEXELS_API_KEY_1: ${{ secrets.PEXELS_API_KEY_1 }}
-          PIXABAY_API_KEY:  ${{ secrets.PIXABAY_API_KEY }}
-          PIXABAY_API_KEY_1:${{ secrets.PIXABAY_API_KEY_1 }}
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY_1:    ${{ secrets.GROQ_API_KEY_1 }}
+          GROQ_API_KEY_2:    ${{ secrets.GROQ_API_KEY_2 }}
+          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_API_KEY_1:  ${{ secrets.PEXELS_API_KEY_1 }}
+          PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
+          PIXABAY_API_KEY_1: ${{ secrets.PIXABAY_API_KEY_1 }}
 
         run: |
           LANG="${{ matrix.lang }}"
           MODE="${{ matrix.mode }}"
           FORCE_AI="${{ github.event.inputs.force_ai || 'false' }}"
-          VIDEO_NUM="${{ github.event.inputs.video_number || '' }}"
+          VIDEO_NUM="${{ github.event.inputs.video_number }}"
 
-          # ✅ تحديد ملف المحتوى
+          # ✅ ملف المحتوى
           INPUT_FILE="scripts/${LANG}_${MODE}.xlsx"
 
-          # ✅ تحديد مجلد الـ output
+          # ✅ مجلد الـ output
           OUTPUT_DIR="output/${LANG}_${MODE}"
           mkdir -p "$OUTPUT_DIR"
 
-          echo "════════════════════════════════════════"
-          echo "🌐 Lang     : $LANG"
-          echo "📋 Mode     : $MODE"
-          echo "📁 Input    : $INPUT_FILE"
-          echo "📂 Output   : $OUTPUT_DIR"
-          echo "════════════════════════════════════════"
+          echo "════════════════════════════════"
+          echo "🌐 Lang   : $LANG"
+          echo "📋 Mode   : $MODE"
+          echo "📁 Input  : $INPUT_FILE"
+          echo "📂 Output : $OUTPUT_DIR"
+          echo "════════════════════════════════"
 
           # ✅ تحقق من وجود الملف
           if [ ! -f "$INPUT_FILE" ]; then
             echo "❌ File not found: $INPUT_FILE"
+            echo "📂 Contents of scripts/:"
+            ls -la scripts/ 2>/dev/null || echo "scripts/ not found"
             exit 1
           fi
 
-          # ✅ بناء الـ command
-          FLAGS=(
-            "$INPUT_FILE"
-            --lang         "$LANG"
-            --content-mode "$MODE"
-            --output-dir   "$OUTPUT_DIR"
-            --no-publish
-            --auto-next
-          )
+          echo "✅ Input file found: $(du -h $INPUT_FILE | cut -f1)"
 
-          # رقم فيديو محدد؟
+          # ✅ بناء الـ command بشكل صحيح
+          # بدون array لتجنب مشاكل bash
+          CMD="python main.py \"$INPUT_FILE\""
+          CMD="$CMD --lang $LANG"
+          CMD="$CMD --content-mode $MODE"
+          CMD="$CMD --output-dir $OUTPUT_DIR"
+          CMD="$CMD --platform yt"
+          CMD="$CMD --no-publish"
+
+          # رقم فيديو محدد أو auto-next
           if [ -n "$VIDEO_NUM" ]; then
-            FLAGS+=(--video-number "$VIDEO_NUM")
-            # أزل --auto-next إذا حددنا رقم
-            FLAGS=("${FLAGS[@]/--auto-next/}")
-          fi
-
-          # Force AI؟
-          [ "$FORCE_AI" = "true" ] && FLAGS+=(--force-ai)
-
-          # Platform حسب mode
-          if [ "$MODE" = "long" ]; then
-            FLAGS+=(--platform yt)
+            CMD="$CMD --video-number $VIDEO_NUM"
+            echo "🎯 Video number: $VIDEO_NUM"
           else
-            FLAGS+=(--platform yt)
+            CMD="$CMD --auto-next"
+            echo "🎯 Auto-next: enabled"
           fi
 
-          echo "🚀 Running: python main.py ${FLAGS[*]}"
-          echo "════════════════════════════════════════"
+          # Force AI
+          if [ "$FORCE_AI" = "true" ]; then
+            CMD="$CMD --force-ai"
+            echo "🤖 Force AI: enabled"
+          fi
 
-          python main.py "${FLAGS[@]}"
+          echo "════════════════════════════════"
+          echo "🚀 Command: $CMD"
+          echo "════════════════════════════════"
 
-          echo "════════════════════════════════════════"
-          echo "✅ Done: $LANG / $MODE"
-          ls -lh "$OUTPUT_DIR"/ 2>/dev/null || echo "No files in output"
-          echo "════════════════════════════════════════"
+          # ✅ تشغيل الأمر
+          eval $CMD
 
-      # ── 15. Show results ───────────────────────────────────────────
-      - name: 📊 Show generation results
+          EXIT_CODE=$?
+          echo "════════════════════════════════"
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "✅ Generation succeeded!"
+          else
+            echo "❌ Generation failed with code: $EXIT_CODE"
+          fi
+          echo "════════════════════════════════"
+
+          exit $EXIT_CODE
+
+      # ── 15. Show results ─────────────────────────────────────────
+      - name: 📊 Show results
         if: always()
         run: |
           LANG="${{ matrix.lang }}"
           MODE="${{ matrix.mode }}"
           OUTPUT_DIR="output/${LANG}_${MODE}"
 
-          echo "════════════════════════════════════════"
+          echo "════════════════════════════════"
           echo "📊 Results: $LANG / $MODE"
-          echo "════════════════════════════════════════"
+          echo "════════════════════════════════"
 
           if [ -d "$OUTPUT_DIR" ]; then
-            echo "📁 Files generated:"
-            find "$OUTPUT_DIR" -type f | while read f; do
-              SIZE=$(du -h "$f" | cut -f1)
-              echo "  $SIZE  $(basename $f)"
-            done
+            find "$OUTPUT_DIR" -type f \
+              \( -name "*.mp4" -o -name "*.srt" -o -name "*.json" \) \
+              | sort | while read f; do
+                SIZE=$(du -h "$f" | cut -f1)
+                echo "  $SIZE  $(basename $f)"
+              done
 
-            # إحصائيات
-            MP4_COUNT=$(find "$OUTPUT_DIR" -name "*.mp4" | wc -l)
-            SRT_COUNT=$(find "$OUTPUT_DIR" -name "*.srt" | wc -l)
             echo ""
-            echo "  📹 MP4 files : $MP4_COUNT"
-            echo "  📝 SRT files : $SRT_COUNT"
+            MP4=$(find "$OUTPUT_DIR" -name "*.mp4" | wc -l)
+            SRT=$(find "$OUTPUT_DIR" -name "*.srt" | wc -l)
+            echo "  📹 MP4: $MP4 | 📝 SRT: $SRT"
           else
-            echo "⚠️ Output directory not found"
+            echo "⚠️ No output directory found"
           fi
 
           echo ""
-          echo "💾 Disk usage:"
+          echo "💾 Disk:"
           df -h / | tail -1
 
-      # ── 16. Upload final video ─────────────────────────────────────
+      # ── 16. Upload video ─────────────────────────────────────────
       - name: 📤 Upload final video
         if: always()
         uses: actions/upload-artifact@v4
@@ -338,41 +347,40 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-      # ── 17. Upload subtitles ───────────────────────────────────────
+      # ── 17. Upload subtitles ─────────────────────────────────────
       - name: 📤 Upload subtitles
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: srt-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
-          path: |
-            output/${{ matrix.lang }}_${{ matrix.mode }}/**/*.srt
+          path: output/${{ matrix.lang }}_${{ matrix.mode }}/**/*.srt
           retention-days: 7
           if-no-files-found: ignore
 
-      # ── 18. Upload logs ────────────────────────────────────────────
-      - name: 📤 Upload all output files
+      # ── 18. Upload all output ────────────────────────────────────
+      - name: 📤 Upload all output
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: output-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
-          path: |
-            output/${{ matrix.lang }}_${{ matrix.mode }}/
+          path: output/${{ matrix.lang }}_${{ matrix.mode }}/
           retention-days: 3
           if-no-files-found: ignore
 
-      # ── 19. Save DB ────────────────────────────────────────────────
+      # ── 19. Save DB ──────────────────────────────────────────────
+      # ✅ نحفظ DB بعد كل job منفصل لتجنب conflict
       - name: 💾 Save Database
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vsg-database-${{ matrix.lang }}
+          name: vsg-db-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
           path: vsg.db
           retention-days: 90
           overwrite: true
 
-  # ════════════════════════════════════════════════════════════════════
-  # SUMMARY — ملخص بعد كل اللغات
-  # ════════════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════════
+  # SUMMARY
+  # ══════════════════════════════════════════════════════════════════
 
   summary:
     name: 📊 Summary
@@ -382,22 +390,21 @@ jobs:
 
     steps:
 
-      - name: 📊 Show summary
+      - name: 📊 Final Summary
         run: |
-          echo "════════════════════════════════════════════════"
-          echo "📊 Test Generation Summary"
-          echo "════════════════════════════════════════════════"
+          echo "════════════════════════════════════════"
+          echo "📊 Test Generation Complete"
+          echo "════════════════════════════════════════"
           echo ""
-          echo "  Lang   : ${{ github.event.inputs.lang }}"
-          echo "  Mode   : ${{ github.event.inputs.content_mode }}"
-          echo "  Run    : #${{ github.run_number }}"
+          echo "  Lang : ${{ github.event.inputs.lang }}"
+          echo "  Mode : ${{ github.event.inputs.content_mode }}"
+          echo "  Run  : #${{ github.run_number }}"
           echo ""
-          echo "  Artifacts available:"
-          echo "  ✅ video-{lang}-{mode}-${{ github.run_number }}"
-          echo "  ✅ srt-{lang}-{mode}-${{ github.run_number }}"
-          echo "  ✅ output-{lang}-{mode}-${{ github.run_number }}"
+          echo "📥 Download artifacts from:"
+          echo "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo ""
-          echo "  👉 Download from:"
-          echo "  https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          echo ""
-          echo "════════════════════════════════════════════════"
+          echo "Artifacts:"
+          echo "  video-{lang}-{mode}-${{ github.run_number }}"
+          echo "  srt-{lang}-{mode}-${{ github.run_number }}"
+          echo "  output-{lang}-{mode}-${{ github.run_number }}"
+          echo "════════════════════════════════════════"
