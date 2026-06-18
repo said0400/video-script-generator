@@ -1,8 +1,9 @@
+# .github/workflows/ar_long_yt.yml
 name: 🇸🇦 Arabic Long — YouTube (16:9)
 
 on:
   schedule:
-    - cron: "0 22 * * *"   # Long YT — كل يوم 22:00 UTC
+    - cron: "0 22 * * *"   # كل يوم 22:00 UTC
 
   workflow_dispatch:
     inputs:
@@ -43,7 +44,7 @@ jobs:
   generate:
     name: 🇸🇦 Arabic Long YouTube
     runs-on: ubuntu-latest
-    timeout-minutes: 200
+    timeout-minutes: 150
 
     steps:
 
@@ -104,7 +105,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: ✅ Verify stable-ts
-        run: python -c "import stable_whisper; print('✅ OK')"
+        run: python -c "import stable_whisper; print('✅ stable-ts OK')"
 
       - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
         uses: actions/setup-node@v4
@@ -117,8 +118,8 @@ jobs:
           if [ -f "package-lock.json" ]; then npm ci
           else npm install; fi
 
-      - name: 🌐 Install Playwright Chromium
-        run: python -m playwright install chromium --with-deps
+      # ✅ Long YT لا يحتاج Playwright
+      # لأن render.mjs يستخدم FFmpeg للـ Long
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
@@ -141,17 +142,23 @@ jobs:
           CURRENT_LANG:          "ar"
 
         run: |
+          # ── Build FLAGS ──────────────────────────────────────────
           FLAGS="--lang ar --content-mode long --platform yt --auto-next"
 
-          [ "${{ github.event.inputs.force }}"    = "true" ] && FLAGS="$FLAGS --force"
-          [ "${{ github.event.inputs.force_ai }}" = "true" ] && FLAGS="$FLAGS --force-ai"
-          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && FLAGS="$FLAGS --publish-yt"
-          [ "${{ github.event.inputs.publish_yt }}" = "false" ] && FLAGS="$FLAGS --no-publish"
+          [ "${{ github.event.inputs.force }}"    = "true" ] && \
+            FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}" = "true" ] && \
+            FLAGS="$FLAGS --force-ai"
+
+          PUBLISH_YT="${{ github.event.inputs.publish_yt }}"
+          [ "$PUBLISH_YT" = "true"  ] && FLAGS="$FLAGS --publish-yt"
+          [ "$PUBLISH_YT" = "false" ] && FLAGS="$FLAGS --no-publish"
 
           VN="${{ github.event.inputs.video_number }}"
           [ -n "$VN" ] && FLAGS="$FLAGS --video-number $VN"
 
           echo "🚀 FLAGS: $FLAGS"
+
           python main.py scripts/videos_ar_long.xlsx \
             --output-dir output_long $FLAGS
 
@@ -166,8 +173,8 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-      # ✅ رفع الملفات التي سيحتاجها Long FB
-      - name: 📤 Upload shared files (for FB run)
+      # ✅ رفع الملفات المشتركة التي يحتاجها Long FB
+      - name: 📤 Upload shared files for Long FB
         if: always()
         uses: actions/upload-artifact@v4
         with:
