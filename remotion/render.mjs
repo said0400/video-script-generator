@@ -1,4 +1,9 @@
 // remotion/render.mjs
+// ═══════════════════════════════════════════════════════════════════════════
+// 🎬 Video Renderer — Cinematic Edition
+// JavaScript خالص (بدون TypeScript syntax)
+// ═══════════════════════════════════════════════════════════════════════════
+
 import {
   readFileSync, writeFileSync, mkdirSync,
   copyFileSync, existsSync, symlinkSync,
@@ -416,9 +421,11 @@ function buildColorGrading(isHookClip) {
 }
 
 function buildVignetteFilter()  { return `vignette=PI/4:eval=frame`; }
+
 function buildFilmGrainFilter(idx) {
   return `noise=alls=${4 + (idx % 3)}:allf=t+u`;
 }
+
 function buildOriginalityFilter(idx) {
   const h  = idx % 2 === 0 ? 2 : -2;
   const s  = (1.02 + (idx % 3) * 0.01).toFixed(2);
