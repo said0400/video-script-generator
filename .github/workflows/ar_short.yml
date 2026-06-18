@@ -1,0 +1,212 @@
+name: 🇸🇦 Arabic Short Videos
+
+on:
+  schedule:
+    - cron: "0 9  * * *"   # Short #1
+    - cron: "0 11 * * *"   # Short #2
+    - cron: "0 14 * * *"   # Short #3
+    - cron: "0 17 * * *"   # Short #4
+    - cron: "0 20 * * *"   # Short #5
+
+  workflow_dispatch:
+    inputs:
+      video_number:
+        description: "🎬 Video number (empty = auto next)"
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "⚡ Force re-render?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      force_ai:
+        description: "🤖 Force re-generate AI?"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      publish_fb:
+        description: "📘 Publish to Facebook?"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      publish_yt:
+        description: "📺 Publish to YouTube?"
+        required: true
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+concurrency:
+  group: video-ar-short
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION:   "20"
+  TORCH_VERSION:  "2.5.1"
+
+jobs:
+  generate:
+    name: 🇸🇦 Arabic Short Video
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🧹 Free disk space
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 🔧 Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            ffmpeg libsndfile1 xvfb \
+            fonts-noto fonts-noto-core \
+            fonts-hosny-amiri fonts-sil-scheherazade
+          sudo fc-cache -fv
+
+      - name: 💾 Cache stable-ts models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/stable-ts
+            ~/.cache/huggingface
+            ~/.cache/torch
+            ~/.cache/whisper
+          key: stable-ts-models-v2-${{ runner.os }}
+          restore-keys: stable-ts-models-
+
+      - name: 🔥 Install PyTorch ${{ env.TORCH_VERSION }} (CPU)
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install \
+            torch==${{ env.TORCH_VERSION }} \
+            torchaudio==${{ env.TORCH_VERSION }} \
+            --index-url https://download.pytorch.org/whl/cpu
+
+      - name: 📦 Install openai-whisper
+        run: |
+          pip install "setuptools<81.0.0" wheel
+          pip install openai-whisper==20240930 --no-build-isolation
+          pip install --upgrade setuptools
+
+      - name: 📦 Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: ✅ Verify stable-ts
+        run: python -c "import stable_whisper; print('✅ OK')"
+
+      - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Install Node dependencies
+        working-directory: remotion
+        run: |
+          if [ -f "package-lock.json" ]; then npm ci
+          else npm install; fi
+
+      - name: 🌐 Install Playwright Chromium
+        run: python -m playwright install chromium --with-deps
+
+      - name: 📥 Restore DB
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vsg-database-ar-short
+          if_no_artifact_found: ignore
+          search_artifacts: true
+
+      - name: 🇸🇦 Generate Arabic Short
+        env:
+          GEMINI_API_KEY:        ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY:          ${{ secrets.GROQ_API_KEY }}
+          PIXABAY_API_KEY:       ${{ secrets.PIXABAY_API_KEY }}
+          PEXELS_API_KEY:        ${{ secrets.PEXELS_API_KEY }}
+          FB_PAGE_ID:            ${{ secrets.FB_PAGE_ID_AR }}
+          FB_PAGE_TOKEN:         ${{ secrets.FB_PAGE_TOKEN_AR }}
+          YOUTUBE_CLIENT_ID:     ${{ secrets.YOUTUBE_CLIENT_ID_AR }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET_AR }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN_AR }}
+          TELEGRAM_BOT_TOKEN:    ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
+          CURRENT_LANG:          "ar"
+
+        run: |
+          FLAGS="--lang ar --content-mode short --platform yt --auto-next"
+
+          [ "${{ github.event.inputs.force }}"      = "true" ] && FLAGS="$FLAGS --force"
+          [ "${{ github.event.inputs.force_ai }}"   = "true" ] && FLAGS="$FLAGS --force-ai"
+          [ "${{ github.event.inputs.publish_fb }}" = "true" ] && FLAGS="$FLAGS --publish-fb"
+          [ "${{ github.event.inputs.publish_yt }}" = "true" ] && FLAGS="$FLAGS --publish-yt"
+
+          PUBLISH_FB="${{ github.event.inputs.publish_fb }}"
+          PUBLISH_YT="${{ github.event.inputs.publish_yt }}"
+          if [ "$PUBLISH_FB" = "false" ] && [ "$PUBLISH_YT" = "false" ]; then
+            FLAGS="$FLAGS --no-publish"
+          fi
+
+          VN="${{ github.event.inputs.video_number }}"
+          [ -n "$VN" ] && FLAGS="$FLAGS --video-number $VN"
+
+          echo "🚀 FLAGS: $FLAGS"
+          python main.py scripts/videos_ar.xlsx \
+            --output-dir output $FLAGS
+
+      - name: 📤 Upload videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ar-short-videos-${{ github.run_number }}
+          path: |
+            output/**/*_short_yt_published.mp4
+            output/**/*_short_yt_final.mp4
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: 📤 Upload thumbnails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ar-short-thumbnails-${{ github.run_number }}
+          path: output/**/*_thumbnail.png
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: 📤 Upload subtitles
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ar-short-subtitles-${{ github.run_number }}
+          path: output/**/*.srt
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: 💾 Save Database
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsg-database-ar-short
+          path: vsg.db
+          retention-days: 90
+          overwrite: true
