@@ -1,29 +1,22 @@
 """
 🧠 Smart AI Assistant powered by Groq
+STABLE PRODUCTION VERSION
 
 Features:
-  ✅ 12 enrichment operations per video
-  ✅ Multi-key Groq rotation (up to 10 keys)
-  ✅ Multi-language support (AR, FR, EN)
-  ✅ Tag-aware B-Roll keywords (batch — 1 request)
-  ✅ Street language descriptions per region
-  ✅ Safe truncation (prevents truncated JSON)
-  ✅ Auto-retry with key rotation on rate limits
-  ✅ Practical stock video keywords (Pexels/Pixabay ready)
-
-Operations:
-  1.  Content Analysis
-  2.  Tag Suggestion
-  3.  Power Words
-  4.  Visual Keywords (batch — 1 request only)
-  5.  Pattern Interrupts
-  6.  Engagement Questions
-  7.  Hashtags
-  8.  Captions
-  9.  Street Description
-  10. Accent Colors
-  11. Hook Keyword
-  12. Custom Hook
+  ✅ Thread-safe Groq key rotation
+  ✅ Supports both naming conventions:
+       - GROQ_API_KEY1   (no underscore)
+       - GROQ_API_KEY_1  (with underscore)
+  ✅ content_mode awareness (Short vs Long)
+  ✅ Dynamic token calculation per request
+  ✅ Long videos processed in batches (no JSON truncation)
+  ✅ Practical cinematic keywords only
+  ✅ Strong JSON validation
+  ✅ No truncated JSON issues
+  ✅ Safe fallback everywhere
+  ✅ Uses llama-3.1-8b-instant (fast + high quota)
+  ✅ Multi-key rotation with exponential backoff
+  ✅ Auto-retry on rate limits
 """
 
 from __future__ import annotations
@@ -32,8 +25,8 @@ import json
 import logging
 import os
 import re
+import threading
 import time
-from dataclasses import dataclass
 from typing import Any, Optional
 
 from groq import Groq
@@ -44,17 +37,19 @@ from tags_parser import (
     auto_correct_tag,
 )
 
-# ═══════════════════════════════════════════════════════════════════
-# CONFIGURATION
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# CONFIG
+# ═════════════════════════════════════════════════════════════════════════════
 
-MODEL = "llama-3.3-70b-versatile"
+# ✅ نموذج خفيف وسريع مع quota عالي جداً
+MODEL = "llama-3.1-8b-instant"
 
-MAX_RETRIES     = 3
-RETRY_DELAYS    = [2.0, 5.0, 10.0]
-RATE_LIMIT_WAIT = 2.0
-MAX_KEYS_SCAN   = 10
+# Retry settings
+MAX_RETRIES_PER_KEY = 2
+RATE_LIMIT_WAIT     = 3.0
+MAX_KEYS_SCAN       = 50
 
+# Content limits
 TITLE_MAX_CHARS         = 80
 TITLE_SHORT_CHARS       = 60
 TITLE_DISPLAY_CHARS     = 50
@@ -65,22 +60,37 @@ CONTENT_HOOK_CHARS      = 300
 CONTENT_STREET_CHARS    = 800
 SENTENCE_KEYWORDS_CHARS = 150
 SENTENCE_TAGS_CHARS     = 120
+CAPTION_MAX_LENGTH      = 60000
 
+# Defaults
 DEFAULT_EMOJI_LEFT   = "🔥"
 DEFAULT_EMOJI_RIGHT  = "💥"
 DEFAULT_INTENSITY    = 7
 DEFAULT_VISUAL_STYLE = "person serious face talking camera"
 
-RATE_LIMIT_INDICATORS = ("429", "rate_limit")
-CAPTION_MAX_LENGTH    = 60000
+# Long video batching
+BATCH_SIZE_LONG = 20
+
+# Rate limit indicators
+RATE_LIMIT_KEYWORDS = (
+    "429",
+    "rate_limit",
+    "rate limit",
+    "quota",
+    "ratequota",
+)
+
+# Validation
+_VALID_LANGS = frozenset({"ar", "fr", "en"})
+_VALID_MODES = frozenset({"short", "long"})
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # LANGUAGE MAPS
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 LANG_NAMES: dict[str, str] = {
     "ar": "Arabic",
@@ -95,9 +105,9 @@ LANG_KEY: dict[str, str] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# TAG VISUAL STYLES — عملية للبحث في stock videos
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# TAG VISUAL STYLES — practical search keywords
+# ═════════════════════════════════════════════════════════════════════════════
 
 TAG_VISUAL_STYLE: dict[str, str] = {
     "intrigue":    "person whispering secret curious close up face",
@@ -122,9 +132,9 @@ TAG_VISUAL_STYLE: dict[str, str] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# ABSTRACT WORDS — محظورة في visual keywords
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# ABSTRACT WORDS — banned in visual keywords
+# ═════════════════════════════════════════════════════════════════════════════
 
 ABSTRACT_WORDS: set[str] = {
     "mystery", "mysterious", "journey", "soul", "shadows",
@@ -138,9 +148,9 @@ ABSTRACT_WORDS: set[str] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# VISUAL KEYWORDS EXAMPLES — حسب نوع المحتوى
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# VISUAL KEYWORDS EXAMPLES — by content type
+# ═════════════════════════════════════════════════════════════════════════════
 
 VISUAL_KEYWORDS_EXAMPLES: dict[str, list[str]] = {
     "psychology": [
@@ -212,15 +222,13 @@ def _filter_abstract_keywords(keywords: list[str]) -> list[str]:
     """فلترة الـ keywords المجردة وإبقاء العملية."""
     result = []
     for kw in keywords:
-        words        = kw.lower().split()
+        words          = kw.lower().split()
         abstract_count = sum(1 for w in words if w in ABSTRACT_WORDS)
         total          = len(words)
 
         if abstract_count == 0:
-            # ✅ لا كلمات مجردة — نقبل الـ keyword
             result.append(kw)
         elif abstract_count < total:
-            # ✅ بعض الكلمات عملية — نحذف المجردة
             clean = [w for w in words if w not in ABSTRACT_WORDS]
             if len(clean) >= 2:
                 result.append(" ".join(clean))
@@ -229,9 +237,9 @@ def _filter_abstract_keywords(keywords: list[str]) -> list[str]:
     return result
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # STREET STYLES
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 STREET_STYLE: dict[str, dict] = {
     "ar": {
@@ -274,9 +282,9 @@ STREET_STYLE: dict[str, dict] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # DEFAULTS
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 DEFAULT_ACCENT_COLORS = [
     "#FF003C", "#FFD700", "#00FFFF", "#39FF14",
@@ -288,74 +296,121 @@ HOOK_FALLBACK_KEYWORD = "person emotional dramatic close up face"
 _HEX_PATTERN = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # EXCEPTIONS
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 class AIEnrichmentError(Exception):
     pass
 
 
-# ═══════════════════════════════════════════════════════════════════
-# GROQ API KEY ROTATION
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# THREAD-SAFE GROQ KEY ROTATION
+# ═════════════════════════════════════════════════════════════════════════════
 
-_groq_key_idx: int       = 0
-_GROQ_KEYS:    list[str] = []
+_groq_keys:  list[str]      = []
+_groq_index: int            = 0
+_groq_lock:  threading.Lock = threading.Lock()
 
 
 def _load_groq_keys() -> list[str]:
+    """
+    تحميل كل مفاتيح Groq من البيئة.
+
+    يدعم تسميتين معاً:
+        ✅ GROQ_API_KEY        (الأساسي)
+        ✅ GROQ_API_KEY1       (بدون شرطة سفلية)
+        ✅ GROQ_API_KEY_1      (مع شرطة سفلية)
+        ...
+        ✅ GROQ_API_KEY50
+        ✅ GROQ_API_KEY_50
+
+    Returns:
+        قائمة المفاتيح الفريدة (بدون تكرار)
+    """
     keys: list[str] = []
-    main = os.environ.get("GROQ_API_KEY", "").strip()
-    if main:
-        keys.append(main)
-    for i in range(1, MAX_KEYS_SCAN):
-        k = os.environ.get(f"GROQ_API_KEY_{i}", "").strip()
-        if k:
-            keys.append(k)
+    seen: set[str]  = set()
+
+    # ✅ المفتاح الأساسي
+    main_key = os.environ.get("GROQ_API_KEY", "").strip()
+    if main_key and main_key not in seen:
+        keys.append(main_key)
+        seen.add(main_key)
+
+    # ✅ المفاتيح المرقمة — يدعم التسميتين
+    for i in range(1, MAX_KEYS_SCAN + 1):
+        # بدون شرطة سفلية: GROQ_API_KEY1
+        k1 = os.environ.get(f"GROQ_API_KEY{i}", "").strip()
+        if k1 and k1 not in seen:
+            keys.append(k1)
+            seen.add(k1)
+
+        # مع شرطة سفلية: GROQ_API_KEY_1
+        k2 = os.environ.get(f"GROQ_API_KEY_{i}", "").strip()
+        if k2 and k2 not in seen:
+            keys.append(k2)
+            seen.add(k2)
+
     return keys
 
 
 def _ensure_keys_loaded() -> None:
-    global _GROQ_KEYS
-    if _GROQ_KEYS:
+    """تحميل المفاتيح إذا لم تُحمَّل بعد."""
+    global _groq_keys
+
+    if _groq_keys:
         return
-    _GROQ_KEYS = _load_groq_keys()
-    if _GROQ_KEYS:
-        log.info(f"  🔑 Loaded {len(_GROQ_KEYS)} Groq API keys")
 
+    _groq_keys = _load_groq_keys()
 
-def _get_client() -> Groq:
-    _ensure_keys_loaded()
-    if not _GROQ_KEYS:
-        raise AIEnrichmentError(
-            "GROQ_API_KEY not found in environment."
-        )
-    key = _GROQ_KEYS[_groq_key_idx % len(_GROQ_KEYS)]
-    return Groq(api_key=key)
+    if _groq_keys:
+        log.info(f"  🔑 Loaded {len(_groq_keys)} Groq API keys")
+    else:
+        log.warning("  ⚠️  No Groq API keys found")
 
 
 def _rotate_groq_key() -> None:
-    global _groq_key_idx
-    n = len(_GROQ_KEYS)
+    """تدوير مفتاح Groq عند الفشل (thread-safe)."""
+    global _groq_index
+
+    n = len(_groq_keys)
     if n <= 1:
         log.warning("  ⚠️  No additional Groq keys to rotate")
         return
-    _groq_key_idx = (_groq_key_idx + 1) % n
-    log.info(f"  🔄 Groq key rotated → #{_groq_key_idx} (of {n})")
+
+    with _groq_lock:
+        _groq_index = (_groq_index + 1) % n
+        new_idx = _groq_index
+
+    log.info(f"  🔄 Groq key rotated → #{new_idx + 1}/{n}")
 
 
 def _is_rate_limit_error(error: str) -> bool:
+    """التحقق إذا كان الخطأ rate limit."""
     err_lower = error.lower()
     return any(
         indicator in err_lower
-        for indicator in RATE_LIMIT_INDICATORS
+        for indicator in RATE_LIMIT_KEYWORDS
     )
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# VALIDATION
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _validate_lang(lang: str) -> None:
+    if lang not in _VALID_LANGS:
+        raise ValueError(f"Invalid lang: {lang}")
+
+
+def _validate_mode(mode: str) -> None:
+    if mode not in _VALID_MODES:
+        raise ValueError(f"Invalid content_mode: {mode}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # JSON HELPERS
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _clean_json(raw: str) -> str:
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
@@ -387,86 +442,25 @@ def _parse_json_response(
         raise AIEnrichmentError(f"❌ {operation}: {e}")
 
 
-# ═══════════════════════════════════════════════════════════════════
-# CORE GROQ CALLER
-# ═══════════════════════════════════════════════════════════════════
-
-def _call_groq(
-    prompt:         str,
-    max_tokens:     int   = 800,
-    temperature:    float = 0.7,
-    operation_name: str   = "AI call",
-) -> str:
-    _ensure_keys_loaded()
-
-    total_attempts = (
-        max(MAX_RETRIES, len(_GROQ_KEYS) * 2)
-        if _GROQ_KEYS else MAX_RETRIES
-    )
-
-    last_error: Optional[str] = None
-
-    for attempt in range(total_attempts):
-        try:
-            log.info(
-                f"  🤖 {operation_name} "
-                f"(attempt {attempt + 1}/{total_attempts})..."
-            )
-            client = _get_client()
-            resp   = client.chat.completions.create(
-                model       = MODEL,
-                messages    = [
-                    {"role": "user", "content": prompt}
-                ],
-                temperature = temperature,
-                max_tokens  = max_tokens,
-            )
-            content = resp.choices[0].message.content
-            if not content or not content.strip():
-                raise ValueError("Empty response from Groq")
-            return content.strip()
-
-        except Exception as e:
-            err_str    = str(e)
-            last_error = err_str
-            if _is_rate_limit_error(err_str):
-                log.warning("  🛑 Rate limit — rotating key...")
-                _rotate_groq_key()
-                time.sleep(RATE_LIMIT_WAIT)
-                continue
-            if attempt < total_attempts - 1:
-                wait = RETRY_DELAYS[
-                    min(attempt, len(RETRY_DELAYS) - 1)
-                ]
-                log.warning(
-                    f"  ⚠️  Error: {err_str[:80]} — "
-                    f"retrying in {wait}s..."
-                )
-                _rotate_groq_key()
-                time.sleep(wait)
-
-    raise AIEnrichmentError(
-        f"❌ {operation_name} FAILED after "
-        f"{total_attempts} attempts.\n"
-        f"   Last error: "
-        f"{last_error[:200] if last_error else 'unknown'}"
-    )
-
-
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # SAFE TRUNCATE
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _safe_truncate(text: str, max_chars: int) -> str:
+    if not text:
+        return ""
+
     if len(text) <= max_chars:
         return text
+
     truncated  = text[:max_chars]
     last_space = max(
         truncated.rfind(" "),
         truncated.rfind("\n"),
         truncated.rfind("."),
+        truncated.rfind("،"),
     )
-    if last_space > max_chars * 0.8:
+    if last_space > max_chars * 0.75:
         truncated = truncated[:last_space]
     return truncated.strip() + "..."
 
@@ -477,9 +471,84 @@ def _safe_title(title: str, max_chars: int = TITLE_MAX_CHARS) -> str:
     return title[:max_chars].strip() + "..."
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# CORE GROQ CALLER
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _call_groq(
+    prompt:         str,
+    max_tokens:     int   = 800,
+    temperature:    float = 0.7,
+    operation_name: str   = "AI call",
+) -> str:
+    _ensure_keys_loaded()
+
+    if not _groq_keys:
+        raise AIEnrichmentError("GROQ_API_KEY not found in environment.")
+
+    n_keys         = len(_groq_keys)
+    total_attempts = n_keys * MAX_RETRIES_PER_KEY
+    last_error: Optional[str] = None
+
+    for attempt in range(total_attempts):
+        key_idx = attempt // MAX_RETRIES_PER_KEY
+        retry_n = attempt % MAX_RETRIES_PER_KEY
+
+        with _groq_lock:
+            cur_idx = key_idx % n_keys
+        key    = _groq_keys[cur_idx]
+        client = Groq(api_key=key)
+
+        try:
+            log.info(
+                f"  🤖 {operation_name} "
+                f"[key#{cur_idx + 1}/{n_keys} "
+                f"attempt {retry_n + 1}/{MAX_RETRIES_PER_KEY}]..."
+            )
+
+            resp = client.chat.completions.create(
+                model       = MODEL,
+                messages    = [{"role": "user", "content": prompt}],
+                temperature = temperature,
+                max_tokens  = max_tokens,
+            )
+            content = resp.choices[0].message.content
+
+            if not content or not content.strip():
+                raise ValueError("Empty response from Groq")
+
+            return content.strip()
+
+        except Exception as e:
+            err_str    = str(e)
+            last_error = err_str
+
+            if _is_rate_limit_error(err_str):
+                wait = RATE_LIMIT_WAIT * (2 ** retry_n)
+                log.warning(
+                    f"  🛑 Rate limit [key#{cur_idx + 1}] "
+                    f"— waiting {wait:.1f}s..."
+                )
+                _rotate_groq_key()
+                time.sleep(wait)
+
+            elif attempt < total_attempts - 1:
+                log.warning(
+                    f"  ⚠️  Error: {err_str[:80]} "
+                    f"— rotating key and retrying..."
+                )
+                _rotate_groq_key()
+                time.sleep(2)
+
+    raise AIEnrichmentError(
+        f"❌ {operation_name} FAILED after {total_attempts} attempts.\n"
+        f"   Last error: {last_error[:200] if last_error else 'unknown'}"
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # DATA EXTRACTION HELPERS
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _extract_string_list(
     data:      list,
@@ -500,22 +569,40 @@ def _extract_lang_value(
     min_count: int = 3,
 ) -> list[str]:
     lang_key = LANG_KEY.get(lang, lang)
+
+    # ✅ أولوية 1: اللغة المطلوبة بالضبط
     if lang_key in data:
         result = _extract_string_list(data[lang_key], min_count)
         if result:
             return result
-    for key, val in data.items():
-        if key == "en":
-            continue
-        result = _extract_string_list(val, min_count)
-        if result:
-            log.warning(f"  ⚠️  {operation}: using key '{key}'")
-            return result
-    if "en" in data:
+
+    # ✅ أولوية 2: aliases للغة
+    lang_aliases = {
+        "ar": ["arabic", "arab", "ar_content"],
+        "fr": ["french", "français", "fr_content"],
+        "en": ["english", "eng", "en_content"],
+    }
+    for alias in lang_aliases.get(lang, []):
+        if alias in data:
+            result = _extract_string_list(data[alias], min_count)
+            if result:
+                log.warning(f"  ⚠️  {operation}: using alias '{alias}'")
+                return result
+
+    # ✅ أولوية 3: English كـ fallback
+    if "en" in data and lang != "en":
         result = _extract_string_list(data["en"], min_count)
         if result:
             log.warning(f"  ⚠️  {operation}: falling back to 'en'")
             return result
+
+    # ✅ أولوية 4: أي قيمة list موجودة
+    for key, val in data.items():
+        result = _extract_string_list(val, min_count)
+        if result:
+            log.warning(f"  ⚠️  {operation}: last resort '{key}'")
+            return result
+
     raise AIEnrichmentError(
         f"❌ {operation}: cannot find valid '{lang_key}' data.\n"
         f"   Keys found: {list(data.keys())}"
@@ -541,9 +628,9 @@ def _extract_en_value(
     )
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 1️⃣ CONTENT ANALYSIS
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 REQUIRED_ANALYSIS_FIELDS = (
     "content_type",
@@ -558,6 +645,7 @@ def analyze_content(
     content: str,
     lang:    str = "ar",
 ) -> dict:
+    _validate_lang(lang)
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     safe_title   = _safe_title(title, TITLE_MAX_CHARS)
     safe_content = _safe_truncate(content, CONTENT_ANALYSIS_CHARS)
@@ -603,9 +691,9 @@ def analyze_content(
     return data
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 2️⃣ TAG SUGGESTION
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _normalize_suggested_tag(tag: str) -> str:
     tag = str(tag).strip().lower()
@@ -662,9 +750,9 @@ def suggest_tags_for_sentences(
     return cleaned_tags
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 3️⃣ POWER WORDS
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _filter_power_words(words: list, count: int) -> list[str]:
     seen:   set[str]  = set()
@@ -726,32 +814,29 @@ def generate_power_words(
     return result
 
 
-# ═══════════════════════════════════════════════════════════════════
-# 4️⃣ VISUAL KEYWORDS — مُحسَّن جذرياً
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# 4️⃣ VISUAL KEYWORDS — مع batching للـ Long videos
+# ═════════════════════════════════════════════════════════════════════════════
 
-def generate_visual_keywords(
+def _generate_visual_keywords_batch(
     sentences: list[str],
     title:     str,
     context:   dict,
-    tags:      Optional[list[str]] = None,
+    tags:      list[str],
 ) -> list[list[str]]:
-    """
-    ✅ توليد visual keywords عملية للبحث في Pexels/Pixabay.
-    طلب واحد فقط لكل الجمل — يوفر Rate Limits.
-    """
-    if not sentences:
-        raise AIEnrichmentError(
-            "Cannot generate keywords for empty sentences"
-        )
-
+    """توليد keywords لدفعة واحدة."""
     n            = len(sentences)
     content_type = context.get("content_type", "general")
     emotion      = context.get("primary_emotion", "neutral")
     safe_title   = _safe_title(title, TITLE_SHORT_CHARS)
 
-    log.info(
-        f"  🎬 Generating B-Roll keywords: {n} sentences..."
+    # ✅ Dynamic max_tokens — احسب حسب عدد الجمل
+    tokens_per_sentence = 35
+    min_tokens          = 300
+    max_allowed         = 4000
+    calculated_tokens   = max(
+        min_tokens,
+        min(n * tokens_per_sentence, max_allowed)
     )
 
     # ✅ أمثلة عملية حسب نوع المحتوى
@@ -763,16 +848,9 @@ def generate_visual_keywords(
     # بناء قائمة الجمل مع context
     sentences_text = ""
     for i, sentence in enumerate(sentences):
-        tag           = (
-            tags[i] if tags and i < len(tags)
-            else "information"
-        )
-        visual_hint   = TAG_VISUAL_STYLE.get(
-            tag, DEFAULT_VISUAL_STYLE
-        )
-        safe_sentence = _safe_truncate(
-            sentence, SENTENCE_KEYWORDS_CHARS
-        )
+        tag           = tags[i] if i < len(tags) else "information"
+        visual_hint   = TAG_VISUAL_STYLE.get(tag, DEFAULT_VISUAL_STYLE)
+        safe_sentence = _safe_truncate(sentence, SENTENCE_KEYWORDS_CHARS)
         sentences_text += (
             f"Sentence {i+1}:\n"
             f"  Emotion tag: [{tag}]\n"
@@ -780,7 +858,6 @@ def generate_visual_keywords(
             f"  Visual direction: {visual_hint}\n\n"
         )
 
-    # ✅ Prompt محسّن مع أمثلة واضحة وقواعد صارمة
     prompt = (
         f"You are a professional video editor searching stock footage.\n"
         f"Generate PRACTICAL search keywords for Pexels and Pixabay.\n\n"
@@ -813,7 +890,7 @@ def generate_visual_keywords(
         f'[["keyword1 action concrete","keyword2","keyword3"],...]'
     )
 
-    # ✅ Fallbacks عملية وليست مجردة
+    # ✅ Fallbacks عملية
     fallbacks = [
         "person serious face talking camera",
         "emotional person close up expression",
@@ -823,8 +900,8 @@ def generate_visual_keywords(
     try:
         raw = _call_groq(
             prompt,
-            max_tokens     = 1200,
-            temperature    = 0.3,  # ✅ منخفض = أكثر دقة وعملية
+            max_tokens     = calculated_tokens,
+            temperature    = 0.3,
             operation_name = f"Visual Keywords ({n} sentences)",
         )
 
@@ -832,13 +909,9 @@ def generate_visual_keywords(
         result: list[list[str]] = []
 
         for i in range(n):
-            tag = (
-                tags[i] if tags and i < len(tags)
-                else "information"
-            )
+            tag = tags[i] if i < len(tags) else "information"
 
             if i < len(data) and isinstance(data[i], list):
-                # ✅ فلترة الكلمات المجردة
                 raw_kws = [
                     str(k).strip()
                     for k in data[i][:5]
@@ -846,24 +919,19 @@ def generate_visual_keywords(
                 ]
                 kws = _filter_abstract_keywords(raw_kws)
 
-                # إذا بقي أقل من 3 بعد الفلترة — أضف fallbacks
                 while len(kws) < 3:
                     fb = fallbacks[len(kws) % 3]
                     if fb not in kws:
                         kws.append(fb)
                     else:
-                        kws.append(
-                            f"person {tag} expression face"
-                        )
+                        kws.append(f"person {tag} expression face")
             else:
                 kws = list(fallbacks)
 
             result.append(kws[:3])
             log.info(f"     [{i+1}/{n}] [{tag}] → {kws[:3]}")
 
-        log.info(
-            f"  ✅ Visual Keywords: {len(result)} sentences × 3"
-        )
+        log.info(f"  ✅ Visual Keywords: {len(result)} sentences × 3")
         return result
 
     except Exception as e:
@@ -873,9 +941,51 @@ def generate_visual_keywords(
         return [list(fallbacks) for _ in range(n)]
 
 
-# ═══════════════════════════════════════════════════════════════════
+def generate_visual_keywords(
+    sentences:    list[str],
+    title:        str,
+    context:      dict,
+    tags:         Optional[list[str]] = None,
+    content_mode: str                 = "short",
+) -> list[list[str]]:
+    """
+    ✅ توليد visual keywords عملية للبحث في Pexels/Pixabay.
+    Long videos تُعالَج على دفعات لتجنب JSON truncation.
+    """
+    if not sentences:
+        raise AIEnrichmentError("Cannot generate keywords for empty sentences")
+
+    _validate_mode(content_mode)
+    tags = tags or ["information"] * len(sentences)
+    n    = len(sentences)
+
+    log.info(f"  🎬 Generating B-Roll keywords: {n} sentences...")
+
+    # ✅ Long videos مع جمل كثيرة → batching
+    if content_mode == "long" and n > BATCH_SIZE_LONG:
+        log.info(f"  📦 Long mode — batching {n} sentences")
+        result: list[list[str]] = []
+
+        for start in range(0, n, BATCH_SIZE_LONG):
+            end         = min(start + BATCH_SIZE_LONG, n)
+            log.info(f"  📦 Batch [{start+1}-{end}/{n}]...")
+            batch_res   = _generate_visual_keywords_batch(
+                sentences[start:end], title, context, tags[start:end],
+            )
+            result.extend(batch_res)
+
+            # تأخير بين الـ batches لتجنب rate limit
+            if end < n:
+                time.sleep(1)
+
+        return result
+
+    return _generate_visual_keywords_batch(sentences, title, context, tags)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 5️⃣ + 6️⃣ + 7️⃣ — BILINGUAL CONTENT
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _generate_bilingual_content(
     operation_name: str,
@@ -1050,9 +1160,9 @@ def generate_hashtags(
     return result
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 8️⃣ CAPTIONS
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _extract_caption(data: dict, lang: str, lang_key: str) -> str:
     for key in (lang_key, lang, "ar", "fr"):
@@ -1143,9 +1253,9 @@ def generate_captions(
     return result
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 9️⃣ STREET DESCRIPTION
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def generate_street_description(
     title:   str,
@@ -1204,9 +1314,9 @@ def generate_street_description(
         )
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 🔟 ACCENT COLORS
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _validate_hex_colors(colors: list, limit: int = 4) -> list[str]:
     valid: list[str] = []
@@ -1241,28 +1351,31 @@ def suggest_accent_colors(context: dict) -> list[str]:
         f'["#FF003C","#FFD700","#00FFFF","#39FF14"]'
     )
 
-    raw = _call_groq(
-        prompt,
-        max_tokens     = 150,
-        temperature    = 0.6,
-        operation_name = "Accent Colors",
-    )
-    colors       = _parse_json_response(raw, list, "Accent Colors")
-    valid_colors = _validate_hex_colors(colors)
-
-    if len(valid_colors) < 2:
-        raise AIEnrichmentError(
-            f"❌ Accent Colors: only {len(valid_colors)} valid"
+    try:
+        raw = _call_groq(
+            prompt,
+            max_tokens     = 150,
+            temperature    = 0.6,
+            operation_name = "Accent Colors",
         )
+        colors       = _parse_json_response(raw, list, "Accent Colors")
+        valid_colors = _validate_hex_colors(colors)
 
-    final = _fill_default_colors(valid_colors)
-    log.info(f"  ✅ Accent Colors: {final}")
-    return final
+        if len(valid_colors) < 2:
+            log.warning(f"  ⚠️  Accent Colors: only {len(valid_colors)} valid — using defaults")
+            return DEFAULT_ACCENT_COLORS
+
+        final = _fill_default_colors(valid_colors)
+        log.info(f"  ✅ Accent Colors: {final}")
+        return final
+    except Exception as e:
+        log.warning(f"  ⚠️  Accent Colors failed: {e} — using defaults")
+        return DEFAULT_ACCENT_COLORS
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 1️⃣1️⃣ HOOK KEYWORD
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 PROMPT_PREFIXES_TO_STRIP = (
     "keyword:", "answer:", "result:", "→", ":",
@@ -1307,28 +1420,32 @@ def generate_hook_keyword(
         f"Return ONLY the keyword phrase (no quotes, no JSON):"
     )
 
-    raw     = _call_groq(
-        prompt,
-        max_tokens     = 50,
-        temperature    = 0.5,
-        operation_name = "Hook Keyword",
-    )
-    keyword = _clean_keyword_response(raw)
+    try:
+        raw     = _call_groq(
+            prompt,
+            max_tokens     = 50,
+            temperature    = 0.5,
+            operation_name = "Hook Keyword",
+        )
+        keyword = _clean_keyword_response(raw)
 
-    # ✅ فلترة الكلمات المجردة من الـ hook keyword
-    filtered = _filter_abstract_keywords([keyword])
-    keyword  = filtered[0] if filtered else HOOK_FALLBACK_KEYWORD
+        # ✅ فلترة الكلمات المجردة
+        filtered = _filter_abstract_keywords([keyword])
+        keyword  = filtered[0] if filtered else HOOK_FALLBACK_KEYWORD
 
-    if not keyword or len(keyword) > 80:
-        keyword = HOOK_FALLBACK_KEYWORD
+        if not keyword or len(keyword) > 80:
+            keyword = HOOK_FALLBACK_KEYWORD
 
-    log.info(f"  ✅ Hook keyword: '{keyword}'")
-    return keyword
+        log.info(f"  ✅ Hook keyword: '{keyword}'")
+        return keyword
+    except Exception as e:
+        log.warning(f"  ⚠️  Hook keyword failed: {e}")
+        return HOOK_FALLBACK_KEYWORD
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 1️⃣2️⃣ CUSTOM HOOK
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def generate_custom_hook(
     title:   str,
@@ -1379,9 +1496,9 @@ def generate_custom_hook(
         return safe_title
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 🎯 MASTER ENRICHMENT FUNCTION
-# ═══════════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _build_attractive_title(title: str) -> dict:
     return {
@@ -1439,7 +1556,7 @@ def _prepare_keywords_input(
     return sentences, tags
 
 
-def _print_enrichment_header(title: str, lang_name: str) -> None:
+def _print_enrichment_header(title: str, lang_name: str, content_mode: str) -> None:
     safe_title = _safe_title(title, TITLE_DISPLAY_CHARS)
     log.info(
         f"\n  🧠 AI Enrichment for: "
@@ -1452,6 +1569,7 @@ def _print_enrichment_header(title: str, lang_name: str) -> None:
         f"{_safe_title(title, TITLE_SHORT_CHARS)} "
         f"{DEFAULT_EMOJI_RIGHT}"
     )
+    log.info(f"  📐 Mode: {content_mode.upper()}")
 
 
 def _print_enrichment_summary(
@@ -1475,17 +1593,22 @@ def _print_enrichment_summary(
 
 
 def enrich_record(
-    record:  dict,
-    lang:    str                  = "ar",
-    tagged:  Optional[list[dict]] = None,
-    verbose: bool                 = True,
+    record:       dict,
+    lang:         str                  = "ar",
+    tagged:       Optional[list[dict]] = None,
+    verbose:      bool                 = True,
+    content_mode: str                  = "short",
 ) -> dict:
     """
     الدالة الرئيسية للإثراء بالـ AI.
 
     ✅ Keywords: practical + searchable في Pexels/Pixabay
-    ✅ طلب واحد فقط لكل الجمل (توفير Rate Limits)
+    ✅ Long videos: batched لتجنب JSON truncation
+    ✅ content_mode aware
     """
+    _validate_lang(lang)
+    _validate_mode(content_mode)
+
     title   = record.get("title", "")
     content = record.get("content", "").strip()
 
@@ -1495,9 +1618,10 @@ def enrich_record(
         raise AIEnrichmentError("Cannot enrich: content is empty")
 
     lang_name = LANG_NAMES.get(lang, "Arabic")
+    is_long   = content_mode == "long"
 
     if verbose:
-        _print_enrichment_header(title, lang_name)
+        _print_enrichment_header(title, lang_name, content_mode)
 
     # 1. Content Analysis
     analysis = analyze_content(title, content, lang)
@@ -1508,13 +1632,14 @@ def enrich_record(
     # 3. Power Words
     power_words = generate_power_words(content, analysis, lang)
 
-    # 4. Visual Keywords ✅ طلب واحد + practical
+    # 4. Visual Keywords ✅ مع batching للـ Long
     sentences, tags = _prepare_keywords_input(tagged, content)
     visual_keywords = generate_visual_keywords(
-        sentences = sentences,
-        title     = title,
-        context   = analysis,
-        tags      = tags,
+        sentences    = sentences,
+        title        = title,
+        context      = analysis,
+        tags         = tags,
+        content_mode = content_mode,
     )
 
     # 5. Pattern Interrupts
@@ -1545,15 +1670,21 @@ def enrich_record(
     # 10. Accent Colors
     accent_colors = suggest_accent_colors(analysis)
 
-    # 11. Hook Keyword
-    hook_keyword = generate_hook_keyword(
-        title, content, analysis,
-    )
-
-    # 12. Custom Hook
-    custom_hook = generate_custom_hook(
-        title, content, analysis, lang,
-    )
+    # 11 & 12: Hooks (Short فقط)
+    if not is_long:
+        hook_keyword = generate_hook_keyword(
+            title, content, analysis,
+        )
+        custom_hook = generate_custom_hook(
+            title, content, analysis, lang,
+        )
+    else:
+        # ✅ Long: لا يحتاج hooks
+        hook_keyword = (
+            sentences[0][:60] if sentences
+            else HOOK_FALLBACK_KEYWORD
+        )
+        custom_hook = ""
 
     attractive_title = _build_attractive_title(title)
 
@@ -1579,4 +1710,5 @@ def enrich_record(
         "attractive_title":     attractive_title,
         "tagged":               tagged,
         "lang":                 lang,
+        "content_mode":         content_mode,
     }
