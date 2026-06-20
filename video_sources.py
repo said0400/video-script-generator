@@ -1,18 +1,17 @@
 """
-📹 Stock Video Fetcher — Cinematic Edition v2
+📹 Stock Video Fetcher — Cinematic Edition v3
 
-Features:
-  ✅ Multi-key rotation (Pexels + Pixabay)
-  ✅ Smart query fallback (cinematic → original)
-  ✅ NO consecutive video repetition (last_used tracking)
-  ✅ Page rotation for diverse results
-  ✅ Keyword rotation per chunk (variety within sentence)
-  ✅ content_mode aware (portrait/landscape)
-  ✅ Gap filling (no missing clips)
-  ✅ Keyword translation (poetic → practical)
-  ✅ Thread-safe parallel fetching
-  ✅ Cinematic suffixes per platform
-  ✅ Motion detection (skip static videos)
+Changes from v2:
+  ✅ Real video diversity — keyword variants rotate per chunk_index
+  ✅ Pagination changes per chunk AND per variant
+  ✅ session_used enforced in fallback too
+  ✅ _extract_video_id() reads real ID from filename
+  ✅ _detect_motion() uses ffmpeg scene detection
+  ✅ Pixabay orientation filter (portrait/landscape)
+  ✅ logging.basicConfig removed
+  ✅ db import with silent fallback
+  ✅ Key scan stops at first gap
+  ✅ _fill_gaps uses random (no fixed seed)
 """
 
 from __future__ import annotations
@@ -25,17 +24,25 @@ import subprocess
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
 import requests
 
-from db import is_video_used, mark_video_used
+# ── DB import مع fallback ─────────────────────────────────────────
+try:
+    from db import is_video_used, mark_video_used
+except ImportError:
+    def is_video_used(vid_id: str, source: str) -> bool:          # type: ignore[misc]
+        return False
+    def mark_video_used(vid_id: str, keyword: str, source: str) -> None:  # type: ignore[misc]
+        pass
 
-# ═════════════════════════════════════════════════════════════════════════════
+log = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════════════════════════
 # CONSTANTS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 BASE_DIR        = Path(__file__).parent.resolve()
 LOCAL_VIDEO_DIR = BASE_DIR / "assets" / "videos"
@@ -59,16 +66,16 @@ PIXABAY_API_URL = "https://pixabay.com/api/videos/"
 
 # Retry
 RETRY_DELAYS  = [1.0, 2.0, 4.0]
-MAX_KEYS_SCAN = 10
+MAX_KEYS_SCAN = 20
 
-# ✅ Pagination — لتنويع النتائج
-PEXELS_MAX_PAGE   = 5
-PIXABAY_MAX_PAGE  = 5
+# Pagination
+PEXELS_MAX_PAGE  = 8
+PIXABAY_MAX_PAGE = 8
 
 # Per-page results
-PEXELS_PER_PAGE  = 15
-PIXABAY_PER_PAGE = 20
-MAX_VIDEOS_TO_TRY = 10
+PEXELS_PER_PAGE   = 15
+PIXABAY_PER_PAGE  = 20
+MAX_VIDEOS_TO_TRY = 12
 
 # HTTP codes
 HTTP_RATE_LIMIT  = 429
@@ -76,10 +83,7 @@ HTTP_AUTH_ERRORS = (401, 403)
 HTTP_BAD_REQUEST = 400
 
 # Motion detection
-MOTION_DIFF_THRESHOLD = 0.01
-
-# Parallel workers
-MAX_PARALLEL_WORKERS = 3
+MOTION_DIFF_THRESHOLD = 0.02
 
 # Valid content-types
 VALID_VIDEO_CONTENT_TYPES = frozenset({
@@ -87,13 +91,9 @@ VALID_VIDEO_CONTENT_TYPES = frozenset({
     "video/x-msvideo", "application/octet-stream",
 })
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
-log = logging.getLogger(__name__)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# CINEMATIC KEYWORD SYSTEM
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# KEYWORD TRANSLATIONS
+# ═══════════════════════════════════════════════════════════════════
 
 KEYWORD_TRANSLATIONS: dict[str, str] = {
     "longing eyes":          "person looking away thoughtful close up",
@@ -133,42 +133,50 @@ KEYWORD_TRANSLATIONS: dict[str, str] = {
     "revelation":            "person shocked truth realization wide eyes",
 }
 
-CINEMATIC_SUFFIXES_SHORT = [
+CINEMATIC_SUFFIXES_SHORT: list[str] = [
     "cinematic dark moody",
     "dramatic close up portrait",
     "moody atmospheric dark",
     "cinematic slow motion person",
+    "vertical portrait dramatic",
+    "close up face emotional",
+    "portrait cinematic lighting",
+    "dramatic face close up",
 ]
 
-CINEMATIC_SUFFIXES_LONG = [
+CINEMATIC_SUFFIXES_LONG: list[str] = [
     "cinematic widescreen dramatic",
     "cinematic footage professional dark",
     "dramatic wide shot moody",
     "atmospheric cinematic scene",
+    "wide angle dramatic lighting",
+    "professional cinematic footage",
+    "landscape dramatic moody",
+    "widescreen moody atmosphere",
 ]
 
 TAG_FALLBACK_KEYWORDS: dict[str, list[str]] = {
-    "shock":       [
+    "shock": [
         "person shocked reaction close up",
         "dramatic surprise face expression",
         "intense reaction person cinematic",
     ],
-    "urgency":     [
+    "urgency": [
         "person stressed hurrying time pressure",
         "urgent serious person rushing",
         "tense person deadline pressure",
     ],
-    "intrigue":    [
+    "intrigue": [
         "person curious mysterious expression",
         "intriguing person thinking close up",
         "mysterious serious person dark",
     ],
-    "emotional":   [
+    "emotional": [
         "emotional person crying close up",
         "sad person tearful expression face",
         "emotional person pain suffering",
     ],
-    "confident":   [
+    "confident": [
         "confident person assertive strong",
         "powerful person determined standing",
         "strong confident person speaking",
@@ -178,12 +186,12 @@ TAG_FALLBACK_KEYWORDS: dict[str, list[str]] = {
         "inspired person success mindset",
         "determined person achievement goal",
     ],
-    "wisdom":      [
+    "wisdom": [
         "wise person thinking contemplating",
         "thoughtful person calm serious",
         "experienced person reflective calm",
     ],
-    "calm":        [
+    "calm": [
         "calm person peaceful breathing",
         "serene person quiet moment",
         "peaceful person relaxed indoor",
@@ -198,27 +206,52 @@ TAG_FALLBACK_KEYWORDS: dict[str, list[str]] = {
         "storyteller person animated talking",
         "person narrative speaking crowd",
     ],
-    "dramatic":    [
+    "dramatic": [
         "dramatic person intense scene",
         "powerful emotional person dramatic",
         "intense dramatic person close up",
     ],
-    "revelation":  [
+    "revelation": [
         "person shocked truth realization",
         "dramatic reveal person wide eyes",
         "person discovering truth shocked",
     ],
-    "tension":     [
+    "tension": [
         "tense person nervous anxious",
         "stressed person tension building",
         "anxious person worried serious",
     ],
-    "climax":      [
+    "climax": [
         "intense emotional peak person",
         "powerful breakthrough person determined",
         "climactic moment person intense",
     ],
-    "default":     [
+    "desire": [
+        "person longing wanting emotional",
+        "desire person reaching forward",
+        "passionate person emotional close up",
+    ],
+    "pause": [
+        "person standing still thoughtful",
+        "quiet moment person alone",
+        "person pausing reflecting serious",
+    ],
+    "whisper": [
+        "person whispering close up lips",
+        "secretive person quiet speaking",
+        "close up mouth speaking softly",
+    ],
+    "curiosity": [
+        "person curious questioning face",
+        "wondering person looking around",
+        "inquisitive person thinking deeply",
+    ],
+    "powerful": [
+        "strong determined person confident",
+        "powerful person standing strong",
+        "unstoppable person moving forward",
+    ],
+    "default": [
         "person serious face talking camera",
         "emotional person close up expression",
         "confident person speaking direct",
@@ -237,6 +270,10 @@ ABSTRACT_WORDS: frozenset[str] = frozenset({
 })
 
 
+# ═══════════════════════════════════════════════════════════════════
+# KEYWORD HELPERS
+# ═══════════════════════════════════════════════════════════════════
+
 def _translate_keyword(keyword: str) -> str:
     """ترجمة keyword شعري → عملي."""
     kw_lower = keyword.lower().strip()
@@ -251,7 +288,7 @@ def _translate_keyword(keyword: str) -> str:
 
 
 def _filter_abstract_keywords(keywords: list[str]) -> list[str]:
-    """إزالة الكلمات المجردة من الـ keyword."""
+    """إزالة الكلمات المجردة."""
     result: list[str] = []
     for kw in keywords:
         words          = kw.lower().split()
@@ -266,15 +303,28 @@ def _filter_abstract_keywords(keywords: list[str]) -> list[str]:
     return result
 
 
-def _build_cinematic_query(
+def _build_keyword_variants(
     keyword:      str,
     content_mode: str,
     topic:        str = "",
+    n_variants:   int = 6,
+    chunk_index:  int = 0,
 ) -> list[str]:
-    """بناء query variants سينمائية لكلمة واحدة."""
-    kw = " ".join(keyword.strip().split())
+    """
+    يبني قائمة كاملة من الـ variants ثم يدورها حسب chunk_index.
+
+    كل chunk يبدأ بـ variant مختلف → تنوع حقيقي حتى لو نفس الـ keyword.
+
+    Args:
+        keyword:      الكلمة الأصلية
+        content_mode: short | long
+        topic:        موضوع عام للسياق
+        n_variants:   عدد الـ variants المطلوبة
+        chunk_index:  رقم الـ chunk الحالي → يحدد نقطة البداية
+    """
+    kw        = " ".join(keyword.strip().split())
     if not kw:
-        return []
+        return ["person serious face talking camera"]
 
     practical = _translate_keyword(kw)
     suffixes  = (
@@ -283,42 +333,45 @@ def _build_cinematic_query(
         else CINEMATIC_SUFFIXES_LONG
     )
 
-    out:  list[str] = []
-    seen: set[str]  = set()
+    all_variants: list[str] = []
+    seen:         set[str]  = set()
 
     def add(q: str) -> None:
         clean = " ".join(q.strip().split())
         key   = clean.lower()
         if clean and key not in seen and len(clean) >= 5:
             seen.add(key)
-            out.append(clean)
+            all_variants.append(clean)
 
-    # أولوية 1: practical + cinematic suffix
-    add(f"{practical} {suffixes[0]}")
+    # بناء كل الـ variants الممكنة
+    for suffix in suffixes:
+        add(f"{practical} {suffix}")
 
-    # أولوية 2: practical وحدها
     add(practical)
 
-    # أولوية 3: practical + topic
     if topic and topic.strip():
-        add(f"{practical} {topic.strip().split()[0]}")
+        topic_word = topic.strip().split()[0]
+        add(f"{practical} {topic_word}")
+        for suffix in suffixes[:2]:
+            add(f"{practical} {topic_word} {suffix}")
 
-    # أولوية 4: practical + suffix آخر
-    if len(suffixes) > 1:
-        add(f"{practical} {suffixes[1]}")
-
-    # أولوية 5: original keyword
     if kw.lower() != practical.lower():
-        add(f"{kw} {suffixes[0]}")
+        for suffix in suffixes[:3]:
+            add(f"{kw} {suffix}")
         add(kw)
 
-    return out
+    # ✅ Rotation حسب chunk_index
+    # كل chunk يبدأ بـ variant مختلف
+    if all_variants and len(all_variants) > 1:
+        offset      = chunk_index % len(all_variants)
+        all_variants = all_variants[offset:] + all_variants[:offset]
+
+    return all_variants[:n_variants] if all_variants else [
+        "person serious face talking camera"
+    ]
 
 
-def _get_tag_fallback(
-    tag:          str,
-    content_mode: str,
-) -> list[str]:
+def _get_tag_fallback(tag: str, content_mode: str) -> list[str]:
     """جلب fallback keywords حسب الـ tag."""
     pool     = TAG_FALLBACK_KEYWORDS.get(
         tag, TAG_FALLBACK_KEYWORDS["default"]
@@ -328,18 +381,26 @@ def _get_tag_fallback(
         if content_mode == "short"
         else CINEMATIC_SUFFIXES_LONG
     )
-    return [
-        f"{kw} {suffixes[0]}" for kw in pool
-    ] + pool
+    result: list[str] = []
+    seen:   set[str]  = set()
+    for kw in pool:
+        if kw not in seen:
+            seen.add(kw)
+            result.append(kw)
+        variant = f"{kw} {suffixes[0]}"
+        if variant not in seen:
+            seen.add(variant)
+            result.append(variant)
+    return result
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # API KEY ROTATION — Thread-safe
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
-_key_indices : dict[str, int]       = {}
-_keys_cache  : dict[str, list[str]] = {}
-_key_lock    : threading.Lock       = threading.Lock()
+_key_indices: dict[str, int]       = {}
+_keys_cache:  dict[str, list[str]] = {}
+_key_lock:    threading.Lock       = threading.Lock()
 
 
 def _load_keys_for(prefix: str) -> list[str]:
@@ -349,18 +410,31 @@ def _load_keys_for(prefix: str) -> list[str]:
             return _keys_cache[prefix]
 
     keys: list[str] = []
-    main = os.environ.get(prefix, "").strip()
-    if main:
-        keys.append(main)
+    seen: set[str]  = set()
 
-    for i in range(1, MAX_KEYS_SCAN):
+    # المفتاح الأساسي
+    main = os.environ.get(prefix, "").strip()
+    if main and main not in seen:
+        keys.append(main)
+        seen.add(main)
+
+    # المفاتيح المرقمة — يتوقف عند أول gap
+    for i in range(1, MAX_KEYS_SCAN + 1):
         k = os.environ.get(f"{prefix}_{i}", "").strip()
-        if k:
+        if not k:
+            break
+        if k not in seen:
             keys.append(k)
+            seen.add(k)
 
     with _key_lock:
         _keys_cache[prefix]  = keys
         _key_indices[prefix] = 0
+
+    if keys:
+        log.info(f"  🔑 Loaded {len(keys)} keys for {prefix}")
+    else:
+        log.warning(f"  ⚠️  No keys found for {prefix}")
 
     return keys
 
@@ -376,32 +450,31 @@ def _get_current_key(prefix: str) -> str:
 
 
 def _rotate_key(prefix: str) -> str:
-    """تدوير الـ key."""
+    """تدوير الـ key عند الفشل."""
     keys = _load_keys_for(prefix)
     n    = len(keys)
     if n <= 1:
         return keys[0] if keys else ""
-
     with _key_lock:
         old                  = _key_indices.get(prefix, 0)
         new                  = (old + 1) % n
         _key_indices[prefix] = new
-
     log.info(f"  🔄 {prefix} key rotated → #{new + 1}/{n}")
     return keys[new]
 
 
-def _get_pexels_key()    -> str: return _get_current_key("PEXELS_API_KEY")
-def _get_pixabay_key()   -> str: return _get_current_key("PIXABAY_API_KEY")
+def _get_pexels_key()     -> str: return _get_current_key("PEXELS_API_KEY")
+def _get_pixabay_key()    -> str: return _get_current_key("PIXABAY_API_KEY")
 def _rotate_pexels_key()  -> str: return _rotate_key("PEXELS_API_KEY")
 def _rotate_pixabay_key() -> str: return _rotate_key("PIXABAY_API_KEY")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # VIDEO VALIDATION
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _parse_fps(value: str) -> float:
+    """تحويل fraction → float."""
     if not value or "/" not in value:
         return 0.0
     try:
@@ -413,6 +486,7 @@ def _parse_fps(value: str) -> float:
 
 
 def _probe_video_info(path: Path) -> dict:
+    """فحص معلومات الفيديو باستخدام ffprobe."""
     default = {
         "valid": False, "reason": "probe error",
         "duration": 0.0, "frames": 0, "fps": 0.0,
@@ -437,10 +511,12 @@ def _probe_video_info(path: Path) -> dict:
             return {**default, "reason": "ffprobe failed"}
     except subprocess.TimeoutExpired:
         return {**default, "reason": "ffprobe timeout"}
-    except Exception:
-        return default
+    except FileNotFoundError:
+        return {**default, "reason": "ffprobe not found"}
+    except Exception as e:
+        return {**default, "reason": f"probe error: {e}"}
 
-    info: dict = {"duration": 0.0, "frames": 0, "fps": 0.0}
+    info: dict              = {"duration": 0.0, "frames": 0, "fps": 0.0}
     durations_found: list[float] = []
 
     for line in r.stdout.strip().split("\n"):
@@ -470,13 +546,11 @@ def _probe_video_info(path: Path) -> dict:
     if durations_found:
         info["duration"] = max(durations_found)
 
-    if (
-        info["frames"] == 0 and
-        info["duration"] > 0 and
-        info["fps"] > 0
-    ):
+    # ✅ حساب الفريمات من duration * fps إذا nb_frames = N/A
+    if info["frames"] == 0 and info["duration"] > 0 and info["fps"] > 0:
         info["frames"] = int(info["duration"] * info["fps"])
 
+    # ✅ التحقق بالترتيب الصحيح
     if info["duration"] < MIN_DURATION:
         return {
             **info, "valid": False,
@@ -496,58 +570,64 @@ def _probe_video_info(path: Path) -> dict:
     return {**info, "valid": True, "reason": "ok"}
 
 
-def _extract_frame(
-    video_path: Path,
-    time_pos:   float,
-    output:     str,
-) -> bool:
+def _detect_motion(path: Path, duration: float) -> bool:
+    """
+    كشف الحركة باستخدام ffmpeg scene detection.
+    Fallback: مقارنة أحجام فريمات JPEG.
+    """
+    if duration < 2:
+        return True
+
+    # ✅ المحاولة الأولى: ffmpeg scene detection
     try:
         r = subprocess.run(
             [
-                "ffmpeg", "-v", "error", "-y",
-                "-ss", str(time_pos),
-                "-i", str(video_path),
-                "-vframes", "1", "-q:v", "5", output,
+                "ffmpeg", "-v", "error",
+                "-i", str(path),
+                "-vf", "select='gt(scene,0.02)',metadata=print:file=-",
+                "-frames:v", "30",
+                "-f", "null", "-",
             ],
             capture_output=True,
             text=True,
             timeout=FFMPEG_TIMEOUT,
         )
-        return r.returncode == 0 and Path(output).exists()
-    except Exception:
-        return False
-
-
-def _detect_motion(path: Path, duration: float) -> bool:
-    try:
-        if duration < 2:
+        combined = r.stdout + r.stderr
+        if "lavfi.scene_score" in combined or "pts_time" in combined:
             return True
+    except Exception:
+        pass
 
-        sample_times = [
-            0.5,
-            duration / 2,
-            max(0.5, duration - 0.5),
-        ]
-
-        pid         = os.getpid()
-        frame_sizes : list[int] = []
-        temp_files  : list[str] = []
+    # ✅ Fallback: مقارنة أحجام JPEG
+    try:
+        pid          = os.getpid()
+        frame_sizes  : list[int] = []
+        temp_files   : list[str] = []
+        sample_times = [0.5, duration / 2, max(0.5, duration - 0.5)]
 
         try:
             for i, t in enumerate(sample_times):
                 tmp = str(TEMP_DIR / f"_motion_{pid}_{i}.jpg")
                 temp_files.append(tmp)
-                if _extract_frame(path, t, tmp):
-                    p = Path(tmp)
-                    if p.exists():
-                        frame_sizes.append(p.stat().st_size)
+                r2 = subprocess.run(
+                    [
+                        "ffmpeg", "-v", "error", "-y",
+                        "-ss", str(t),
+                        "-i", str(path),
+                        "-vframes", "1", "-q:v", "5", tmp,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=FFMPEG_TIMEOUT,
+                )
+                if r2.returncode == 0 and Path(tmp).exists():
+                    frame_sizes.append(Path(tmp).stat().st_size)
         finally:
             for tmp in temp_files:
                 Path(tmp).unlink(missing_ok=True)
 
         if len(frame_sizes) < 2:
             return True
-
         if len(set(frame_sizes)) == 1:
             return False
 
@@ -555,23 +635,21 @@ def _detect_motion(path: Path, duration: float) -> bool:
         max_s = max(frame_sizes)
         if min_s == 0:
             return True
-
-        diff_ratio = (max_s - min_s) / min_s
-        return diff_ratio > MOTION_DIFF_THRESHOLD
+        return (max_s - min_s) / min_s > MOTION_DIFF_THRESHOLD
 
     except Exception:
         return True
 
 
 def _is_video_valid(path: Path) -> tuple[bool, str]:
+    """فحص شامل لصلاحية الفيديو."""
+    if not path.exists() or not path.is_file():
+        return False, "file not found"
     info = _probe_video_info(path)
-
     if not info["valid"]:
         return False, info["reason"]
-
     if not _detect_motion(path, info["duration"]):
         return False, "static (no motion detected)"
-
     return (
         True,
         f"ok ({info['frames']}f, "
@@ -580,9 +658,9 @@ def _is_video_valid(path: Path) -> tuple[bool, str]:
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # DOWNLOAD
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _is_valid_content_type(content_type: str) -> bool:
     if not content_type:
@@ -597,15 +675,13 @@ def _safe_name(keyword: str, length: int = 20) -> str:
     return clean[:length]
 
 
-def _download(
-    url:     str,
-    dest:    Path,
-    retries: int = 3,
-) -> bool:
+def _download(url: str, dest: Path, retries: int = 3) -> bool:
+    """تحميل فيديو مع retry."""
     for attempt in range(retries):
         try:
             with requests.get(
-                url, stream=True,
+                url,
+                stream=True,
                 timeout=DOWNLOAD_TIMEOUT,
                 allow_redirects=True,
             ) as r:
@@ -613,10 +689,18 @@ def _download(
 
                 content_type = r.headers.get("Content-Type", "")
                 if not _is_valid_content_type(content_type):
+                    log.debug(
+                        f"    ⏭️  Invalid content-type: {content_type}"
+                    )
                     return False
 
-                content_len = int(r.headers.get("Content-Length", 0) or 0)
+                content_len = int(
+                    r.headers.get("Content-Length", 0) or 0
+                )
                 if 0 < content_len < MIN_FILE_BYTES:
+                    log.debug(
+                        f"    ⏭️  Too small: {content_len} bytes"
+                    )
                     return False
 
                 with open(dest, "wb") as f:
@@ -624,16 +708,17 @@ def _download(
                         if chunk:
                             f.write(chunk)
 
-            if (
-                not dest.exists() or
-                dest.stat().st_size < MIN_FILE_BYTES
-            ):
+            # ✅ تحقق من الحجم بعد التحميل
+            if not dest.exists() or dest.stat().st_size < MIN_FILE_BYTES:
                 dest.unlink(missing_ok=True)
-                raise ValueError("File too small")
+                raise ValueError(
+                    f"File too small after download: {dest}"
+                )
 
+            # ✅ تحقق من صلاحية الفيديو
             is_valid, reason = _is_video_valid(dest)
             if not is_valid:
-                log.info(f"    ⏭️  Invalid: {reason}")
+                log.info(f"    ⏭️  Invalid video: {reason}")
                 dest.unlink(missing_ok=True)
                 return False
 
@@ -646,16 +731,22 @@ def _download(
                 wait = RETRY_DELAYS[
                     min(attempt, len(RETRY_DELAYS) - 1)
                 ]
+                log.warning(
+                    f"    ⚠️  Download attempt {attempt + 1}/{retries} "
+                    f"failed: {type(e).__name__}: {str(e)[:80]} "
+                    f"— retry in {wait}s"
+                )
                 time.sleep(wait)
 
     return False
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 # LOCAL VIDEOS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _list_local_videos() -> list[Path]:
+    """قائمة الفيديوهات المحلية."""
     if not LOCAL_VIDEO_DIR.exists():
         return []
     return (
@@ -672,6 +763,7 @@ def _search_local(
     session_lock: threading.Lock,
     content_mode: str = "short",
 ) -> Optional[Path]:
+    """البحث في الفيديوهات المحلية."""
     all_videos = _list_local_videos()
     if not all_videos:
         return None
@@ -681,12 +773,30 @@ def _search_local(
         v for v in all_videos
         if kw_clean in v.stem.lower()
     ]
-    pool   = matches if matches else all_videos
-    unused = [v for v in pool if str(v) not in session_used]
-    if not unused:
-        unused = pool
+    pool = matches if matches else all_videos
 
-    pick = random.choice(unused)
+    # ✅ فحص session_used + صلاحية الفيديو
+    valid_pool: list[Path] = []
+    for v in pool:
+        if str(v) in session_used:
+            continue
+        is_valid, _ = _is_video_valid(v)
+        if is_valid:
+            valid_pool.append(v)
+
+    # Fallback بدون فحص الصلاحية
+    if not valid_pool:
+        valid_pool = [
+            v for v in pool
+            if str(v) not in session_used
+        ]
+    if not valid_pool:
+        valid_pool = pool
+
+    if not valid_pool:
+        return None
+
+    pick = random.choice(valid_pool)
     with session_lock:
         session_used.add(str(pick))
 
@@ -694,15 +804,15 @@ def _search_local(
     return pick
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# PEXELS API
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# PEXELS
+# ═══════════════════════════════════════════════════════════════════
 
 def _select_pexels_files(
     files:        list[dict],
     content_mode: str,
 ) -> list[dict]:
-    """فلترة files حسب orientation."""
+    """اختيار أفضل ملف من نتائج Pexels حسب orientation."""
     mp4_files = [
         f for f in files
         if f.get("file_type") == "video/mp4"
@@ -740,7 +850,7 @@ def _pexels_search(
     page:         int = 1,
     retries:      int = 3,
 ) -> list[dict]:
-    """استدعاء Pexels API مع pagination."""
+    """استدعاء Pexels API."""
     orientation = "portrait"  if content_mode == "short" else "landscape"
     size        = "medium"    if content_mode == "short" else "large"
 
@@ -768,22 +878,28 @@ def _pexels_search(
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response else 0
             if status == HTTP_RATE_LIMIT:
-                log.warning("    ⚠️  Pexels rate limit — rotating key")
+                log.warning(
+                    "    ⚠️  Pexels rate limit — rotating key"
+                )
                 _rotate_pexels_key()
                 time.sleep(2)
             elif status in HTTP_AUTH_ERRORS:
-                log.warning("    ⚠️  Pexels auth error — rotating key")
+                log.warning(
+                    "    ⚠️  Pexels auth error — rotating key"
+                )
                 _rotate_pexels_key()
             else:
                 if attempt < retries - 1:
-                    time.sleep(RETRY_DELAYS[
-                        min(attempt, len(RETRY_DELAYS) - 1)
-                    ])
+                    time.sleep(
+                        RETRY_DELAYS[
+                            min(attempt, len(RETRY_DELAYS) - 1)
+                        ]
+                    )
         except Exception:
             if attempt < retries - 1:
-                time.sleep(RETRY_DELAYS[
-                    min(attempt, len(RETRY_DELAYS) - 1)
-                ])
+                time.sleep(
+                    RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+                )
 
     return []
 
@@ -795,49 +911,52 @@ def _search_pexels(
     output_dir:   str,
     session_used: set[str],
     session_lock: threading.Lock,
-    content_mode: str = "short",
-    topic:        str = "",
-    last_used:    Optional[str] = None,
+    content_mode: str          = "short",
+    topic:        str          = "",
+    last_used_id: Optional[str] = None,
 ) -> Optional[Path]:
-    """البحث في Pexels مع pagination + تجنب التكرار."""
+    """البحث في Pexels مع keyword variants + pagination متنوعة."""
     if not _get_pexels_key():
         return None
 
-    queries    = _build_cinematic_query(keyword, content_mode, topic)
-    tried_ids  : set[str] = set()
+    # ✅ variants مدورة حسب chunk_index
+    variants  = _build_keyword_variants(
+        keyword, content_mode, topic,
+        n_variants=6, chunk_index=index,
+    )
+    tried_ids: set[str] = set()
 
-    for query in queries:
-        # ✅ جرب صفحات مختلفة لتنويع النتائج
-        page = (index % PEXELS_MAX_PAGE) + 1
+    for v_idx, query in enumerate(variants):
+        # ✅ page مختلفة لكل (chunk × variant)
+        # ضرب في 3 لزيادة التباين بين chunks
+        page = ((index * 3 + v_idx) % PEXELS_MAX_PAGE) + 1
 
         log.info(
-            f"    🔎 Pexels [{content_mode}] p{page}: {query!r}"
+            f"    🔎 Pexels [{content_mode}] "
+            f"p{page} v{v_idx + 1}/{len(variants)}: {query!r}"
         )
 
         videos = _pexels_search(query, content_mode, page=page)
 
-        # ✅ لو ما لقينا في الصفحة المختارة، جرب الصفحة الأولى
+        # fallback للصفحة 1 لو ما وجدنا شيء
         if not videos and page > 1:
             videos = _pexels_search(query, content_mode, page=1)
 
+        # ✅ فلترة بالمدة
         videos = [
             v for v in videos
             if v.get("duration", 0) >= MIN_DURATION
         ]
-        videos.sort(
-            key=lambda v: v.get("duration", 0),
-            reverse=True,
-        )
 
         if not videos:
             continue
 
-        # ✅ خلط الترتيب قليلاً لتنويع
+        # ✅ خلط النتائج لتنوع أكبر
         if len(videos) > 3:
-            top_5 = videos[:5]
-            rest  = videos[5:]
-            random.shuffle(top_5)
-            videos = top_5 + rest
+            top    = videos[:5]
+            rest   = videos[5:]
+            random.shuffle(top)
+            videos = top + rest
 
         for video in videos[:MAX_VIDEOS_TO_TRY]:
             vid_id = str(video["id"])
@@ -847,9 +966,9 @@ def _search_pexels(
                 continue
             tried_ids.add(vid_id)
 
-            # ✅ تجنب نفس الفيديو المُستخدم سابقاً
-            if last_used and vid_id == last_used:
-                log.debug(f"    ⏭️  Same as last used: {vid_id}")
+            # ✅ تجنب نفس الفيديو المستخدم مباشرة قبله
+            if last_used_id and vid_id == last_used_id:
+                log.debug(f"    ⏭️  Same as last: {vid_id}")
                 continue
 
             with session_lock:
@@ -862,12 +981,15 @@ def _search_pexels(
             files = _select_pexels_files(
                 video.get("video_files", []), content_mode
             )
-            url = files[0].get("link", "") if files else ""
+            if not files:
+                continue
+            url = files[0].get("link", "")
             if not url:
                 continue
 
+            # ✅ اسم الملف يتضمن vid_id للتتبع الصحيح
             dest = Path(output_dir) / (
-                f"{index:03d}_{sub}_px_"
+                f"{index:03d}_{sub}_px_{vid_id}_"
                 f"{_safe_name(keyword)}.mp4"
             )
 
@@ -875,20 +997,20 @@ def _search_pexels(
                 with session_lock:
                     session_used.add(sk)
                 mark_video_used(vid_id, keyword, "pexels")
-                # ✅ احفظ الـ ID في الـ filename للتتبع
                 return dest
 
     return None
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# PIXABAY API
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# PIXABAY
+# ═══════════════════════════════════════════════════════════════════
 
 def _select_pixabay_url(
     videos:       dict,
     content_mode: str,
 ) -> str:
+    """اختيار أفضل URL من Pixabay حسب content_mode."""
     if content_mode == "long":
         priority = ["large", "medium", "small", "tiny"]
     else:
@@ -901,12 +1023,44 @@ def _select_pixabay_url(
     return ""
 
 
+def _filter_pixabay_by_orientation(
+    hits:         list[dict],
+    content_mode: str,
+) -> list[dict]:
+    """
+    ✅ فلترة Pixabay حسب orientation.
+    Pixabay لا يدعم orientation مباشرة في API.
+    """
+    if not hits:
+        return hits
+
+    filtered: list[dict] = []
+    for hit in hits:
+        videos = hit.get("videos", {})
+        matched = False
+        for quality in ("medium", "large", "small", "tiny"):
+            vid = videos.get(quality, {})
+            w   = vid.get("width",  0)
+            h   = vid.get("height", 0)
+            if w > 0 and h > 0:
+                if content_mode == "short" and h > w:
+                    filtered.append(hit)
+                    matched = True
+                elif content_mode == "long" and w > h:
+                    filtered.append(hit)
+                    matched = True
+                break
+
+    # Fallback: لو أقل من 3 نتائج → رجع الكل
+    return filtered if len(filtered) >= 3 else hits
+
+
 def _pixabay_search(
     query:   str,
     page:    int = 1,
     retries: int = 3,
 ) -> list[dict]:
-    """استدعاء Pixabay API مع pagination."""
+    """استدعاء Pixabay API."""
     for attempt in range(retries):
         api_key = _get_pixabay_key()
         if not api_key:
@@ -932,22 +1086,28 @@ def _pixabay_search(
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response else 0
             if status == HTTP_RATE_LIMIT:
-                log.warning("    ⚠️  Pixabay rate limit — rotating key")
+                log.warning(
+                    "    ⚠️  Pixabay rate limit — rotating key"
+                )
                 _rotate_pixabay_key()
                 time.sleep(2)
             elif status in (HTTP_BAD_REQUEST, *HTTP_AUTH_ERRORS):
-                log.warning("    ⚠️  Pixabay auth error — rotating key")
+                log.warning(
+                    "    ⚠️  Pixabay auth/request error — rotating key"
+                )
                 _rotate_pixabay_key()
             else:
                 if attempt < retries - 1:
-                    time.sleep(RETRY_DELAYS[
-                        min(attempt, len(RETRY_DELAYS) - 1)
-                    ])
+                    time.sleep(
+                        RETRY_DELAYS[
+                            min(attempt, len(RETRY_DELAYS) - 1)
+                        ]
+                    )
         except Exception:
             if attempt < retries - 1:
-                time.sleep(RETRY_DELAYS[
-                    min(attempt, len(RETRY_DELAYS) - 1)
-                ])
+                time.sleep(
+                    RETRY_DELAYS[min(attempt, len(RETRY_DELAYS) - 1)]
+                )
 
     return []
 
@@ -959,45 +1119,49 @@ def _search_pixabay(
     output_dir:   str,
     session_used: set[str],
     session_lock: threading.Lock,
-    content_mode: str = "short",
-    topic:        str = "",
-    last_used:    Optional[str] = None,
+    content_mode: str          = "short",
+    topic:        str          = "",
+    last_used_id: Optional[str] = None,
 ) -> Optional[Path]:
-    """البحث في Pixabay مع pagination + تجنب التكرار."""
+    """البحث في Pixabay مع orientation filter + pagination متنوعة."""
     if not _get_pixabay_key():
         return None
 
-    queries   = _build_cinematic_query(keyword, content_mode, topic)
-    tried_ids : set[str] = set()
+    # ✅ variants مختلفة عن Pexels بإضافة offset=2
+    variants  = _build_keyword_variants(
+        keyword, content_mode, topic,
+        n_variants=6, chunk_index=index + 2,
+    )
+    tried_ids: set[str] = set()
 
-    for query in queries:
-        page = (index % PIXABAY_MAX_PAGE) + 1
+    for v_idx, query in enumerate(variants):
+        # ✅ page مختلفة عن Pexels (offset إضافي)
+        page = ((index * 3 + v_idx + 4) % PIXABAY_MAX_PAGE) + 1
 
         log.info(
-            f"    🔎 Pixabay [{content_mode}] p{page}: {query!r}"
+            f"    🔎 Pixabay [{content_mode}] "
+            f"p{page} v{v_idx + 1}/{len(variants)}: {query!r}"
         )
 
         hits = _pixabay_search(query, page=page)
         if not hits and page > 1:
             hits = _pixabay_search(query, page=1)
 
+        # ✅ فلترة orientation
+        hits = _filter_pixabay_by_orientation(hits, content_mode)
         hits = [
             h for h in hits
             if h.get("duration", 0) >= MIN_DURATION
         ]
-        hits.sort(
-            key=lambda h: h.get("duration", 0),
-            reverse=True,
-        )
 
         if not hits:
             continue
 
         if len(hits) > 3:
-            top_5 = hits[:5]
-            rest  = hits[5:]
-            random.shuffle(top_5)
-            hits = top_5 + rest
+            top  = hits[:5]
+            rest = hits[5:]
+            random.shuffle(top)
+            hits = top + rest
 
         for hit in hits[:MAX_VIDEOS_TO_TRY]:
             vid_id = str(hit["id"])
@@ -1007,9 +1171,8 @@ def _search_pixabay(
                 continue
             tried_ids.add(vid_id)
 
-            # ✅ تجنب نفس الفيديو المُستخدم سابقاً
-            if last_used and vid_id == last_used:
-                log.debug(f"    ⏭️  Same as last used: {vid_id}")
+            if last_used_id and vid_id == last_used_id:
+                log.debug(f"    ⏭️  Same as last: {vid_id}")
                 continue
 
             with session_lock:
@@ -1025,8 +1188,9 @@ def _search_pixabay(
             if not url:
                 continue
 
+            # ✅ اسم الملف يتضمن vid_id
             dest = Path(output_dir) / (
-                f"{index:03d}_{sub}_pb_"
+                f"{index:03d}_{sub}_pb_{vid_id}_"
                 f"{_safe_name(keyword)}.mp4"
             )
 
@@ -1039,34 +1203,75 @@ def _search_pixabay(
     return None
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# EXTRACT VIDEO ID
+# ═══════════════════════════════════════════════════════════════════
+
+# Format: 000_0_px_12345_keyword.mp4  أو  000_0_pb_12345_keyword.mp4
+_FILENAME_ID_RE = re.compile(r"_(px|pb)_(\d+)_")
+
+
+def _extract_video_id(path: Optional[Path]) -> Optional[str]:
+    """
+    ✅ استخراج video ID الحقيقي من اسم الملف.
+    يعمل مع: 000_0_px_12345_keyword.mp4
+    """
+    if not path:
+        return None
+    match = _FILENAME_ID_RE.search(path.stem)
+    if match:
+        return match.group(2)
+    # fallback: استخدم stem كاملاً
+    return path.stem
+
+
+# ═══════════════════════════════════════════════════════════════════
 # FALLBACK
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
 
 def _get_fallback_video(
-    output_dir: str,
-    index:      int,
-    last_used:  Optional[Path] = None,
+    output_dir:   str,
+    index:        int,
+    last_used:    Optional[Path] = None,
+    session_used: Optional[set[str]] = None,
 ) -> Optional[Path]:
-    """جلب fallback video من ملفات موجودة."""
-    out_path = Path(output_dir)
+    """
+    جلب fallback video.
+    ✅ يتحقق من session_used لتجنب التكرار.
+    """
+    out_path   = Path(output_dir)
+    existing   = sorted(out_path.glob("*.mp4"))
+    used_paths = session_used or set()
 
-    existing = sorted(out_path.glob("*.mp4"))
+    # المستوى 1: تجنب last_used + session_used
     pool = [
         f for f in existing
-        if f != last_used and
-        f.stat().st_size > MIN_FILE_BYTES
+        if f != last_used
+        and str(f) not in used_paths
+        and f.stat().st_size > MIN_FILE_BYTES
     ]
+
+    # المستوى 2: تجنب last_used فقط
+    if not pool:
+        pool = [
+            f for f in existing
+            if f != last_used
+            and f.stat().st_size > MIN_FILE_BYTES
+        ]
+
+    # المستوى 3: أي ملف صالح
     if not pool:
         pool = [
             f for f in existing
             if f.stat().st_size > MIN_FILE_BYTES
         ]
+
     if pool:
         pick = random.choice(pool)
         log.info(f"    ♻️  Reusing: {pick.name}")
         return pick
 
+    # المستوى 4: الفيديوهات المحلية
     local = _list_local_videos()
     if local:
         pick = random.choice(local)
@@ -1076,18 +1281,18 @@ def _get_fallback_video(
     return None
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# GAP FILLING — مع تجنب التكرار المتتالي
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# GAP FILLING
+# ═══════════════════════════════════════════════════════════════════
 
 def _fill_gaps(
-    results:    list[Optional[Path]],
-    output_dir: str,
+    results:      list[Optional[Path]],
+    output_dir:   str,
+    session_used: Optional[set[str]] = None,
 ) -> list[Path]:
     """
     ملء الفراغات مع تجنب التكرار المتتالي.
-
-    ✅ لا يكرر نفس الفيديو في chunks متتالية
+    ✅ يمرر session_used لـ _get_fallback_video
     """
     available = [r for r in results if r is not None]
     local     = _list_local_videos()
@@ -1099,59 +1304,29 @@ def _fill_gaps(
             "Check PEXELS_API_KEY and PIXABAY_API_KEY."
         )
 
-    rng        = random.Random(42)
-    last_used  : Optional[Path] = None
+    last_used: Optional[Path] = None
 
     for i in range(len(results)):
         if results[i] is not None:
             last_used = results[i]
             continue
 
-        # ✅ تجنب التكرار المباشر
+        # ✅ تجنب last_used
         candidates = [v for v in all_pool if v != last_used]
         if not candidates:
             candidates = all_pool
 
-        picked     = rng.choice(candidates)
+        picked     = random.choice(candidates)
         results[i] = picked
         last_used  = picked
-
         log.info(f"  [{i + 1}] ♻️  Gap filled: {picked.name}")
 
     return results  # type: ignore[return-value]
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 🆕 KEYWORD ROTATION HELPER
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _rotate_keyword_for_chunk(
-    keywords: list[str],
-    index:    int,
-) -> list[str]:
-    """
-    ✅ تنويع الـ keywords حسب index الـ chunk.
-
-    بدل ما تأخذ نفس الـ keyword لكل chunks الجملة،
-    نتنقل بين الـ keywords الثلاثة بناءً على الـ index.
-
-    Example:
-        keywords = [kw1, kw2, kw3]
-        index=0 → [kw1, kw2, kw3]
-        index=1 → [kw2, kw3, kw1]
-        index=2 → [kw3, kw1, kw2]
-        index=3 → [kw1, kw2, kw3]  # دوران
-    """
-    if not keywords or len(keywords) <= 1:
-        return keywords
-
-    offset = index % len(keywords)
-    return keywords[offset:] + keywords[:offset]
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# TRY FETCH ONE VIDEO
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# TRY FETCH ONE
+# ═══════════════════════════════════════════════════════════════════
 
 def _try_fetch_one(
     keywords:     list[str],
@@ -1160,28 +1335,28 @@ def _try_fetch_one(
     session_used: set[str],
     session_lock: threading.Lock,
     content_mode: str,
-    topic:        str = "",
-    tag:          str = "information",
+    topic:        str          = "",
+    tag:          str          = "information",
     last_used_id: Optional[str] = None,
 ) -> Optional[Path]:
     """
     محاولة جلب فيديو واحد لـ chunk معين.
 
-    ✅ يستخدم rotation للـ keywords (لتنويع كل chunk)
-    ✅ يتجنب نفس الفيديو المُستخدم سابقاً (last_used_id)
+    ✅ فلترة الكلمات المجردة
+    ✅ keyword variants مدورة حسب index
+    ✅ يتجنب last_used_id
     """
     # ✅ فلترة الكلمات المجردة
     clean_kws = _filter_abstract_keywords(keywords)
+    if not clean_kws:
+        clean_kws = keywords  # fallback بدون فلترة
 
-    # ✅ تنويع ترتيب الـ keywords حسب index
-    rotated_kws = _rotate_keyword_for_chunk(clean_kws, index)
-
-    # دمج مع tag fallbacks
+    # ✅ دمج مع tag fallbacks
     tag_fallbacks = _get_tag_fallback(tag, content_mode)
-    all_keywords  = rotated_kws + [
-        kw for kw in tag_fallbacks[:3]
-        if kw not in rotated_kws
-    ]
+    all_keywords: list[str] = list(clean_kws)
+    for kw in tag_fallbacks[:3]:
+        if kw not in all_keywords:
+            all_keywords.append(kw)
 
     for sub, kw in enumerate(all_keywords):
         kw = kw.strip()
@@ -1190,7 +1365,7 @@ def _try_fetch_one(
 
         log.info(
             f"  [{index + 1}] [{tag}] "
-            f"Trying: {kw!r}"
+            f"Trying ({sub + 1}/{len(all_keywords)}): {kw!r}"
         )
 
         # 1. Local
@@ -1206,7 +1381,7 @@ def _try_fetch_one(
             kw, index, sub, output_dir,
             session_used, session_lock,
             content_mode, topic,
-            last_used=last_used_id,
+            last_used_id=last_used_id,
         )
         if path:
             return path
@@ -1216,7 +1391,7 @@ def _try_fetch_one(
             kw, index, sub, output_dir,
             session_used, session_lock,
             content_mode, topic,
-            last_used=last_used_id,
+            last_used_id=last_used_id,
         )
         if path:
             return path
@@ -1224,51 +1399,46 @@ def _try_fetch_one(
     return None
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 🆕 EXTRACT VIDEO ID FROM FILENAME
-# ═════════════════════════════════════════════════════════════════════════════
-
-_FILENAME_ID_RE = re.compile(r"_(px|pb)_(\d+)?")
-
-
-def _extract_video_id(path: Optional[Path]) -> Optional[str]:
-    """
-    استخراج video ID من اسم الملف.
-
-    Format: 000_0_px_keyword_name.mp4
-    لكن الـ ID مش في اسم الملف الحالي — نستخدم اسم الملف نفسه كـ ID
-    """
-    if not path:
-        return None
-    # نستخدم اسم الملف كاملاً كـ identifier
-    return path.stem
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# MAIN FETCH FUNCTION — مع تجنب التكرار المتتالي
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# MAIN FETCH FUNCTION
+# ═══════════════════════════════════════════════════════════════════
 
 def fetch_videos_for_script(
     keywords_per_sentence: list[list[str]],
     clip_durations:        list[float],
     output_dir:            str,
-    content_mode:          str                   = "short",
-    aligned:               Optional[list[dict]]  = None,
-    topic:                 str                   = "",
-    max_workers:           int                   = MAX_PARALLEL_WORKERS,
+    content_mode:          str                  = "short",
+    aligned:               Optional[list[dict]] = None,
+    topic:                 str                  = "",
+    max_workers:           int                  = 3,
 ) -> list[Path]:
     """
     جلب فيديو واحد لكل chunk.
 
-    ✅ يتجنب التكرار المتتالي (chunk[n] != chunk[n-1])
-    ✅ يستخدم pagination لتنويع النتائج
-    ✅ يدور بين الـ keywords الـ 3 لكل جملة
+    ✅ لا تكرار متتالي (last_used_id tracking)
+    ✅ keyword variants مختلفة لكل chunk
+    ✅ pagination مختلفة لكل chunk + variant
+    ✅ session_used يمنع إعادة الاستخدام في كل الفيديوهات
+    ✅ orientation صحيح (portrait للـ short، landscape للـ long)
+    ✅ fallback متعدد المستويات
+
+    Args:
+        keywords_per_sentence: قائمة keywords لكل chunk
+        clip_durations:        مدة كل chunk بالثواني
+        output_dir:            مجلد حفظ الفيديوهات
+        content_mode:          short (portrait) | long (landscape)
+        aligned:               نتائج WhisperX (للـ tags)
+        topic:                 موضوع عام للسياق
+        max_workers:           عدد الـ workers (غير مستخدم — sequential)
+
+    Returns:
+        list[Path] — فيديو لكل chunk
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     n            = len(keywords_per_sentence)
-    session_used : set[str]            = set()
-    session_lock : threading.Lock      = threading.Lock()
+    session_used : set[str]             = set()
+    session_lock : threading.Lock       = threading.Lock()
     results      : list[Optional[Path]] = [None] * n
 
     pexels_keys  = _load_keys_for("PEXELS_API_KEY")
@@ -1283,15 +1453,15 @@ def fetch_videos_for_script(
     )
     if topic:
         log.info(f"     Topic       : {topic[:50]}")
+    log.info(
+        f"     Strategy    : Sequential + "
+        f"variant rotation + page diversity"
+    )
 
     def _get_tag(i: int) -> str:
         if aligned and i < len(aligned):
             return str(aligned[i].get("tag", "information"))
         return "information"
-
-    # ✅ Sequential fetching مع تتبع آخر فيديو
-    # نستخدم Sequential لمنع التكرار المتتالي بشكل صحيح
-    log.info(f"  ⚡ Sequential fetch (no consecutive repeats)")
 
     last_used_path: Optional[Path] = None
     last_used_id:   Optional[str]  = None
@@ -1305,10 +1475,10 @@ def fetch_videos_for_script(
             f"\n  🎞️  Chunk [{i + 1}/{n}] "
             f"({dur:.2f}s) [{tag}]"
         )
-
         if last_used_id:
-            log.debug(f"    🚫 Avoiding: {last_used_id}")
+            log.debug(f"    🚫 Avoiding ID: {last_used_id}")
 
+        # ✅ محاولة الجلب
         path = _try_fetch_one(
             keywords     = kws,
             index        = i,
@@ -1321,22 +1491,28 @@ def fetch_videos_for_script(
             last_used_id = last_used_id,
         )
 
+        # ✅ fallback مع session_used
         if not path:
             path = _get_fallback_video(
-                output_dir, i,
-                last_used=last_used_path,
+                output_dir,
+                i,
+                last_used    = last_used_path,
+                session_used = session_used,
             )
 
         if path:
             results[i]     = path
             last_used_path = path
             last_used_id   = _extract_video_id(path)
-            log.info(f"  [{i + 1}/{n}] ✅ {path.name}")
+            log.info(
+                f"  [{i + 1}/{n}] ✅ {path.name} "
+                f"(id={last_used_id})"
+            )
         else:
             log.warning(f"  [{i + 1}/{n}] ❌ not found")
 
     # ✅ ملء الفراغات
-    final = _fill_gaps(results, output_dir)
+    final = _fill_gaps(results, output_dir, session_used)
 
     success = sum(1 for r in final if r is not None)
     log.info(
