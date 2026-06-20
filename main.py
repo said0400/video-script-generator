@@ -2,25 +2,25 @@
 """
 🎬 Video Generator — Multi-Language Auto Publisher
 
-Pipeline:
-  STEP A: TTS → clean voice
-  STEP B: Mixed Audio (voice + music + SFX)
-  STEP C: Fetch videos
-  STEP D: BG video
-  STEP E: Extract audio from BG video
-  STEP F: WhisperX → real timestamps
-  STEP G: Build chunk/clip plan
-  STEP H: Words overlay → final video
-  STEP J: Publish
+Pipeline للـ Short:
+  A: TTS → clean voice
+  B: Mixed Audio
+  C: Fetch videos (portrait)
+  D: BG video
+  E+F: WhisperX على BG video
+  G: Clip plan
+  H: Words overlay
+  J: Publish
 
-Platforms:
-  --platform yt   → YouTube only
-  --platform fb   → Facebook only
-  --platform both → YouTube + Facebook (shared audio + WhisperX)
-
-Long YT: FFmpeg — landscape 1920×1080
-Long FB: FFmpeg — portrait  1080×1920
-Short:   Playwright — portrait 1080×1920 (same file for YT + FB)
+Pipeline للـ Long (مُصلح):
+  A: TTS → clean voice
+  B: Mixed Audio
+  F: WhisperX على Mixed Audio مباشرة ← تغيير مهم
+  C: Fetch videos (بـ Tags الحقيقية)
+  D: BG video
+  G: Build chunks (بـ aligned الحقيقي)
+  H: Words overlay
+  J: Publish
 """
 
 from __future__ import annotations
@@ -85,7 +85,7 @@ from youtube import (
 )
 
 # ═══════════════════════════════════════════════════════════════════
-# LOGGING — فقط في main()
+# LOGGING
 # ═══════════════════════════════════════════════════════════════════
 
 log = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ CLIP_DURATION     = 3.0
 MIN_VALID_AUDIO_S = 5.0
 FFMPEG_TIMEOUT    = 300
 
-# Render timeouts (seconds)
+# Render timeouts
 RENDER_TIMEOUT_SHORT   = 1800   # 30 min
 RENDER_TIMEOUT_LONG_YT = 7200   # 120 min
 RENDER_TIMEOUT_LONG_FB = 3600   # 60 min
@@ -113,7 +113,7 @@ SPEED_MULTIPLIER: dict[str, float] = {
     "en": 1.15,
 }
 
-# Dimensions per mode+platform
+# Dimensions
 DIMENSIONS: dict[str, dict[str, int]] = {
     "short":   {"width": 1080, "height": 1920},
     "long_yt": {"width": 1920, "height": 1080},
@@ -125,8 +125,13 @@ DURATION_LIMITS: dict[str, dict[str, int]] = {
     "long":  {"min": 120, "max": 900},
 }
 
-# مدة كل chunk للخلفية في Long videos
-BACKGROUND_CHUNK_DUR = 3.0
+# ✅ مدة chunk ديناميكية للـ Long — لتجنب عدد ضخم من الفيديوهات
+BACKGROUND_CHUNK_DUR_SHORT = 3.0   # Short: 3 ثوانٍ
+BACKGROUND_CHUNK_DUR_LONG  = 6.0   # Long:  6 ثوانٍ (نصف العدد)
+MAX_LONG_CHUNKS            = 80    # حد أقصى للـ Long
+
+# Valid platforms
+_VALID_PLATFORMS = frozenset({"yt", "fb", "both"})
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -188,7 +193,6 @@ def parse_args() -> argparse.Namespace:
 # ═══════════════════════════════════════════════════════════════════
 
 def _get_dimensions(content_mode: str, platform: str) -> dict[str, int]:
-    """أبعاد الفيديو حسب content_mode و platform."""
     if content_mode == "long" and platform == "yt":
         return DIMENSIONS["long_yt"]
     if content_mode == "long" and platform == "fb":
@@ -205,19 +209,34 @@ def _get_render_timeout(content_mode: str, platform: str) -> int:
 
 
 def _get_fetch_content_mode(content_mode: str, platform: str) -> str:
-    """
-    content_mode لجلب الفيديوهات.
-    Long YT → landscape → "long"
-    Long FB → portrait  → "short"
-    Short   → portrait  → "short"
-    """
+    """Long YT → landscape, كل شيء آخر → portrait."""
     if content_mode == "long" and platform == "yt":
         return "long"
     return "short"
 
 
+def _get_chunk_dur(content_mode: str, total_dur: float) -> float:
+    """
+    ✅ مدة chunk ديناميكية.
+    تضمن أن عدد الـ chunks لا يتجاوز MAX_LONG_CHUNKS.
+    """
+    if content_mode == "short":
+        return BACKGROUND_CHUNK_DUR_SHORT
+
+    # Long: احسب المدة اللازمة لتجنب عدد ضخم
+    base_dur     = BACKGROUND_CHUNK_DUR_LONG
+    n_with_base  = int(total_dur / base_dur)
+
+    if n_with_base > MAX_LONG_CHUNKS:
+        # زيادة مدة الـ chunk لتقليل العدد
+        adjusted = total_dur / MAX_LONG_CHUNKS
+        return max(base_dur, round(adjusted, 1))
+
+    return base_dur
+
+
 # ═══════════════════════════════════════════════════════════════════
-# RENDER DONE CHECK — حسب platform
+# RENDER DONE CHECK
 # ═══════════════════════════════════════════════════════════════════
 
 def _is_fully_rendered(
@@ -226,35 +245,28 @@ def _is_fully_rendered(
     content_mode: str,
     platform:     str,
 ) -> bool:
-    """
-    ✅ تحقق من اكتمال الـ render حسب platform المطلوب.
-
-    platform=yt   → يحتاج yt_path
-    platform=fb   → يحتاج fb_path
-    platform=both → يحتاج yt_path + fb_path
-    """
+    """تحقق من اكتمال الـ render حسب platform."""
     num = str(video_number)
-
     if platform == "both":
         return (
             is_render_done(num, lang, content_mode, platform="youtube") and
             is_render_done(num, lang, content_mode, platform="facebook")
         )
     elif platform == "yt":
-        return is_render_done(num, lang, content_mode, platform="youtube")
+        return is_render_done(
+            num, lang, content_mode, platform="youtube"
+        )
     else:
-        return is_render_done(num, lang, content_mode, platform="facebook")
+        return is_render_done(
+            num, lang, content_mode, platform="facebook"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════
 # PUBLISH HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
-def _should_publish_yt(
-    args: argparse.Namespace,
-    lang: str,
-) -> bool:
-    """هل ننشر على YouTube؟"""
+def _should_publish_yt(args: argparse.Namespace, lang: str) -> bool:
     if args.no_publish or args.script_only or args.no_video:
         return False
     if args.platform not in ("yt", "both"):
@@ -266,7 +278,6 @@ def _should_publish_fb(
     args:         argparse.Namespace,
     content_mode: str,
 ) -> bool:
-    """هل ننشر على Facebook؟"""
     if args.no_publish or args.script_only or args.no_video:
         return False
     if args.platform not in ("fb", "both"):
@@ -303,13 +314,13 @@ def _run_ffmpeg(
         )
         stderr = r.stderr or ""
         if r.returncode != 0 and stderr:
-            log.debug(f"FFmpeg error: {stderr[-400:]}")
+            log.debug(f"FFmpeg stderr: {stderr[-400:]}")
         return r.returncode == 0, stderr
     except subprocess.TimeoutExpired:
         log.error(f"FFmpeg timeout after {timeout}s")
         return False, "Timeout"
     except Exception as e:
-        log.error(f"FFmpeg exception: {e}")
+        log.error(f"FFmpeg error: {e}")
         return False, str(e)
 
 
@@ -327,10 +338,7 @@ def _file_size_bytes(path: str | Path) -> int:
         return 0
 
 
-def _pick_best_voice_wav(
-    candidates: list[Path],
-) -> Path | None:
-    """اختيار أفضل ملف WAV."""
+def _pick_best_voice_wav(candidates: list[Path]) -> Path | None:
     if not candidates:
         return None
     filtered: list[Path] = []
@@ -373,7 +381,6 @@ def _estimate_duration(
     if words == 0:
         return limits["min"]
 
-    # ✅ WPM صحيح للـ Short (يُطبَّق speed multiplier)
     wpm = (
         WPM / SPEED_MULTIPLIER.get(lang, 1.0)
         if content_mode == "short"
@@ -381,17 +388,6 @@ def _estimate_duration(
     )
     raw_sec   = (words / wpm) * 60
     estimated = int(round(raw_sec))
-
-    if estimated < limits["min"]:
-        log.warning(
-            f"  ⚠️  Estimated {estimated}s "
-            f"< min {limits['min']}s"
-        )
-    elif estimated > limits["max"]:
-        log.warning(
-            f"  ⚠️  Estimated {estimated}s "
-            f"> max {limits['max']}s"
-        )
 
     return max(limits["min"], min(limits["max"], estimated))
 
@@ -404,7 +400,6 @@ _TAG_RE = re.compile(r"\[[a-zA-Z_]+\]")
 
 
 def _is_cache_stale(cached: dict, content: str) -> bool:
-    """تحقق من صلاحية الـ cache بمقارنة عدد الجمل."""
     cached_tagged = cached.get("tagged") or []
     if not cached_tagged:
         log.info("  🔄 Cache stale: no tagged data")
@@ -417,8 +412,7 @@ def _is_cache_stale(cached: dict, content: str) -> bool:
     if actual_sentences < expected_sentences * 0.7:
         log.info(
             f"  🔄 Cache stale: "
-            f"{actual_sentences} cached vs "
-            f"{expected_sentences} expected"
+            f"{actual_sentences} vs {expected_sentences} expected"
         )
         return True
 
@@ -433,7 +427,6 @@ def _inject_tags_into_aligned(
     aligned: list[dict],
     tagged:  list[dict],
 ) -> list[dict]:
-    """إضافة tags من tagged_sentences إلى aligned."""
     if not aligned or not tagged:
         return aligned
     result: list[dict] = []
@@ -506,7 +499,7 @@ def _normalize_keywords_row(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# BACKGROUND CHUNKS — Long
+# BACKGROUND CHUNKS
 # ═══════════════════════════════════════════════════════════════════
 
 def _find_active_sentence_idx(
@@ -527,16 +520,14 @@ def _build_background_chunks(
     aligned:         list[dict],
     visual_keywords: list[list[str]],
     total_dur:       float,
-    chunk_dur:       float = BACKGROUND_CHUNK_DUR,
+    chunk_dur:       float,
 ) -> tuple[list[list[str]], list[float]]:
     """
-    يبني chunks للخلفية كل 3 ثوانٍ.
-    ✅ محمي من infinite loop بـ MAX_CHUNKS.
+    ✅ يبني chunks بمدة ديناميكية.
+    ✅ محمي من infinite loop.
     """
     if total_dur <= 0:
-        log.warning(
-            "  ⚠️  total_dur <= 0 in _build_background_chunks"
-        )
+        log.warning("  ⚠️  total_dur <= 0")
         return [], []
 
     chunk_dur  = max(0.5, chunk_dur)
@@ -576,11 +567,8 @@ def _build_background_chunks(
         t += dur
 
     if iter_count >= MAX_CHUNKS:
-        log.warning(
-            f"  ⚠️  MAX_CHUNKS reached: {iter_count}"
-        )
+        log.warning(f"  ⚠️  MAX_CHUNKS reached: {iter_count}")
 
-    # تصحيح المجموع
     if chunks_dur:
         diff = round(total_dur - sum(chunks_dur), 3)
         if abs(diff) > 0.01:
@@ -592,21 +580,51 @@ def _build_background_chunks(
     avg_dur  = sum(chunks_dur) / n_chunks if n_chunks else 0
     log.info(
         f"  📋 Background chunks: {n_chunks} "
-        f"(avg {avg_dur:.2f}s, total {sum(chunks_dur):.1f}s)"
+        f"(avg {avg_dur:.1f}s, total {sum(chunks_dur):.1f}s)"
     )
     return chunks_kw, chunks_dur
+
+
+def _build_temp_keywords_long(
+    visual_keywords: list[list[str]],
+    real_dur:        float,
+    chunk_dur:       float,
+) -> tuple[list[list[str]], list[float]]:
+    """Keywords مؤقتة للـ Long قبل WhisperX (الآن لا تُستخدم في الـ Long)."""
+    default_kw = ["person serious face talking camera"]
+    n_temp     = max(1, int(real_dur / chunk_dur))
+    n_temp     = min(n_temp, MAX_LONG_CHUNKS)
+    temp_dur   = real_dur / n_temp
+    n_vk       = len(visual_keywords)
+    temp_kws   : list[list[str]] = []
+
+    for i in range(n_temp):
+        if n_vk > 0:
+            vk_idx = min(int(i / n_temp * n_vk), n_vk - 1)
+            kw     = visual_keywords[vk_idx]
+        else:
+            kw = [default_kw[0]]
+        temp_kws.append(kw)
+
+    temp_durs = [round(temp_dur, 3)] * n_temp
+    if temp_durs:
+        diff          = round(real_dur - sum(temp_durs), 3)
+        temp_durs[-1] = max(
+            0.5, round(temp_durs[-1] + diff, 3)
+        )
+
+    return temp_kws, temp_durs
 
 
 # ═══════════════════════════════════════════════════════════════════
 # KEYWORD HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
-def _build_temp_keywords(
+def _build_temp_keywords_short(
     script_data:  dict,
     ai_data:      dict,
     content_mode: str,
 ) -> list[list[str]]:
-    """Keywords للـ Short حسب الجمل."""
     visual_keywords = ai_data.get("visual_keywords", []) or []
     hook_keyword    = (
         script_data.get("hook_keyword") or ""
@@ -631,41 +649,6 @@ def _build_temp_keywords(
         keywords.append(row)
 
     return keywords
-
-
-def _build_temp_keywords_long(
-    visual_keywords: list[list[str]],
-    real_dur:        float,
-) -> tuple[list[list[str]], list[float]]:
-    """
-    Keywords مؤقتة للـ Long قبل WhisperX.
-    توزيع بالتساوي حسب visual_keywords.
-    """
-    default_kw = ["person serious face talking camera"]
-    n_temp     = max(1, int(real_dur / BACKGROUND_CHUNK_DUR))
-    temp_dur   = real_dur / n_temp
-    n_vk       = len(visual_keywords)
-    temp_kws   : list[list[str]] = []
-
-    for i in range(n_temp):
-        if n_vk > 0:
-            vk_idx = min(
-                int(i / n_temp * n_vk),
-                n_vk - 1,
-            )
-            kw = visual_keywords[vk_idx]
-        else:
-            kw = [default_kw[0]]
-        temp_kws.append(kw)
-
-    temp_durs = [round(temp_dur, 3)] * n_temp
-    if temp_durs:
-        diff         = round(real_dur - sum(temp_durs), 3)
-        temp_durs[-1] = max(
-            0.5, round(temp_durs[-1] + diff, 3)
-        )
-
-    return temp_kws, temp_durs
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -705,7 +688,7 @@ def _build_clip_plan(
                 i < len(sentences) - 1 and
                 (i + 1) < len(aligned)
             ):
-                ns    = float(aligned[i+1].get("start", ce))
+                ns    = float(aligned[i + 1].get("start", ce))
                 eff   = max(ce, ns)
                 max_r = (
                     estimated[i] * 3
@@ -742,8 +725,8 @@ def _build_clip_plan(
             clip_keywords.append(row)
             clip_durations.append(dur)
             log.info(
-                f"     [{i+1}/{len(sentences)}] "
-                f"[{aligned[i].get('tag','info')}] "
+                f"     [{i + 1}/{len(sentences)}] "
+                f"[{aligned[i].get('tag', 'info')}] "
                 f"{dur:.2f}s → {row[0]}"
             )
 
@@ -765,7 +748,6 @@ def _build_clip_plan(
 
         return clip_keywords, clip_durations
 
-    # Fallback
     log.warning("  ⚠️  Using estimated durations fallback")
     for i in range(len(sentences)):
         row = _normalize_keywords_row(
@@ -923,7 +905,6 @@ def produce_clean_voice(
                     f"  📏 After speed: {real_dur:.3f}s"
                 )
 
-    # ✅ تحقق من وجود الملف
     clean_voice_path = (
         Path(wav_path)
         if wav_path
@@ -935,7 +916,7 @@ def produce_clean_voice(
             f"Candidates: {[str(c) for c in wav_candidates]}"
         )
 
-    log.info(f"  ✅ Clean voice ready: {real_dur:.3f}s")
+    log.info(f"  ✅ Clean voice: {real_dur:.3f}s")
     return clean_voice_path, real_dur
 
 
@@ -1022,14 +1003,13 @@ def produce_mixed_audio(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# STEP E: EXTRACT AUDIO
+# STEP E: EXTRACT AUDIO FROM VIDEO
 # ═══════════════════════════════════════════════════════════════════
 
 def _extract_audio_from_video(
     video_path:  str | Path,
     output_path: str | Path,
 ) -> str:
-    """STEP E — استخراج الصوت من BG video."""
     log.info("  🔊 Extracting audio from BG video...")
     ok, err = _run_ffmpeg(
         [
@@ -1093,17 +1073,16 @@ def run_whisperx(
     )
     log.info(
         f"  ✅ WhisperX: "
-        f"{len(sentences)} sentences, "
-        f"{total_words} words"
+        f"{len(sentences)} sentences, {total_words} words"
     )
 
     all_words = [w for s in aligned for w in s.get("words", [])]
     log.info("  🔍 First 5 words:")
     for w in all_words[:5]:
         log.info(
-            f"     {w.get('start',0):.3f}s → "
-            f"{w.get('end',0):.3f}s  "
-            f"'{w.get('word','?')}'"
+            f"     {w.get('start', 0):.3f}s → "
+            f"{w.get('end', 0):.3f}s  "
+            f"'{w.get('word', '?')}'"
         )
 
     generate_srt(aligned,      f"{out_base}.srt")
@@ -1121,7 +1100,6 @@ def _save_whisperx_cache(
     sentences: list[str],
     out_base:  str,
 ) -> None:
-    """حفظ نتائج WhisperX كـ JSON."""
     cache_path = Path(f"{out_base}_whisperx_cache.json")
     cache_path.write_text(
         json.dumps(
@@ -1137,12 +1115,8 @@ def _save_whisperx_cache(
 def _load_whisperx_cache(
     out_base: str,
 ) -> tuple[list[dict], list[str]]:
-    """تحميل WhisperX cache."""
     cache_path = Path(f"{out_base}_whisperx_cache.json")
     if not cache_path.exists():
-        log.warning(
-            f"  ⚠️  WhisperX cache not found: {cache_path.name}"
-        )
         return [], []
     try:
         data      = json.loads(
@@ -1152,12 +1126,11 @@ def _load_whisperx_cache(
         sentences = data.get("sentences", [])
         log.info(
             f"  ♻️  WhisperX cache: "
-            f"{len(sentences)} sentences, "
-            f"{sum(len(s.get('words',[])) for s in aligned)} words"
+            f"{len(sentences)} sentences"
         )
         return aligned, sentences
     except Exception as e:
-        log.warning(f"  ⚠️  WhisperX cache load failed: {e}")
+        log.warning(f"  ⚠️  Cache load failed: {e}")
         return [], []
 
 
@@ -1177,7 +1150,6 @@ def _build_manifest(
     has_hook:       bool = False,
     platform:       str  = "yt",
 ) -> dict:
-    """بناء manifest مع dimensions مناسبة."""
     avg_clip = (
         sum(clip_durations) / len(clip_durations)
         if clip_durations
@@ -1224,7 +1196,6 @@ def _run_remotion_render(
     content_mode:  str = "short",
     platform:      str = "yt",
 ) -> None:
-    """تشغيل render.mjs."""
     if not RENDER_SCRIPT.exists():
         raise FileNotFoundError(
             f"render.mjs not found: {RENDER_SCRIPT}"
@@ -1232,7 +1203,9 @@ def _run_remotion_render(
 
     timeout = _get_render_timeout(content_mode, platform)
     label   = f"{content_mode.upper()}/{platform.upper()}"
-    log.info(f"  ⏱️  Timeout: {timeout // 60}min [{label}]")
+    log.info(
+        f"  ⏱️  Timeout: {timeout // 60}min [{label}]"
+    )
 
     try:
         r = subprocess.run(
@@ -1259,7 +1232,6 @@ def _run_remotion_render(
             f"Render failed [{label}]:\n{r.stdout[-600:]}"
         )
 
-    # ✅ تحقق من وجود الملف بعد الـ render
     if not output_path.exists():
         raise RuntimeError(
             f"Render produced no file: {output_path}"
@@ -1401,17 +1373,13 @@ def get_or_create_ai_data(
     force_ai:     bool = False,
     content:      str  = "",
 ) -> dict:
-    """
-    جلب أو إنشاء AI data.
-    ✅ cache_key مشترك بين YT و FB.
-    """
     video_number = str(record["number"])
     title        = record.get("title", "")
     cache_key    = make_cache_key(video_number, lang, content_mode)
 
     if not force_ai and has_ai_cache(cache_key):
         cached = get_ai_cache(cache_key)
-        if cached and cached.get("hook_keyword"):
+        if cached and cached.get("hook_keyword") is not None:
             if content and _is_cache_stale(cached, content):
                 log.info(
                     f"\n  🔄 Invalidating stale cache #{video_number}"
@@ -1545,10 +1513,6 @@ def _publish_to_platform(
     video_number:  str,
     content_mode:  str,
 ) -> bool:
-    """
-    نشر على منصة واحدة.
-    Returns True إذا نجح أو كان منشوراً مسبقاً.
-    """
     is_pub = (
         is_published_youtube
         if platform_name == "youtube"
@@ -1564,7 +1528,7 @@ def _publish_to_platform(
     if not Path(video_path).exists():
         log.error(
             f"  ❌ {platform_name.title()}: "
-            f"video file not found: {video_path}"
+            f"video not found: {video_path}"
         )
         return False
 
@@ -1616,11 +1580,6 @@ def _do_publish(
     should_publish_yt: bool,
     should_publish_fb: bool,
 ) -> None:
-    """
-    نشر على المنصات المطلوبة.
-    ✅ video_path_yt و video_path_fb منفصلان.
-    ✅ تحقق من وجود الملف قبل النشر.
-    """
     if should_publish_yt and platform in ("yt", "both"):
         if video_path_yt:
             _publish_to_platform(
@@ -1629,9 +1588,7 @@ def _do_publish(
                 video_number, content_mode,
             )
         else:
-            log.warning(
-                "  ⚠️  YouTube: no video path provided"
-            )
+            log.warning("  ⚠️  YouTube: no video path")
 
     if should_publish_fb and platform in ("fb", "both"):
         if video_path_fb:
@@ -1641,13 +1598,11 @@ def _do_publish(
                 video_number, content_mode,
             )
         else:
-            log.warning(
-                "  ⚠️  Facebook: no video path provided"
-            )
+            log.warning("  ⚠️  Facebook: no video path")
 
 
 # ═══════════════════════════════════════════════════════════════════
-# SHARED STEPS — Audio (A+B)
+# SHARED AUDIO (A+B)
 # ═══════════════════════════════════════════════════════════════════
 
 def _run_shared_audio(
@@ -1655,14 +1610,8 @@ def _run_shared_audio(
     out_base:     str,
     content_mode: str,
 ) -> tuple[Path, float]:
-    """
-    STEP A + B — مشتركان بين YT و FB.
-    ✅ يتحقق من وجود audio سابق قبل إعادة التوليد.
-
-    Returns:
-        (mixed_audio_path, real_duration_seconds)
-    """
-    # ✅ تحقق من audio موجود مسبقاً
+    """STEP A + B — مشتركان بين YT و FB."""
+    # تحقق من audio موجود مسبقاً
     mixed_candidates = [
         Path(f"{out_base}_audio_mixed_padded.aac"),
         Path(f"{out_base}_audio_mixed.aac"),
@@ -1699,56 +1648,83 @@ def _run_shared_audio(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# SHARED STEPS — WhisperX (E+F)
+# ✅ WHISPERX على الصوت مباشرة (للـ Long)
 # ═══════════════════════════════════════════════════════════════════
 
-def _run_shared_whisperx(
-    bg_video:     Path,
-    out_base:     str,
-    lang:         str,
-    tagged:       list[dict],
+def _run_whisperx_on_audio(
+    audio_path: Path,
+    out_base:   str,
+    lang:       str,
+    tagged:     list[dict],
 ) -> tuple[list[dict], list[str]]:
     """
-    STEP E + F — مشتركان.
-    ✅ يتحقق من وجود cache قبل إعادة التشغيل.
-    ✅ يحفظ الـ cache بعد التشغيل.
-    ✅ يُعيد aligned بدون inject (يُترك للمستدعي).
+    ✅ WhisperX على الصوت المباشر (وليس BG video).
+    يُستخدم للـ Long Pipeline لاستخراج timestamps
+    قبل جلب الفيديوهات — لضمان Tags صحيحة.
 
     Returns:
-        (aligned_raw, whisper_sentences)
-        aligned_raw: بدون tags — يجب استدعاء
-                     _inject_tags_into_aligned() بعده
+        (aligned_with_tags, sentences)
     """
-    # ✅ تحقق من cache
-    aligned, whisper_sentences = _load_whisperx_cache(out_base)
+    # تحقق من cache
+    aligned, sentences = _load_whisperx_cache(out_base)
     if aligned:
         log.info("  ♻️  WhisperX: using cache")
-        return aligned, whisper_sentences
+        aligned = _inject_tags_into_aligned(aligned, tagged)
+        return aligned, sentences
 
-    # STEP E
     log.info(f"\n  {'─' * 55}")
-    log.info("  ✅ STEP E: Extract audio")
-    extracted = f"{out_base}_extracted_for_whisper.wav"
-    _extract_audio_from_video(str(bg_video), extracted)
+    log.info("  ✅ STEP F: WhisperX على الصوت مباشرة")
 
-    # STEP F
-    log.info(f"\n  {'─' * 55}")
-    log.info("  ✅ STEP F: WhisperX")
-    aligned, whisper_sentences = run_whisperx(
-        audio_source = extracted,
-        out_base     = out_base,
-        lang         = lang,
+    # تحويل الصوت لـ WAV مناسب لـ WhisperX
+    whisper_wav = f"{out_base}_whisper_direct.wav"
+    ok, _ = _run_ffmpeg(
+        [
+            "ffmpeg", "-y", "-i", str(audio_path),
+            "-acodec", "pcm_s16le",
+            "-ar", "16000", "-ac", "1",
+            "-vn", whisper_wav,
+        ],
+        timeout=120,
     )
-    _safe_unlink(extracted)
+    if not ok:
+        whisper_wav = str(audio_path)
 
-    # ✅ حفظ الـ cache (بدون tags — يُضاف لاحقاً)
-    _save_whisperx_cache(aligned, whisper_sentences, out_base)
+    transcript = extract_transcript_from_audio(
+        whisper_wav, lang=lang
+    )
 
-    return aligned, whisper_sentences
+    if whisper_wav != str(audio_path):
+        _safe_unlink(whisper_wav)
+
+    if not transcript["success"]:
+        log.warning("  ⚠️  WhisperX failed — using empty aligned")
+        return [], []
+
+    aligned   = transcript["aligned"]
+    sentences = transcript["sentences"]
+
+    total_words = sum(
+        len(s.get("words", [])) for s in aligned
+    )
+    log.info(
+        f"  ✅ WhisperX: "
+        f"{len(sentences)} sentences, {total_words} words"
+    )
+
+    generate_srt(aligned,      f"{out_base}.srt")
+    generate_word_srt(aligned, f"{out_base}_words.srt")
+
+    # حفظ الـ cache (بدون tags)
+    _save_whisperx_cache(aligned, sentences, out_base)
+
+    # إضافة tags
+    aligned = _inject_tags_into_aligned(aligned, tagged)
+
+    return aligned, sentences
 
 
 # ═══════════════════════════════════════════════════════════════════
-# LONG PIPELINE
+# ✅ LONG PIPELINE — المُصلح
 # ═══════════════════════════════════════════════════════════════════
 
 def _run_long_pipeline(
@@ -1765,17 +1741,15 @@ def _run_long_pipeline(
     should_publish_fb: bool,
 ) -> dict:
     """
-    Pipeline للـ Long video.
+    ✅ Pipeline الـ Long المُصلح:
 
-    platforms_to_run: ["yt"] أو ["fb"] أو ["yt", "fb"]
-
-    SHARED (مرة واحدة):
-      Audio (A+B) + WhisperX (E+F)
-
-    SEPARATE لكل platform:
-      Fetch (C) + BG (D) + Overlay (H) + Publish (J)
-
-    ✅ mark_render_done مرة واحدة بعد كل platforms.
+    A+B: Audio (مشترك)
+    F:   WhisperX على الصوت ← قبل Fetch (جديد!)
+    G:   Build chunks بـ Tags الحقيقية
+    C:   Fetch videos بـ Keywords الصحيحة
+    D:   BG video
+    H:   Words overlay
+    J:   Publish
     """
     visual_keywords = ai_data.get("visual_keywords", []) or []
     content_mode    = "long"
@@ -1789,19 +1763,47 @@ def _run_long_pipeline(
         script_data, out_base, content_mode
     )
 
-    # ── WhisperX يحتاج BG video —
-    # نبني الـ BG للـ platform الأول أولاً
-    first_platform = platforms_to_run[0]
+    # ✅ STEP F: WhisperX على الصوت مباشرة
+    # قبل Fetch وBG لضمان Tags صحيحة
+    log.info(f"\n  {'─' * 55}")
+    log.info(
+        "  ✅ STEP F: WhisperX على الصوت "
+        "(قبل Fetch لضمان Tags صحيحة)"
+    )
+
+    aligned, whisper_sentences = _run_whisperx_on_audio(
+        audio_path = mixed_audio,
+        out_base   = out_base,
+        lang       = lang,
+        tagged     = tagged,
+    )
+
+    if not whisper_sentences:
+        whisper_sentences = script_data["sentences"]
+
+    # ✅ STEP G: Build chunks بـ Tags الحقيقية
+    log.info(f"\n  {'─' * 55}")
+    log.info("  ✅ STEP G: Build chunks (بـ Tags الحقيقية)")
+
+    chunk_dur = _get_chunk_dur(content_mode, real_dur)
+    log.info(
+        f"  📋 Chunk duration: {chunk_dur:.1f}s "
+        f"(total: {real_dur:.1f}s, "
+        f"chunks: ~{int(real_dur/chunk_dur)})"
+    )
+
+    chunk_kws, chunk_durs = _build_background_chunks(
+        aligned         = aligned,
+        visual_keywords = visual_keywords,
+        total_dur       = real_dur,
+        chunk_dur       = chunk_dur,
+    )
 
     # متغيرات لجمع الـ paths
     yt_path_final: str = ""
     fb_path_final: str = ""
 
-    # aligned مشترك بعد أول platform
-    shared_aligned:    list[dict] = []
-    shared_sentences:  list[str]  = []
-    whisperx_done:     bool       = False
-
+    # ── Loop على كل platform ─────────────────────────────────────
     for platform in platforms_to_run:
 
         fetch_mode = _get_fetch_content_mode(content_mode, platform)
@@ -1817,28 +1819,32 @@ def _run_long_pipeline(
         # ── STEP C: Fetch videos ─────────────────────────────────
         log.info(f"\n  {'─' * 55}")
         log.info(
-            f"  ✅ STEP C: Fetch [{fetch_mode.upper()}]"
-        )
-
-        temp_kws, temp_durs = _build_temp_keywords_long(
-            visual_keywords, real_dur
+            f"  ✅ STEP C: Fetch "
+            f"[{fetch_mode.upper()}] "
+            f"({len(chunk_kws)} videos)"
         )
 
         vid_dir = str(
             Path(out_dir).resolve() /
             f"videos_{num}_{lang}_{content_mode}_{platform}"
         )
+
         video_paths = fetch_videos_for_script(
-            keywords_per_sentence = temp_kws,
-            clip_durations        = temp_durs,
+            keywords_per_sentence = chunk_kws,
+            clip_durations        = chunk_durs,
             output_dir            = vid_dir,
             content_mode          = fetch_mode,
+            aligned               = aligned,
         )
 
         if platform == "yt":
-            result["video_paths_yt"] = [str(p) for p in video_paths]
+            result["video_paths_yt"] = [
+                str(p) for p in video_paths
+            ]
         else:
-            result["video_paths_fb"] = [str(p) for p in video_paths]
+            result["video_paths_fb"] = [
+                str(p) for p in video_paths
+            ]
 
         # ── STEP D: BG video ─────────────────────────────────────
         log.info(f"\n  {'─' * 55}")
@@ -1851,50 +1857,23 @@ def _run_long_pipeline(
             out_base       = out_base,
             script_data    = script_data,
             has_hook       = False,
-            clip_durations = temp_durs,
+            clip_durations = chunk_durs,
             content_mode   = content_mode,
-            aligned        = None,
+            aligned        = aligned,
             platform       = platform,
-        )
-
-        # ── STEP E+F: WhisperX (مرة واحدة فقط) ──────────────────
-        if not whisperx_done:
-            log.info(f"\n  {'─' * 55}")
-            log.info("  ✅ STEP E+F: WhisperX (shared)")
-
-            raw_aligned, raw_sentences = _run_shared_whisperx(
-                bg_video = bg_video,
-                out_base = out_base,
-                lang     = lang,
-                tagged   = tagged,
-            )
-
-            # ✅ inject tags مرة واحدة
-            shared_aligned   = _inject_tags_into_aligned(
-                raw_aligned, tagged
-            )
-            shared_sentences = raw_sentences or script_data["sentences"]
-            whisperx_done    = True
-
-        # ── STEP G: Plan ─────────────────────────────────────────
-        log.info(f"\n  {'─' * 55}")
-        log.info(f"  ✅ STEP G: Plan [{platform.upper()}]")
-
-        chunk_kws, chunk_durs = _build_background_chunks(
-            aligned         = shared_aligned,
-            visual_keywords = visual_keywords,
-            total_dur       = real_dur,
         )
 
         # ── STEP H: Words overlay ─────────────────────────────────
         log.info(f"\n  {'─' * 55}")
-        log.info(f"  ✅ STEP H: Overlay [{platform.upper()}]")
+        log.info(
+            f"  ✅ STEP H: Overlay [{platform.upper()}]"
+        )
 
         final_video = render_words_overlay(
             bg_video       = bg_video,
             audio_path     = mixed_audio,
-            aligned        = shared_aligned,
-            sentences      = shared_sentences,
+            aligned        = aligned,
+            sentences      = whisper_sentences,
             script_data    = script_data,
             out_base       = out_base,
             content_mode   = content_mode,
@@ -1902,7 +1881,7 @@ def _run_long_pipeline(
             platform       = platform,
         )
 
-        # ✅ نسخ الملف النهائي
+        # نسخ الملف النهائي
         published_path = Path(
             f"{out_base}{suffix}_published.mp4"
         ).resolve()
@@ -1958,7 +1937,10 @@ def _run_long_pipeline(
     # Summary
     log.info(f"\n{'─' * 65}")
     log.info(f"  ✅ Video #{num} [LONG] Done!")
-    for plat, path in [("YT", yt_path_final), ("FB", fb_path_final)]:
+    for plat, path in [
+        ("YT", yt_path_final),
+        ("FB", fb_path_final),
+    ]:
         if path:
             d = _get_dimensions("long", plat.lower())
             log.info(
@@ -1990,16 +1972,10 @@ def _run_short_pipeline(
     no_export:         bool,
     formats:           str,
 ) -> dict:
-    """
-    Pipeline للـ Short video (portrait 1080×1920).
-
-    ✅ فيديو واحد لكل المنصات.
-    ✅ platform يتحكم فقط في الـ publish.
-    ✅ اسم الملف ثابت: _short_published.mp4
-    """
-    content_mode   = "short"
-    render_platform = "yt"  # Short يُرندر دائماً كـ yt (portrait)
-    result         = {"video_paths": []}
+    """Pipeline للـ Short video."""
+    content_mode    = "short"
+    render_platform = "yt"
+    result          = {"video_paths": []}
 
     # ── STEP A+B: Audio ──────────────────────────────────────────
     mixed_audio, real_dur = _run_shared_audio(
@@ -2010,7 +1986,7 @@ def _run_short_pipeline(
     log.info(f"\n  {'─' * 55}")
     log.info("  ✅ STEP C: Fetch [SHORT]")
 
-    fetch_keywords  = _build_temp_keywords(
+    fetch_keywords  = _build_temp_keywords_short(
         script_data, ai_data, content_mode
     )
     fetch_durations = _estimate_sentence_durations(
@@ -2046,19 +2022,30 @@ def _run_short_pipeline(
         platform       = render_platform,
     )
 
-    # ── STEP E+F: WhisperX ───────────────────────────────────────
+    # ── STEP E+F: WhisperX على BG video ──────────────────────────
     log.info(f"\n  {'─' * 55}")
     log.info("  ✅ STEP E+F: WhisperX [SHORT]")
 
-    raw_aligned, raw_sentences = _run_shared_whisperx(
-        bg_video = bg_video,
-        out_base = out_base,
-        lang     = lang,
-        tagged   = tagged,
-    )
-    aligned           = _inject_tags_into_aligned(
-        raw_aligned, tagged
-    )
+    # تحقق من cache
+    aligned, raw_sentences = _load_whisperx_cache(out_base)
+
+    if not aligned:
+        # STEP E: استخراج الصوت من BG video
+        extracted = f"{out_base}_short_extracted.wav"
+        _extract_audio_from_video(str(bg_video), extracted)
+
+        # STEP F: WhisperX
+        aligned, raw_sentences = run_whisperx(
+            audio_source = extracted,
+            out_base     = out_base,
+            lang         = lang,
+        )
+        _safe_unlink(extracted)
+
+        # حفظ الـ cache
+        _save_whisperx_cache(aligned, raw_sentences, out_base)
+
+    aligned           = _inject_tags_into_aligned(aligned, tagged)
     whisper_sentences = raw_sentences or script_data["sentences"]
 
     # ── STEP G: Clip plan ────────────────────────────────────────
@@ -2089,8 +2076,10 @@ def _run_short_pipeline(
         platform       = render_platform,
     )
 
-    # ✅ اسم ثابت للـ Short
-    published = Path(f"{out_base}_short_published.mp4").resolve()
+    # نسخ الملف النهائي
+    published = Path(
+        f"{out_base}_short_published.mp4"
+    ).resolve()
 
     if not final_video.exists():
         raise RuntimeError(
@@ -2103,7 +2092,7 @@ def _run_short_pipeline(
         f"({_file_size_mb(published):.1f} MB)"
     )
 
-    # ✅ mark_render_done — نفس الملف لـ YT و FB
+    # DB
     mark_render_done(
         num, lang, str(published), real_dur,
         content_mode,
@@ -2119,13 +2108,17 @@ def _run_short_pipeline(
         ]
         if export_formats:
             try:
-                export_all(str(published), out_base, export_formats)
+                export_all(
+                    str(published), out_base, export_formats
+                )
             except Exception as e:
                 log.warning(f"  ⚠️  Export error: {e}")
 
     # ── STEP J: Publish ──────────────────────────────────────────
     log.info(f"\n  {'─' * 55}")
-    log.info(f"  ✅ STEP J: Publish [SHORT/{platform.upper()}]")
+    log.info(
+        f"  ✅ STEP J: Publish [SHORT/{platform.upper()}]"
+    )
 
     _do_publish(
         video_path_yt     = str(published),
@@ -2145,8 +2138,7 @@ def _run_short_pipeline(
     log.info(f"  ✅ Video #{num} [SHORT] Done!")
     log.info(
         f"  📁 {published.name} "
-        f"({_file_size_mb(published):.1f} MB) "
-        f"1080×1920"
+        f"({_file_size_mb(published):.1f} MB) 1080×1920"
     )
     log.info(f"{'─' * 65}")
 
@@ -2165,12 +2157,15 @@ def process_video(
     should_publish_yt: bool,
     content_mode:      str = "short",
     platform:          str = "yt",
-) -> dict:
-    """معالجة فيديو واحد."""
+) -> bool:
+    """
+    معالجة فيديو واحد.
+
+    ✅ يرجع True لو نجح، False لو فشل.
+    """
     num      = str(record["number"])
     title    = record["title"]
     lang     = args.lang
-    result   = {"video_paths": [], "hook_keyword": title}
 
     log.info(f"\n{'═' * 65}")
     log.info(
@@ -2180,7 +2175,6 @@ def process_video(
     )
     log.info(f"{'═' * 65}")
 
-    # ✅ out_base مشترك بين YT و FB
     out_base = str(
         Path(out_dir).resolve() / f"video_{num}_{lang}"
     )
@@ -2189,12 +2183,12 @@ def process_video(
     content = _get_content_for_lang(record, lang)
     if not content:
         log.error(f"  ❌ No content for #{num}")
-        return result
+        return False
 
     tagged = process_tagged_content(content, lang=lang)
     if not tagged:
         log.error(f"  ❌ No tagged content for #{num}")
-        return result
+        return False
     log.info(f"  ✅ Parsed: {len(tagged)} sentences")
 
     # ── 2. AI Enrichment ────────────────────────────────────────
@@ -2209,13 +2203,11 @@ def process_video(
         )
     except AIEnrichmentError as e:
         log.error(f"\n  ⛔ AI failed: {e}")
-        return result
+        mark_render_failed(num, lang, str(e), content_mode)
+        return False
 
     tagged = _rebuild_text_with_tag(
         ai_data.get("tagged") or tagged
-    )
-    result["hook_keyword"] = (
-        ai_data.get("hook_keyword", "") or title
     )
 
     # ── 3. Script data ───────────────────────────────────────────
@@ -2224,7 +2216,7 @@ def process_video(
     )
     if not script_data:
         log.error("  ❌ Cannot build script data")
-        return result
+        return False
 
     log.info(
         f"  📊 {len(script_data['sentences'])} sentences"
@@ -2242,7 +2234,7 @@ def process_video(
     # ── 4. Script-only ───────────────────────────────────────────
     if args.script_only:
         print_tags_summary(tagged, lang=lang)
-        return result
+        return True
 
     # ── 5. Audio-only ────────────────────────────────────────────
     if args.no_video:
@@ -2251,7 +2243,8 @@ def process_video(
             _run_shared_audio(script_data, out_base, content_mode)
         except Exception as e:
             log.error(f"  ❌ Audio error: {e}")
-        return result
+            return False
+        return True
 
     # ── 6. Run pipeline ──────────────────────────────────────────
     mark_render_start(num, lang, content_mode)
@@ -2262,7 +2255,7 @@ def process_video(
                 ["yt", "fb"] if platform == "both"
                 else [platform]
             )
-            result = _run_long_pipeline(
+            _run_long_pipeline(
                 record            = record,
                 script_data       = script_data,
                 ai_data           = ai_data,
@@ -2276,7 +2269,7 @@ def process_video(
                 should_publish_fb = should_publish_fb,
             )
         else:
-            result = _run_short_pipeline(
+            _run_short_pipeline(
                 record            = record,
                 script_data       = script_data,
                 ai_data           = ai_data,
@@ -2292,14 +2285,16 @@ def process_video(
                 formats           = args.formats,
             )
 
+        return True
+
     except Exception as e:
         mark_render_failed(num, lang, str(e), content_mode)
         log.error(
-            f"\n  ❌ Failed [{content_mode.upper()}/{platform.upper()}]: {e}"
+            f"\n  ❌ Failed "
+            f"[{content_mode.upper()}/{platform.upper()}]: {e}"
         )
         traceback.print_exc()
-
-    return result
+        return False
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -2313,12 +2308,10 @@ def _generate_thumbnails(
     content_mode:  str,
     platform:      str,
 ) -> None:
-    """توليد thumbnails."""
     if args.script_only or args.no_video:
         return
 
     thumbnail_queue: list[tuple[str, str]] = []
-    # Short → yt، Long both → yt
     plat_for_thumb = (
         "yt" if platform in ("yt", "both") else "fb"
     )
@@ -2386,7 +2379,6 @@ def _try_publish_existing(
     will_publish_yt:   bool,
     will_publish_fb:   bool,
 ) -> None:
-    """محاولة نشر فيديو موجود مسبقاً."""
     num      = str(record["number"])
     lang     = args.lang
     out_base = str(
@@ -2396,8 +2388,7 @@ def _try_publish_existing(
 
     if is_fully_published(num, lang, content_mode):
         log.info(
-            f"  ⏭️  #{num} fully published "
-            f"[{content_mode.upper()}/{platform.upper()}]"
+            f"  ⏭️  #{num} fully published"
         )
         return
 
@@ -2405,12 +2396,10 @@ def _try_publish_existing(
         make_cache_key(num, lang, content_mode)
     ) or {}
 
-    # ✅ تحديد مسارات الفيديو حسب content_mode
     yt_path = ""
     fb_path = ""
 
     if content_mode == "short":
-        # Short: نفس الملف لكل المنصات
         candidate = f"{out_base}_short_published.mp4"
         if Path(candidate).exists():
             yt_path = candidate
@@ -2421,7 +2410,6 @@ def _try_publish_existing(
             )
             return
     else:
-        # Long: ملفات منفصلة
         platforms_check = (
             ["yt", "fb"] if platform == "both" else [platform]
         )
@@ -2440,15 +2428,21 @@ def _try_publish_existing(
 
         if not yt_path and not fb_path:
             log.warning(
-                f"  ⚠️  Resume: no files found for "
+                f"  ⚠️  Resume: no files for "
                 f"#{num} [{content_mode}/{platform}]"
             )
             return
 
+    record_for_publish = {
+        "number": num,
+        "title":  record.get("title", f"Video #{num}"),
+        "lang":   lang,
+    }
+
     _do_publish(
         video_path_yt     = yt_path,
         video_path_fb     = fb_path,
-        record            = record,
+        record            = record_for_publish,
         ai_data           = ai_data,
         lang              = lang,
         video_number      = num,
@@ -2546,8 +2540,8 @@ def main() -> None:
             "  Shared       : TTS + Audio + WhisperX"
         )
         log.info(
-            "  Separate     : "
-            "Fetch landscape(YT) + portrait(FB)"
+            "  ✅ WhisperX  : على الصوت قبل Fetch "
+            "(Tags صحيحة)"
         )
     else:
         dims = _get_dimensions(content_mode, platform)
@@ -2555,13 +2549,22 @@ def main() -> None:
             f"  Dimensions   : {dims['width']}×{dims['height']}"
         )
 
-    log.info(f"  Output       : {args.output_dir}")
+    if content_mode == "long":
+        log.info(
+            f"  Chunk Dur    : "
+            f"{BACKGROUND_CHUNK_DUR_LONG}s "
+            f"(max {MAX_LONG_CHUNKS} chunks)"
+        )
+        log.info(f"  Pipeline     : FFmpeg (fast)")
+    else:
+        log.info(f"  Pipeline     : Playwright (full quality)")
+
     log.info(f"  YouTube      : {'✅' if will_publish_yt else '❌'}")
     log.info(f"  Facebook     : {'✅' if will_publish_fb else '❌'}")
     log.info("")
     print_db_summary()
 
-    # ✅ Credentials check
+    # Credentials check
     if will_publish_yt:
         log.info(
             f"\n📺 Checking YouTube ({lang.upper()})..."
@@ -2576,7 +2579,7 @@ def main() -> None:
             log.warning("  ⚠️  FB credentials invalid — disabled")
             will_publish_fb = False
 
-    # ✅ Read scripts
+    # Read scripts
     log.info("\n📖  Reading scripts...")
     try:
         all_scripts = read_scripts(args.input_file)
@@ -2594,7 +2597,7 @@ def main() -> None:
 
     print_scripts_summary(valid)
 
-    # ✅ Auto-next
+    # Auto-next
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
         next_num  = get_next_video_number(
@@ -2602,7 +2605,8 @@ def main() -> None:
         )
         if next_num is None:
             log.info(
-                f"\n  🔄 All published! Looping [{content_mode.upper()}]"
+                f"\n  🔄 All published! "
+                f"Looping [{content_mode.upper()}]"
             )
             reset_published_for_lang(lang, content_mode)
             next_num = str(valid[0]["number"])
@@ -2633,7 +2637,7 @@ def main() -> None:
     for i, record in enumerate(valid, 1):
         log.info(f"\n[{i}/{len(valid)}]")
 
-        # ✅ Resume check — حسب platform المطلوب
+        # Resume check
         if not args.force and _is_fully_rendered(
             record["number"], lang, content_mode, platform
         ):
@@ -2648,7 +2652,7 @@ def main() -> None:
             continue
 
         try:
-            result = process_video(
+            ok = process_video(
                 record            = record,
                 args              = args,
                 out_dir           = args.output_dir,
@@ -2657,14 +2661,21 @@ def main() -> None:
                 content_mode      = content_mode,
                 platform          = platform,
             )
-            video_results[str(record["number"])] = result
-            success += 1
+            if ok:
+                video_results[str(record["number"])] = {}
+                success += 1
+            else:
+                # ✅ فشل حقيقي → failed
+                failed += 1
+                log.error(
+                    f"  ❌ Video #{record['number']} failed"
+                )
 
         except KeyboardInterrupt:
             log.warning("\n⛔  Interrupted")
             break
         except Exception as e:
-            log.error(f"  ❌  Error: {e}")
+            log.error(f"  ❌  Unexpected error: {e}")
             traceback.print_exc()
             failed += 1
 
@@ -2684,6 +2695,10 @@ def main() -> None:
     )
     print_db_summary()
     log.info(f"{'═' * 62}\n")
+
+    # ✅ exit code صحيح
+    if failed > 0 and success == 0:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
