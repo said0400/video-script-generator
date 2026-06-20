@@ -4,17 +4,20 @@
 Features:
   ✅ Extract tags from text
   ✅ Auto-correct misspelled tags
-  ✅ Manual mapping for common synonyms
+  ✅ Manual mapping قبل Fuzzy (أدق للـ synonyms)
   ✅ Multi-language tag names (AR, FR, EN)
   ✅ Voice configuration per tag
   ✅ Summary display
+  ✅ النص قبل أول tag لا يُهمَل
+  ✅ strip_tags_from_text() تحافظ على المسافات
+  ✅ line_counter متسق حتى مع segments الفارغة
 
 Supported Tags (19 total):
-    Original (Short + Long):
+    Original:
       [intrigue], [desire], [information], [inspiration],
       [confident], [shock], [wisdom], [urgency], [calm], [emotional]
 
-    Advanced (Long focused, works in Short too):
+    Advanced:
       [pause], [whisper], [curiosity], [storytelling],
       [dramatic], [revelation], [tension], [climax], [powerful]
 """
@@ -27,22 +30,25 @@ from dataclasses import dataclass
 from difflib import get_close_matches
 from typing import Optional
 
+log = logging.getLogger(__name__)
+
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
 DEFAULT_TAG = "information"
 
-# Fuzzy match
-FUZZY_CUTOFF = 0.6
+FUZZY_CUTOFF        = 0.6
 FUZZY_MATCHES_LIMIT = 1
 
-# Logging
-logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(message)s",
-)
-log = logging.getLogger(__name__)
+_VALID_LANGS = frozenset({"ar", "fr", "en"})
+
+# ✅ كلمات الجمع حسب اللغة — تُستخدم في format_tags_summary
+_PLURAL_MAP: dict[str, tuple[str, str]] = {
+    "ar": ("جملة", "جمل"),
+    "fr": ("phrase", "phrases"),
+    "en": ("sentence", "sentences"),
+}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -62,12 +68,18 @@ class TagConfig:
     description:  str
 
     def get_name(self, lang: str = "ar") -> str:
-        """جلب الاسم حسب اللغة."""
-        attr = f"name_{lang}"
-        return getattr(self, attr, self.name_en)
+        """
+        جلب الاسم حسب اللغة.
+        ✅ dict-based بدل getattr.
+        """
+        lang_map = {
+            "ar": self.name_ar,
+            "fr": self.name_fr,
+            "en": self.name_en,
+        }
+        return lang_map.get(lang, self.name_en)
 
     def to_dict(self) -> dict:
-        """تحويل لـ dict (للتوافق الخلفي)."""
         return {
             "name_ar":      self.name_ar,
             "name_en":      self.name_en,
@@ -86,226 +98,127 @@ class TagConfig:
 
 _TAG_CONFIGS: dict[str, TagConfig] = {
 
-    # ── Original Tags (Short + Long) ─────────────────────────
-
     "intrigue": TagConfig(
-        name_ar      = "إثارة الفضول",
-        name_en      = "Intrigue",
-        name_fr      = "Intrigue",
-        voice_style  = "mysterious",
-        voice_rate   = 0.92,
-        voice_pitch  = -1,
-        voice_volume = 0.95,
-        description  = "صوت غامض همسي يثير الفضول",
+        name_ar="إثارة الفضول", name_en="Intrigue",
+        name_fr="Intrigue", voice_style="mysterious",
+        voice_rate=0.92, voice_pitch=-1, voice_volume=0.95,
+        description="صوت غامض همسي يثير الفضول",
     ),
-
     "desire": TagConfig(
-        name_ar      = "رغبة وطموح",
-        name_en      = "Desire",
-        name_fr      = "Désir",
-        voice_style  = "warm",
-        voice_rate   = 0.98,
-        voice_pitch  = +1,
-        voice_volume = 1.0,
-        description  = "صوت دافئ ملهب للطموح",
+        name_ar="رغبة وطموح", name_en="Desire",
+        name_fr="Désir", voice_style="warm",
+        voice_rate=0.98, voice_pitch=+1, voice_volume=1.0,
+        description="صوت دافئ ملهب للطموح",
     ),
-
     "information": TagConfig(
-        name_ar      = "معلومة محايدة",
-        name_en      = "Information",
-        name_fr      = "Information",
-        voice_style  = "clear",
-        voice_rate   = 1.0,
-        voice_pitch  = 0,
-        voice_volume = 1.0,
-        description  = "صوت واضح معلوماتي",
+        name_ar="معلومة محايدة", name_en="Information",
+        name_fr="Information", voice_style="clear",
+        voice_rate=1.0, voice_pitch=0, voice_volume=1.0,
+        description="صوت واضح معلوماتي",
     ),
-
     "inspiration": TagConfig(
-        name_ar      = "إلهام",
-        name_en      = "Inspiration",
-        name_fr      = "Inspiration",
-        voice_style  = "uplifting",
-        voice_rate   = 1.05,
-        voice_pitch  = +2,
-        voice_volume = 1.05,
-        description  = "صوت متحمس مرتفع وملهم",
+        name_ar="إلهام", name_en="Inspiration",
+        name_fr="Inspiration", voice_style="uplifting",
+        voice_rate=1.05, voice_pitch=+2, voice_volume=1.05,
+        description="صوت متحمس مرتفع وملهم",
     ),
-
     "confident": TagConfig(
-        name_ar      = "ثقة",
-        name_en      = "Confident",
-        name_fr      = "Confiant",
-        voice_style  = "bold",
-        voice_rate   = 0.97,
-        voice_pitch  = -1,
-        voice_volume = 1.05,
-        description  = "صوت حاسم وقوي",
+        name_ar="ثقة", name_en="Confident",
+        name_fr="Confiant", voice_style="bold",
+        voice_rate=0.97, voice_pitch=-1, voice_volume=1.05,
+        description="صوت حاسم وقوي",
     ),
-
     "shock": TagConfig(
-        name_ar      = "صدمة",
-        name_en      = "Shock",
-        name_fr      = "Choc",
-        voice_style  = "intense",
-        voice_rate   = 1.1,
-        voice_pitch  = +3,
-        voice_volume = 1.1,
-        description  = "صوت مفاجئ وقوي",
+        name_ar="صدمة", name_en="Shock",
+        name_fr="Choc", voice_style="intense",
+        voice_rate=1.1, voice_pitch=+3, voice_volume=1.1,
+        description="صوت مفاجئ وقوي",
     ),
-
     "wisdom": TagConfig(
-        name_ar      = "حكمة",
-        name_en      = "Wisdom",
-        name_fr      = "Sagesse",
-        voice_style  = "deep",
-        voice_rate   = 0.88,
-        voice_pitch  = -2,
-        voice_volume = 0.95,
-        description  = "صوت عميق متأمل",
+        name_ar="حكمة", name_en="Wisdom",
+        name_fr="Sagesse", voice_style="deep",
+        voice_rate=0.88, voice_pitch=-2, voice_volume=0.95,
+        description="صوت عميق متأمل",
     ),
-
     "urgency": TagConfig(
-        name_ar      = "عاجل",
-        name_en      = "Urgency",
-        name_fr      = "Urgence",
-        voice_style  = "fast",
-        voice_rate   = 1.15,
-        voice_pitch  = +2,
-        voice_volume = 1.1,
-        description  = "صوت سريع وحاد",
+        name_ar="عاجل", name_en="Urgency",
+        name_fr="Urgence", voice_style="fast",
+        voice_rate=1.15, voice_pitch=+2, voice_volume=1.1,
+        description="صوت سريع وحاد",
     ),
-
     "calm": TagConfig(
-        name_ar      = "هدوء",
-        name_en      = "Calm",
-        name_fr      = "Calme",
-        voice_style  = "peaceful",
-        voice_rate   = 0.90,
-        voice_pitch  = -1,
-        voice_volume = 0.9,
-        description  = "صوت هادئ ومطمئن",
+        name_ar="هدوء", name_en="Calm",
+        name_fr="Calme", voice_style="peaceful",
+        voice_rate=0.90, voice_pitch=-1, voice_volume=0.9,
+        description="صوت هادئ ومطمئن",
     ),
-
     "emotional": TagConfig(
-        name_ar      = "عاطفي",
-        name_en      = "Emotional",
-        name_fr      = "Émotionnel",
-        voice_style  = "tender",
-        voice_rate   = 0.93,
-        voice_pitch  = 0,
-        voice_volume = 0.95,
-        description  = "صوت رقيق ومؤثر",
+        name_ar="عاطفي", name_en="Emotional",
+        name_fr="Émotionnel", voice_style="tender",
+        voice_rate=0.93, voice_pitch=0, voice_volume=0.95,
+        description="صوت رقيق ومؤثر",
     ),
-
-    # ── Advanced Tags (Long focused) ─────────────────────────
-
     "pause": TagConfig(
-        name_ar      = "وقفة درامية",
-        name_en      = "Pause",
-        name_fr      = "Pause",
-        voice_style  = "peaceful",
-        voice_rate   = 0.82,
-        voice_pitch  = -3,
-        voice_volume = 0.75,
-        description  = "صوت هادئ جداً وبطيء للوقفات الدرامية",
+        name_ar="وقفة درامية", name_en="Pause",
+        name_fr="Pause", voice_style="peaceful",
+        voice_rate=0.82, voice_pitch=-3, voice_volume=0.75,
+        description="صوت هادئ جداً وبطيء للوقفات الدرامية",
     ),
-
     "whisper": TagConfig(
-        name_ar      = "همس",
-        name_en      = "Whisper",
-        name_fr      = "Chuchotement",
-        voice_style  = "mysterious",
-        voice_rate   = 0.88,
-        voice_pitch  = -3,
-        voice_volume = 0.7,
-        description  = "صوت همس غامض وسري",
+        name_ar="همس", name_en="Whisper",
+        name_fr="Chuchotement", voice_style="mysterious",
+        voice_rate=0.88, voice_pitch=-3, voice_volume=0.7,
+        description="صوت همس غامض وسري",
     ),
-
     "curiosity": TagConfig(
-        name_ar      = "فضول",
-        name_en      = "Curiosity",
-        name_fr      = "Curiosité",
-        voice_style  = "mysterious",
-        voice_rate   = 0.95,
-        voice_pitch  = +1,
-        voice_volume = 0.92,
-        description  = "صوت يثير التساؤل والفضول العميق",
+        name_ar="فضول", name_en="Curiosity",
+        name_fr="Curiosité", voice_style="mysterious",
+        voice_rate=0.95, voice_pitch=+1, voice_volume=0.92,
+        description="صوت يثير التساؤل والفضول العميق",
     ),
-
     "storytelling": TagConfig(
-        name_ar      = "سرد قصة",
-        name_en      = "Storytelling",
-        name_fr      = "Récit",
-        voice_style  = "clear",
-        voice_rate   = 0.98,
-        voice_pitch  = 0,
-        voice_volume = 1.0,
-        description  = "صوت سردي مريح وواضح لرواية القصص",
+        name_ar="سرد قصة", name_en="Storytelling",
+        name_fr="Récit", voice_style="clear",
+        voice_rate=0.98, voice_pitch=0, voice_volume=1.0,
+        description="صوت سردي مريح وواضح لرواية القصص",
     ),
-
     "dramatic": TagConfig(
-        name_ar      = "درامي",
-        name_en      = "Dramatic",
-        name_fr      = "Dramatique",
-        voice_style  = "deep",
-        voice_rate   = 0.86,
-        voice_pitch  = -2,
-        voice_volume = 1.08,
-        description  = "صوت عميق ومسرحي قوي",
+        name_ar="درامي", name_en="Dramatic",
+        name_fr="Dramatique", voice_style="deep",
+        voice_rate=0.86, voice_pitch=-2, voice_volume=1.08,
+        description="صوت عميق ومسرحي قوي",
     ),
-
     "revelation": TagConfig(
-        name_ar      = "كشف حقيقة",
-        name_en      = "Revelation",
-        name_fr      = "Révélation",
-        voice_style  = "intense",
-        voice_rate   = 1.02,
-        voice_pitch  = +2,
-        voice_volume = 1.1,
-        description  = "صوت صادم قوي لكشف الحقيقة",
+        name_ar="كشف حقيقة", name_en="Revelation",
+        name_fr="Révélation", voice_style="intense",
+        voice_rate=1.02, voice_pitch=+2, voice_volume=1.1,
+        description="صوت صادم قوي لكشف الحقيقة",
     ),
-
     "tension": TagConfig(
-        name_ar      = "توتر",
-        name_en      = "Tension",
-        name_fr      = "Tension",
-        voice_style  = "fast",
-        voice_rate   = 1.08,
-        voice_pitch  = +1,
-        voice_volume = 1.0,
-        description  = "صوت متسارع يوحي بالتوتر المتصاعد",
+        name_ar="توتر", name_en="Tension",
+        name_fr="Tension", voice_style="fast",
+        voice_rate=1.08, voice_pitch=+1, voice_volume=1.0,
+        description="صوت متسارع يوحي بالتوتر المتصاعد",
     ),
-
     "climax": TagConfig(
-        name_ar      = "ذروة",
-        name_en      = "Climax",
-        name_fr      = "Apogée",
-        voice_style  = "bold",
-        voice_rate   = 1.05,
-        voice_pitch  = +3,
-        voice_volume = 1.15,
-        description  = "أقوى نقطة صوتية — ذروة القصة",
+        name_ar="ذروة", name_en="Climax",
+        name_fr="Apogée", voice_style="bold",
+        voice_rate=1.05, voice_pitch=+3, voice_volume=1.15,
+        description="أقوى نقطة صوتية — ذروة القصة",
     ),
-
     "powerful": TagConfig(
-        name_ar      = "قوي",
-        name_en      = "Powerful",
-        name_fr      = "Puissant",
-        voice_style  = "bold",
-        voice_rate   = 0.94,
-        voice_pitch  = -1,
-        voice_volume = 1.1,
-        description  = "صوت حازم وواثق بقوة",
+        name_ar="قوي", name_en="Powerful",
+        name_fr="Puissant", voice_style="bold",
+        voice_rate=0.94, voice_pitch=-1, voice_volume=1.1,
+        description="صوت حازم وواثق بقوة",
     ),
 }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PUBLIC EXPORTS (للتوافق الخلفي)
+# PUBLIC EXPORTS
 # ═════════════════════════════════════════════════════════════════════════════
 
-# للتوافق مع الكود القديم: VALID_TAGS كـ dict of dicts
 VALID_TAGS: dict[str, dict] = {
     name: cfg.to_dict()
     for name, cfg in _TAG_CONFIGS.items()
@@ -318,10 +231,8 @@ VALID_TAG_NAMES: list[str] = list(_TAG_CONFIGS.keys())
 # REGEX PATTERNS
 # ═════════════════════════════════════════════════════════════════════════════
 
-# يجد [tag] في أي مكان من النص
 _TAG_RE = re.compile(r"\[([a-zA-Z_]+)\]")
 
-# للتوافق مع الكود القديم
 TAG_PATTERN = re.compile(
     r"^\s*\[([a-zA-Z_]+)\]\s*",
     re.IGNORECASE | re.MULTILINE,
@@ -333,35 +244,28 @@ TAG_INLINE_PATTERN = _TAG_RE
 # MANUAL TAG MAPPING
 # ═════════════════════════════════════════════════════════════════════════════
 
-# Tags شائعة قد يستخدمها AI أو المستخدمين بدلاً من tags الصحيحة
+# ⚠️ ذاتية — قابلة للتعديل حسب السياق
 _MANUAL_TAG_MAP: dict[str, str] = {
-    # Emotions
-    "excited":     "inspiration",
-    "happy":       "inspiration",
-    "fear":        "urgency",
-    "angry":       "shock",
-    "sad":         "emotional",
-    "reflective":  "wisdom",
-
-    # Styles
-    "mysterious":  "intrigue",
-    "suspense":    "tension",
-    "build":       "tension",
-    "soft":        "calm",
-    "hard":        "powerful",
-    "strong":      "powerful",
-    "epic":        "climax",
-
-    # Story elements
-    "story":       "storytelling",
-    "secret":      "whisper",
-    "reveal":      "revelation",
-    "truth":       "revelation",
-
-    # Pauses
-    "moment":      "pause",
-    "silence":     "pause",
-    "question":    "curiosity",
+    "excited":    "inspiration",
+    "happy":      "inspiration",
+    "fear":       "urgency",
+    "angry":      "shock",
+    "sad":        "emotional",
+    "reflective": "wisdom",
+    "mysterious": "intrigue",
+    "suspense":   "tension",
+    "build":      "tension",
+    "soft":       "calm",
+    "hard":       "powerful",
+    "strong":     "powerful",
+    "epic":       "climax",
+    "story":      "storytelling",
+    "secret":     "whisper",
+    "reveal":     "revelation",
+    "truth":      "revelation",
+    "moment":     "pause",
+    "silence":    "pause",
+    "question":   "curiosity",
 }
 
 
@@ -373,19 +277,24 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
     """
     تقسيم المحتوى إلى جمل مع tags.
 
-    Supports:
-        1. [tag] نص. [tag] نص.   ← inline
-        2. [tag] نص               ← كل tag في سطر
-        3. فقرات منفصلة
+    ✅ النص قبل أول tag لا يُهمَل.
+    ✅ line_counter متسق حتى مع segments الفارغة.
 
     Returns:
         list of {"raw_tag": str|None, "text": str, "line": int}
 
     Examples:
-        >>> split_into_tagged_sentences("[shock] Hello [calm] World")
+        >>> split_into_tagged_sentences("مقدمة [shock] مفاجأة [calm] هدوء")
         [
-            {"raw_tag": "shock", "text": "Hello", "line": 1},
-            {"raw_tag": "calm",  "text": "World", "line": 2},
+            {"raw_tag": None,    "text": "مقدمة",  "line": 1},
+            {"raw_tag": "shock", "text": "مفاجأة", "line": 2},
+            {"raw_tag": "calm",  "text": "هدوء",   "line": 3},
+        ]
+
+        >>> split_into_tagged_sentences("[shock][calm] هدوء")
+        [
+            {"raw_tag": "calm", "text": "هدوء", "line": 2},
+            # [shock] بدون نص → يُتجاهل لكن line_counter يزداد
         ]
     """
     if not content or not content.strip():
@@ -394,7 +303,6 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
     text    = content.strip()
     matches = list(_TAG_RE.finditer(text))
 
-    # لا يوجد tags
     if not matches:
         return [{
             "raw_tag": None,
@@ -402,21 +310,35 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
             "line":    1,
         }]
 
-    # استخراج النصوص بين الـ tags
-    result: list[dict] = []
+    result:       list[dict] = []
+    line_counter: int        = 1
 
+    # ✅ النص قبل أول tag
+    pre_text = text[:matches[0].start()].strip()
+    if pre_text:
+        result.append({
+            "raw_tag": None,
+            "text":    pre_text,
+            "line":    line_counter,
+        })
+        line_counter += 1
+
+    # النصوص بين الـ tags
     for i, match in enumerate(matches):
         raw_tag    = match.group(1).strip()
         text_start = match.end()
-
-        # نهاية النص الحالي = بداية الـ tag التالي (أو نهاية النص)
-        text_end = (
+        text_end   = (
             matches[i + 1].start()
             if i + 1 < len(matches)
             else len(text)
         )
 
-        segment = text[text_start:text_end].strip()
+        segment      = text[text_start:text_end].strip()
+        current_line = line_counter
+
+        # ✅ line_counter يزداد دائماً
+        # حتى لو segment فارغ — لضمان تسلسل الأرقام
+        line_counter += 1
 
         if not segment:
             continue
@@ -424,7 +346,7 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
         result.append({
             "raw_tag": raw_tag,
             "text":    segment,
-            "line":    len(result) + 1,
+            "line":    current_line,
         })
 
     return result
@@ -435,7 +357,6 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def is_valid_tag(tag: Optional[str]) -> bool:
-    """التحقق إذا كان الـ tag صحيحاً."""
     if not tag:
         return False
     return tag in _TAG_CONFIGS
@@ -445,18 +366,13 @@ def auto_correct_tag(
     raw_tag: Optional[str],
 ) -> tuple[Optional[str], str]:
     """
-    محاولة تصحيح tag خاطئ تلقائياً.
+    تصحيح tag خاطئ تلقائياً.
 
-    Strategy (4 levels):
-        1. Exact match     → "intrigue" → "intrigue"
-        2. Case fix        → "INTRIGUE" → "intrigue"
-        3. Fuzzy match     → "intrige"  → "intrigue"
-        4. Manual mapping  → "happy"    → "inspiration"
-
-    Returns:
-        (corrected_tag, reason)
-        أو
-        (None, "no_match")
+    ✅ Strategy (4 levels):
+        1. Exact match
+        2. Case fix
+        3. Manual mapping  ← قبل Fuzzy
+        4. Fuzzy match     ← للأخطاء الإملائية فقط
     """
     if not raw_tag:
         return (None, "empty_tag")
@@ -472,19 +388,19 @@ def auto_correct_tag(
     if lower in _TAG_CONFIGS:
         return (lower, "case_fixed")
 
-    # 3) Fuzzy match
-    matches = get_close_matches(
+    # 3) Manual mapping — قبل Fuzzy
+    if lower in _MANUAL_TAG_MAP:
+        return (_MANUAL_TAG_MAP[lower], "manual_map")
+
+    # 4) Fuzzy match
+    fuzzy = get_close_matches(
         lower,
         VALID_TAG_NAMES,
         n      = FUZZY_MATCHES_LIMIT,
         cutoff = FUZZY_CUTOFF,
     )
-    if matches:
-        return (matches[0], "spelling_fixed")
-
-    # 4) Manual mapping
-    if lower in _MANUAL_TAG_MAP:
-        return (_MANUAL_TAG_MAP[lower], "manual_map")
+    if fuzzy:
+        return (fuzzy[0], "spelling_fixed")
 
     return (None, "no_match")
 
@@ -493,16 +409,19 @@ def strip_tags_from_text(text: str) -> str:
     """
     إزالة جميع الـ tags من النص.
 
+    ✅ تستبدل الـ tag بمسافة للحفاظ على الفواصل.
+
     Examples:
         >>> strip_tags_from_text("[shock] Hello [calm] World")
+        "Hello World"
+        >>> strip_tags_from_text("Hello[shock]World")
         "Hello World"
     """
     if not text:
         return ""
-
-    cleaned = _TAG_RE.sub("", text).strip()
+    # ✅ sub بمسافة بدل حذف
+    cleaned = _TAG_RE.sub(" ", text)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
     return cleaned
 
 
@@ -511,37 +430,26 @@ def strip_tags_from_text(text: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_tag_info(tag: str) -> Optional[dict]:
-    """
-    جلب معلومات tag كاملة.
-
-    Returns:
-        dict أو None إذا غير موجود
-    """
     config = _TAG_CONFIGS.get(tag)
     return config.to_dict() if config else None
 
 
 def get_tag_config(tag: str) -> Optional[TagConfig]:
-    """
-    جلب TagConfig dataclass.
-
-    Returns:
-        TagConfig أو None
-    """
     return _TAG_CONFIGS.get(tag)
 
 
 def get_tag_name(tag: str, lang: str = "ar") -> str:
     """
     جلب اسم الـ tag حسب اللغة.
-
-    Args:
-        tag:  اسم الـ tag (مثل "intrigue")
-        lang: ar | fr | en
-
-    Returns:
-        الاسم باللغة المحددة أو الـ tag نفسه
+    ✅ يتحقق من lang — fallback لـ "en".
     """
+    if lang not in _VALID_LANGS:
+        log.warning(
+            f"  ⚠️  Unsupported lang '{lang}' "
+            f"in get_tag_name — using 'en'"
+        )
+        lang = "en"
+
     config = _TAG_CONFIGS.get(tag)
     if not config:
         return tag
@@ -550,18 +458,13 @@ def get_tag_name(tag: str, lang: str = "ar") -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SUMMARY DISPLAY
+# SUMMARY
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _categorize_sentence_source(
-    sent:    dict,
+    sent: dict,
 ) -> tuple[str, Optional[str]]:
-    """
-    تصنيف مصدر الـ tag.
-
-    Returns:
-        (category, message) أو (category, None)
-    """
+    """تصنيف مصدر الـ tag."""
     source    = sent.get("tag_source", "unknown")
     raw_tag   = sent.get("raw_tag")
     final_tag = sent.get("final_tag", DEFAULT_TAG)
@@ -582,8 +485,7 @@ def _categorize_sentence_source(
         line = sent.get("line", "?")
         return (
             "ai_suggested",
-            f"     🤖 Line {line}: "
-            f"[{final_tag}] (AI suggested)",
+            f"     🤖 Line {line}: [{final_tag}] (AI suggested)",
         )
 
     return ("normal", None)
@@ -594,15 +496,17 @@ def format_tags_summary(
     lang:             str = "ar",
 ) -> str:
     """
-    بناء ملخص الـ tags المستخدمة.
-
-    Returns:
-        نص الملخص جاهز للطباعة
+    بناء ملخص الـ tags.
+    ✅ يستخدم lang لكلمات الجمع.
     """
     if not tagged_sentences:
         return "  ⚠️  No tagged sentences found"
 
-    # إحصائيات
+    # ✅ كلمات الجمع حسب lang
+    singular, plural_word = _PLURAL_MAP.get(
+        lang, _PLURAL_MAP["en"]
+    )
+
     tag_counts:   dict[str, int] = {}
     corrections:  list[str]      = []
     ai_suggested: list[str]      = []
@@ -612,31 +516,28 @@ def format_tags_summary(
         tag_counts[final_tag] = tag_counts.get(final_tag, 0) + 1
 
         category, message = _categorize_sentence_source(sent)
-
         if category == "correction" and message:
             corrections.append(message)
         elif category == "ai_suggested" and message:
             ai_suggested.append(message)
 
-    # بناء الـ output
     lines = [
         "\n  📝 Tags Summary:",
         "  " + "─" * 45,
     ]
 
-    # ترتيب حسب العدد (الأكثر أولاً)
     sorted_tags = sorted(
         tag_counts.items(),
-        key = lambda x: -x[1],
+        key=lambda x: -x[1],
     )
 
     for tag, count in sorted_tags:
         config = _TAG_CONFIGS.get(tag)
         desc   = config.description if config else ""
-        plural = "sentences" if count > 1 else "sentence"
+        word   = singular if count == 1 else plural_word
 
         lines.append(
-            f"     ├── [{tag:14}] : {count} {plural}"
+            f"     ├── [{tag:14}] : {count} {word}"
         )
         lines.append(f"     │   {desc[:50]}")
 
@@ -655,6 +556,9 @@ def print_tags_summary(
     tagged_sentences: list[dict],
     lang:             str = "ar",
 ) -> None:
-    """طباعة ملخص الـ tags."""
+    """
+    طباعة ملخص الـ tags.
+    ✅ log.info بدل print.
+    """
     summary = format_tags_summary(tagged_sentences, lang)
-    print(summary)
+    log.info(summary)
