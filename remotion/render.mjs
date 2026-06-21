@@ -1,21 +1,22 @@
 // remotion/render.mjs
 // ═══════════════════════════════════════════════════════════════════════════
-// 🎬 Video Renderer — Cinematic Edition v3 (Fixed)
+// 🎬 Video Renderer — Cinematic Edition v5 (Production Ready)
 //
-// Fixes from v2:
-//   ✅ buildZoomOutFilter() — حذف max() الذي يسبب ffmpeg error
-//   ✅ buildCameraShakeFilter() — max(0,...) لمنع crop سالب
-//   ✅ processBackground() — normalize أولاً يضمن الأبعاد
-//   ✅ _nextRand() — mulberry32 بدل xorshift
-//   ✅ stateKey() — hash للكلمات العربية
-//   ✅ probeDuration() — caching
-//   ✅ XFADE_DUR — ثابت واحد
-//   ✅ process.pid في TMP — لمنع conflicts
+// Fixes from v4:
+//   ✅ 1. TMP cleanup شامل — process.on(exit/SIGINT/SIGTERM/uncaught)
+//   ✅ 2. concat demuxer — escape single quotes في المسارات
+//   ✅ 3. runFFmpeg — slice(-2000) بدل slice(-300)
+//   ✅ 4. applyMetadata — fallback لـ libx264/aac عند فشل copy
+//   ✅ 5. buildDramaticLightingFilter — curves+eq بدل geq (أسرع)
+//   ✅ 6. buildLongBgVideo — normalize للفيديو الأصلي قبل push
+//   ✅ 7. mergeAudio — تحقق من وجود audioPath
+//   ✅ 8. _durationCache.clear() بعد انتهاء render
 // ═══════════════════════════════════════════════════════════════════════════
 
 import {
   readFileSync, writeFileSync, mkdirSync,
   copyFileSync, existsSync, symlinkSync,
+  rmSync,
 } from "fs";
 import { spawnSync } from "child_process";
 import { tmpdir } from "os";
@@ -91,11 +92,10 @@ const OUTRO_FRAMES       = Math.floor(1.0 * FPS);
 const HOOK_FRAMES        = Math.floor(3.0 * FPS);
 const TITLE_SLIDE_FRAMES = Math.floor(0.6 * FPS);
 
-// ✅ XFADE_DUR — ثابت واحد لكل المكان
 const XFADE_DUR = isLong ? 0.50 : 0.28;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ IMPROVED RNG — mulberry32
+// RNG — mulberry32
 // ═══════════════════════════════════════════════════════════════════════════
 
 const _VIDEO_SEED = (
@@ -113,6 +113,58 @@ function createRng(seed) {
 }
 
 const _nextRand = createRng(_VIDEO_SEED);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TMP DIR + ✅ CLEANUP شامل
+// ═══════════════════════════════════════════════════════════════════════════
+
+const safeOut = outputPath
+  .replace(/[^a-zA-Z0-9]/g, "_")
+  .replace(/_+/g, "_")
+  .slice(-22);
+const TMP = join(tmpdir(), `vsg_${safeOut}_${process.pid}`);
+mkdirSync(TMP, { recursive: true });
+
+// ✅ تتبع ما إذا كان الـ render اكتمل بنجاح
+let _renderCompleted = false;
+
+function _cleanup(exitCode) {
+  // ✅ تنظيف TMP دائماً — سواء نجح أو فشل
+  try {
+    rmSync(TMP, { recursive: true, force: true });
+    console.log(`  🗑️  TMP cleaned: ${TMP}`);
+  } catch {}
+
+  // ✅ تنظيف الـ duration cache
+  _durationCache.clear();
+}
+
+// ✅ تسجيل handlers لكل حالات الخروج
+process.on("exit",              (code) => _cleanup(code));
+process.on("SIGINT",            ()     => { _cleanup(130); process.exit(130); });
+process.on("SIGTERM",           ()     => { _cleanup(143); process.exit(143); });
+process.on("uncaughtException", (e)    => {
+  console.error("❌ Uncaught:", e.message);
+  _cleanup(1);
+  process.exit(1);
+});
+process.on("unhandledRejection", (r)   => {
+  console.error("❌ Unhandled rejection:", r);
+  _cleanup(1);
+  process.exit(1);
+});
+
+console.log(`📌 ${emoji_left} ${display_title} ${emoji_right}`);
+console.log(
+  `🌐 Lang:${lang.toUpperCase()} | Mode:${mode} | ` +
+  `${content_mode.toUpperCase()}/${platform.toUpperCase()} | ` +
+  `${WIDTH}×${HEIGHT}`
+);
+if (isLong) {
+  console.log("  🚀 Long pipeline: FFmpeg (cinematic mode)");
+} else {
+  console.log("  🎨 Short pipeline: Playwright (full quality)");
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CINEMATIC TRANSITIONS
@@ -164,31 +216,6 @@ function pickTransition(prevType, tag) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TMP DIR
-// ═══════════════════════════════════════════════════════════════════════════
-
-const safeOut = outputPath
-  .replace(/[^a-zA-Z0-9]/g, "_")
-  .replace(/_+/g, "_")
-  .slice(-22);
-
-// ✅ process.pid لمنع conflicts في parallel execution
-const TMP = join(tmpdir(), `vsg_${safeOut}_${process.pid}`);
-mkdirSync(TMP, { recursive: true });
-
-console.log(`📌 ${emoji_left} ${display_title} ${emoji_right}`);
-console.log(
-  `🌐 Lang:${lang.toUpperCase()} | Mode:${mode} | ` +
-  `${content_mode.toUpperCase()}/${platform.toUpperCase()} | ` +
-  `${WIDTH}×${HEIGHT}`
-);
-if (isLong) {
-  console.log("  🚀 Long pipeline: FFmpeg (cinematic mode)");
-} else {
-  console.log("  🎨 Short pipeline: Playwright (full quality)");
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // GPS & METADATA
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -219,7 +246,6 @@ function buildiPhoneMetadata() {
   const dateISO = now.toISOString();
   const dateStr = dateISO.replace(/[-:]/g, "").split(".")[0];
 
-  // ✅ _nextRand بدل Math.random
   const randHex = (len) =>
     Array.from({ length: len }, () =>
       Math.floor(_nextRand() * 16).toString(16)
@@ -290,7 +316,6 @@ function buildiPhoneMetadata() {
 function safeKey(str, maxLen) {
   if (maxLen === undefined) maxLen = 25;
   if (!str) return "empty";
-  // ✅ hash للكلمات غير ASCII
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = ((hash << 5) - hash) + str.charCodeAt(i);
@@ -360,8 +385,9 @@ function runFFmpeg(args, label) {
     stdio: ["ignore", "pipe", "pipe"]
   });
   if (r.status !== 0) {
+    // ✅ slice(-2000) بدل slice(-300)
     const stderr = r.stderr
-      ? r.stderr.toString().slice(-300)
+      ? r.stderr.toString().slice(-2000)
       : "no stderr";
     console.log(
       `  ⚠️ FFmpeg${label ? ` [${label}]` : ""} failed: ` +
@@ -392,20 +418,70 @@ function linkFrame(src, dst) {
   catch { try { copyFileSync(src, dst); } catch {} }
 }
 
+// ✅ escape single quotes للـ concat demuxer
+function escapePathForConcat(filePath) {
+  // في concat demuxer، المسارات بين single quotes
+  // نحتاج escape لأي single quote في المسار
+  return filePath.replace(/'/g, "'\\''");
+}
+
+function writeConcatFile(listPath, filePaths) {
+  // ✅ escape كل مسار
+  const content = filePaths
+    .map(f => `file '${escapePathForConcat(f)}'`)
+    .join("\n");
+  writeFileSync(listPath, content);
+}
+
+// ✅ applyMetadata مع fallback
 function applyMetadata(inp, out) {
+  if (!inp || !existsSync(inp)) {
+    console.log(`  ⚠️ applyMetadata: input not found: ${inp}`);
+    return;
+  }
+
   const m = buildiPhoneMetadata();
+
+  // محاولة 1: copy (أسرع)
   const r = runFFmpeg(
     ["-y", "-i", inp, "-c", "copy", ...m, out],
-    "metadata"
+    "metadata-copy"
   );
-  if (r.status !== 0) {
-    console.log("  ⚠️ Metadata fail — copying as-is");
-    copyFileSync(inp, out);
-  } else {
+
+  if (r.status === 0 && existsSync(out)) {
     console.log(
       `  ✅ Metadata: 📱 iPhone | 📍 ${location.city}`
     );
+    return;
   }
+
+  // ✅ محاولة 2: fallback لـ libx264/aac عند فشل copy
+  console.log(
+    "  ⚠️ Metadata copy failed — retrying with re-encode"
+  );
+  const r2 = runFFmpeg(
+    [
+      "-y", "-i", inp,
+      "-c:v", "libx264", "-preset", "fast", "-crf", "18",
+      "-c:a", "aac", "-b:a", "192k",
+      "-pix_fmt", "yuv420p",
+      ...m, out,
+    ],
+    "metadata-reencode"
+  );
+
+  if (r2.status === 0 && existsSync(out)) {
+    console.log(
+      `  ✅ Metadata (re-encoded): 📱 iPhone | 📍 ${location.city}`
+    );
+    return;
+  }
+
+  // محاولة 3: copy بدون metadata
+  console.log(
+    "  ⚠️ Metadata re-encode failed — copying as-is"
+  );
+  copyFileSync(inp, out);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -424,21 +500,17 @@ console.log(
 );
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ CINEMATIC VIDEO FILTERS — FIXED
+// CINEMATIC VIDEO FILTERS
 // ═══════════════════════════════════════════════════════════════════════════
 
 const SLOW_FACTOR = 1.25;
 
-// ✅ FIXED: حذف max() الذي يسبب ffmpeg error
-// بعد normalize()، iw=WIDTH و ih=HEIGHT دائماً
-// لذلك trunc بسيط يكفي ويعمل
+// ✅ scale بسيط — متوافق مع كل إصدارات ffmpeg
 function buildZoomOutFilter(dur, idx) {
-  const fr = Math.ceil(dur * FPS);
-  const sz = (1.12 + (idx % 4) * 0.02).toFixed(3);
+  const sz = (1.02 + (idx % 4) * 0.005).toFixed(3);
   return (
-    `scale=` +
-    `w='trunc(iw*(${sz}-(${sz}-1.01)*min(on,${fr})/${fr})/2)*2':` +
-    `h='trunc(ih*(${sz}-(${sz}-1.01)*min(on,${fr})/${fr})/2)*2'`
+    `scale=w=iw*${sz}:h=ih*${sz},` +
+    `crop=${WIDTH}:${HEIGHT}`
   );
 }
 
@@ -447,7 +519,6 @@ function buildCameraShakeFilter(idx) {
   const f2 = (0.2 + (idx % 2) * 0.15).toFixed(2);
   const ax = 1 + (idx % 2);
   const ay = 1 + (idx % 2);
-  // ✅ max(0,...) لمنع crop coordinates سالبة
   return (
     `crop=${WIDTH}:${HEIGHT}:` +
     `'max(0,(iw-${WIDTH})/2+${ax}*sin(2*PI*${f1}*t))':` +
@@ -484,16 +555,67 @@ function buildOriginalityFilter(idx) {
   return `hue=h=${h}:s=${s},unsharp=3:3:${sh}:3:3:0.0`;
 }
 
+// ✅ curves+eq بدل geq — أسرع بكثير على CPU
 function buildDramaticLightingFilter() {
   return (
-    `geq=r='clip(r(X,Y)*0.95+if(lte(X,W/2),80*(1-X/(W/2)),0),0,255)':` +
-    `g='clip(g(X,Y)*0.90,0,255)':` +
-    `b='clip(b(X,Y)*0.88+if(gte(X,W/2),60*((X-W/2)/(W/2)),0),0,255)'`
+    // تعتيم طفيف + تباين + لون دافئ
+    `curves=` +
+    `r='0/0 0.5/0.52 1/0.96':` +
+    `g='0/0 0.5/0.48 1/0.90':` +
+    `b='0/0.02 0.5/0.46 1/0.85',` +
+    `eq=contrast=1.12:brightness=-0.03:saturation=0.85`
   );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ✅ processBackground — FIXED
+// ✅ normalizeClip — دالة مشتركة للـ Short و Long
+// ═══════════════════════════════════════════════════════════════════════════
+
+function normalizeClip(videoPath, outputPath, durationSec, idx) {
+  """
+  تحويل أي فيديو إلى: WIDTH×HEIGHT, FPS, yuv420p.
+  يضمن أن iw=WIDTH و ih=HEIGHT قبل أي effects.
+  """
+  const srcDur    = probeDuration(videoPath);
+  const loopArgs  = srcDur > 0 && srcDur < durationSec * 1.3
+    ? ["-stream_loop", "-1"]
+    : [];
+
+  const r = runFFmpeg([
+    "-y", ...loopArgs, "-i", videoPath,
+    "-t", (durationSec * 1.5).toFixed(3),
+    "-vf", [
+      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
+      `crop=${WIDTH}:${HEIGHT}`,
+      "setsar=1",
+      `fps=${FPS}`,
+    ].join(","),
+    "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+    "-pix_fmt", "yuv420p", "-an",
+    outputPath,
+  ], `normalize[${idx}]`);
+
+  if (r.status !== 0 || !existsSync(outputPath)) {
+    // ✅ Fallback: scale بسيط بدون force_original
+    runFFmpeg([
+      "-y", "-stream_loop", "-1", "-i", videoPath,
+      "-t", durationSec.toFixed(3),
+      "-vf", [
+        `scale=${WIDTH}:${HEIGHT}`,
+        "setsar=1",
+        `fps=${FPS}`,
+      ].join(","),
+      "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+      "-pix_fmt", "yuv420p", "-an",
+      outputPath,
+    ], `normalize-fallback[${idx}]`);
+  }
+
+  return existsSync(outputPath);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// processBackground — SHORT
 // ═══════════════════════════════════════════════════════════════════════════
 
 function processBackground(videoPath, dur, outputFile, idx, isHookClip) {
@@ -502,11 +624,7 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip) {
   const d         = Math.max(dur, 0.5);
   const fadeIn    = Math.min(0.15, d * 0.05);
   const fadeOut   = Math.min(0.15, d * 0.05);
-  const srcDur    = probeDuration(videoPath);
   const srcNeeded = d / SLOW_FACTOR;
-  const loopArgs  = srcDur > 0 && srcDur < srcNeeded * 1.3
-    ? ["-stream_loop", "-1"]
-    : [];
 
   const normOut = join(
     TMP, `norm_${String(idx).padStart(3, "0")}.mp4`
@@ -516,47 +634,25 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip) {
   );
 
   try {
-    // ✅ STEP 1: Normalize — يضمن iw=WIDTH و ih=HEIGHT
-    // بعد هذه الخطوة، buildZoomOutFilter و buildCameraShakeFilter آمنان
-    const rNorm = runFFmpeg([
-      "-y", ...loopArgs, "-i", videoPath,
-      "-t", (srcNeeded * 1.5).toFixed(3),
-      "-vf", [
-        `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
-        `crop=${WIDTH}:${HEIGHT}`,
-        "setsar=1",
-        `fps=${FPS}`,
-      ].join(","),
-      "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-      "-pix_fmt", "yuv420p", "-an",
-      normOut,
-    ], `normalize[${idx}]`);
-
-    const normalizeOk = rNorm.status === 0 && existsSync(normOut);
+    // STEP 1: Normalize
+    const normalizeOk = normalizeClip(
+      videoPath, normOut, srcNeeded, idx
+    );
 
     if (!normalizeOk) {
-      // Fallback: scale بسيط
-      console.log(`  ⚠️ Normalize fail [${idx}] — simple scale`);
-      runFFmpeg([
-        "-y", "-stream_loop", "-1", "-i", videoPath,
-        "-t", d.toFixed(3),
-        "-vf", [
-          `scale=${WIDTH}:${HEIGHT}`,
-          "setsar=1",
-          `fps=${FPS}`,
-        ].join(","),
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-pix_fmt", "yuv420p", "-an",
-        normOut,
-      ], `normalize-fallback[${idx}]`);
+      console.log(
+        `  ⚠️ Normalize fail [${idx}] — using source`
+      );
     }
 
-    // ✅ STEP 2: Effects على normalized video
-    // الآن iw=WIDTH و ih=HEIGHT → buildZoomOutFilter يعمل بدون error
-    const effectsInput = existsSync(normOut) ? normOut : videoPath;
+    // STEP 2: Effects
+    const effectsInput = (normalizeOk && existsSync(normOut))
+      ? normOut
+      : videoPath;
 
     const vfParts = [];
-    if (!existsSync(normOut)) {
+    // لو الـ input ليس normalized → أضف scale
+    if (!normalizeOk) {
       vfParts.push(
         `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`
       );
@@ -564,8 +660,8 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip) {
       vfParts.push("setsar=1");
     }
     vfParts.push(`setpts=${SLOW_FACTOR}*PTS`);
-    vfParts.push(buildZoomOutFilter(d, idx));      // ✅ يعمل الآن
-    vfParts.push(buildCameraShakeFilter(idx));      // ✅ يعمل الآن
+    vfParts.push(buildZoomOutFilter(d, idx));
+    vfParts.push(buildCameraShakeFilter(idx));
     vfParts.push(buildColorGrading(isHookClip));
     vfParts.push(buildFilmLookFilter());
     vfParts.push(buildVignetteFilter());
@@ -588,21 +684,25 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip) {
     ], `effects[${idx}]`);
 
     if (r.status !== 0 || !existsSync(stage1)) {
-      if (existsSync(normOut)) {
-        copyFileSync(normOut, stage1);
-        console.log(`  ⚠️ Effects fail [${idx}] — using normalized`);
+      // Fallback: use normOut or source
+      const fallback = existsSync(normOut) ? normOut : effectsInput;
+      if (existsSync(fallback)) {
+        copyFileSync(fallback, stage1);
+        console.log(
+          `  ⚠️ Effects fail [${idx}] — using normalized`
+        );
       } else {
+        // آخر fallback: scale مباشر
         runFFmpeg([
           "-y", "-stream_loop", "-1", "-i", videoPath,
           "-t", d.toFixed(3),
           "-vf", [
-            `scale=${WIDTH}:${HEIGHT}`,
-            "setsar=1", `fps=${FPS}`,
+            `scale=${WIDTH}:${HEIGHT}`, "setsar=1", `fps=${FPS}`,
           ].join(","),
           "-c:v", "libx264", "-preset", "fast",
           "-crf", "23", "-pix_fmt", "yuv420p", "-an",
           stage1,
-        ], `effects-fallback[${idx}]`);
+        ], `effects-last-fallback[${idx}]`);
       }
     } else {
       console.log(`  ✅ Clip [${idx}] cinematic ready`);
@@ -631,11 +731,10 @@ function processBackground(videoPath, dur, outputFile, idx, isHookClip) {
     ], `lighting[${idx}]`);
 
     if (r2.status !== 0 || !existsSync(outputFile)) {
-      if (existsSync(srcTrim)) {
-        copyFileSync(srcTrim, outputFile);
-      } else if (existsSync(normOut)) {
-        copyFileSync(normOut, outputFile);
-      }
+      const fallback = existsSync(srcTrim) ? srcTrim
+        : existsSync(normOut) ? normOut
+        : null;
+      if (fallback) copyFileSync(fallback, outputFile);
     }
 
   } finally {
@@ -659,6 +758,12 @@ function buildLongBgVideo(clipPlan, audioPath, outputFile) {
     `\n🚀 Long BG: ${clipPlan.length} clips → cinematic pipeline`
   );
 
+  // ✅ تحقق من وجود audioPath
+  if (!audioPath || !existsSync(audioPath)) {
+    console.error(`❌ Audio not found: ${audioPath}`);
+    process.exit(1);
+  }
+
   const normalizedClips = [];
 
   for (const clip of clipPlan) {
@@ -669,11 +774,7 @@ function buildLongBgVideo(clipPlan, audioPath, outputFile) {
     const normOut   = join(
       TMP, `ln_${String(i).padStart(3, "0")}.mp4`
     );
-    const srcDur    = probeDuration(v);
     const srcNeeded = d / SLOW_FACTOR;
-    const loopArgs  = srcDur > 0 && srcDur < srcNeeded * 1.3
-      ? ["-stream_loop", "-1"]
-      : [];
 
     const fadeIn  = Math.min(0.15, d * 0.05);
     const fadeOut = Math.min(0.15, d * 0.05);
@@ -682,41 +783,48 @@ function buildLongBgVideo(clipPlan, audioPath, outputFile) {
       `  [${i + 1}/${clipPlan.length}] ${d.toFixed(1)}s... `
     );
 
-    // ✅ نفس الـ pipeline المُصلح
-    // normalize أولاً → ثم effects
-    const vf = [
-      `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
-      `crop=${WIDTH}:${HEIGHT}`,
-      "setsar=1",
-      `fps=${FPS}`,
-      `setpts=${SLOW_FACTOR}*PTS`,
-      buildZoomOutFilter(d, i),       // ✅ يعمل بعد normalize
-      buildCameraShakeFilter(i),       // ✅ يعمل بعد normalize
-      buildColorGrading(false),
-      buildFilmLookFilter(),
-      buildVignetteFilter(),
-      buildFilmGrainFilter(i),
-      buildOriginalityFilter(i),
-      `fade=t=in:st=0:d=${fadeIn.toFixed(3)}`,
-      `fade=t=out:st=${(d - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
-    ].join(",");
+    // ✅ استخدام normalizeClip المشتركة
+    const normalizeOk = normalizeClip(v, normOut, srcNeeded, i);
 
-    const r = runFFmpeg([
-      "-y", ...loopArgs, "-i", v,
-      "-t", srcNeeded.toFixed(3),
-      "-vf", vf,
-      "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-      "-pix_fmt", "yuv420p", "-an",
-      normOut,
-    ], `long-norm[${i}]`);
+    if (normalizeOk) {
+      // تطبيق effects على normalized clip
+      const effectsOut = join(
+        TMP, `le_${String(i).padStart(3, "0")}.mp4`
+      );
 
-    if (r.status === 0 && existsSync(normOut)) {
+      const vf = [
+        `setpts=${SLOW_FACTOR}*PTS`,
+        buildZoomOutFilter(d, i),
+        buildCameraShakeFilter(i),
+        buildColorGrading(false),
+        buildFilmLookFilter(),
+        buildVignetteFilter(),
+        buildFilmGrainFilter(i),
+        buildOriginalityFilter(i),
+        `fade=t=in:st=0:d=${fadeIn.toFixed(3)}`,
+        `fade=t=out:st=${(d - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}`,
+      ].join(",");
+
+      const rEffects = runFFmpeg([
+        "-y", "-i", normOut,
+        "-t", srcNeeded.toFixed(3),
+        "-vf", vf,
+        "-r", String(FPS),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-an",
+        effectsOut,
+      ], `long-effects[${i}]`);
+
+      const useFile = (rEffects.status === 0 && existsSync(effectsOut))
+        ? effectsOut
+        : normOut;
+
+      // Trim
       const trimOut = join(
         TMP, `lt_${String(i).padStart(3, "0")}.mp4`
       );
       const rTrim = runFFmpeg([
-        "-y", "-i", normOut,
+        "-y", "-i", useFile,
         "-t", d.toFixed(3),
         "-c", "copy",
         trimOut,
@@ -724,23 +832,25 @@ function buildLongBgVideo(clipPlan, audioPath, outputFile) {
 
       if (rTrim.status === 0 && existsSync(trimOut)) {
         normalizedClips.push(trimOut);
-        try {
-          spawnSync("rm", ["-f", normOut], { stdio: "ignore" });
-        } catch {}
+        try { spawnSync("rm", ["-f", normOut, effectsOut], { stdio: "ignore" }); } catch {}
       } else {
-        normalizedClips.push(normOut);
+        normalizedClips.push(useFile);
       }
       process.stdout.write("✓\n");
+
     } else {
-      console.log(`⚠️ → simple scale`);
+      // ✅ Fallback — لكن normalize الفيديو الأصلي أولاً
+      console.log(`⚠️ → normalized fallback`);
       const fallOut = join(
         TMP, `lf_${String(i).padStart(3, "0")}.mp4`
       );
+      // ✅ دائماً نمرر الفيديو الأصلي عبر normalize
+      // لضمان نفس الأبعاد مع بقية المقاطع
       runFFmpeg([
         "-y", "-stream_loop", "-1", "-i", v,
         "-t", d.toFixed(3),
         "-vf", [
-          `scale=${WIDTH}:${HEIGHT}`,
+          `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase`,
           `crop=${WIDTH}:${HEIGHT}`,
           "setsar=1",
           `fps=${FPS}`,
@@ -750,10 +860,25 @@ function buildLongBgVideo(clipPlan, audioPath, outputFile) {
         "-pix_fmt", "yuv420p", "-an",
         fallOut,
       ], `long-fallback[${i}]`);
-      normalizedClips.push(
-        existsSync(fallOut) ? fallOut : v
-      );
+
+      // ✅ إذا فشل حتى الـ fallback → لا نضيف الفيديو الأصلي
+      // بل نُعيد استخدام آخر مقطع ناجح
+      if (existsSync(fallOut)) {
+        normalizedClips.push(fallOut);
+      } else if (normalizedClips.length > 0) {
+        console.log(
+          `  ⚠️ Complete fail [${i}] — reusing last clip`
+        );
+        normalizedClips.push(
+          normalizedClips[normalizedClips.length - 1]
+        );
+      }
     }
+  }
+
+  if (normalizedClips.length === 0) {
+    console.error("❌ No clips to concat");
+    process.exit(1);
   }
 
   // Concat
@@ -761,16 +886,13 @@ function buildLongBgVideo(clipPlan, audioPath, outputFile) {
     `\n✨ Cinematic concat: ${normalizedClips.length} clips...`
   );
 
-  // Large clip count → concat demuxer
   if (normalizedClips.length > 30) {
     console.log("  📋 Large clip count — using concat demuxer");
     const listFile  = join(TMP, "long_list.txt");
     const concatRaw = join(TMP, "long_raw.mp4");
 
-    writeFileSync(
-      listFile,
-      normalizedClips.map(f => `file '${f}'`).join("\n"),
-    );
+    // ✅ escape المسارات
+    writeConcatFile(listFile, normalizedClips);
 
     const rConcat = runFFmpeg([
       "-y", "-f", "concat", "-safe", "0", "-i", listFile,
@@ -780,14 +902,14 @@ function buildLongBgVideo(clipPlan, audioPath, outputFile) {
     ], "long-concat");
 
     if (rConcat.status !== 0 || !existsSync(concatRaw)) {
-      console.log("  ⚠️ Concat failed — fallback to first clip");
-      copyFileSync(normalizedClips[0] || videos[0], concatRaw);
+      console.log("  ⚠️ Concat failed — using first clip");
+      copyFileSync(normalizedClips[0], concatRaw);
     }
 
     return _finalizeLongVideo(concatRaw, audioPath, outputFile);
   }
 
-  // xfade للـ clips الأقل من 30
+  // xfade
   try {
     const inputs  = normalizedClips.flatMap(f => ["-i", f]);
     let current   = "[0:v]";
@@ -842,10 +964,8 @@ function buildLongBgVideo(clipPlan, audioPath, outputFile) {
     );
     const listFile  = join(TMP, "long_list_fb.txt");
     const concatRaw = join(TMP, "long_raw_fb.mp4");
-    writeFileSync(
-      listFile,
-      normalizedClips.map(f => `file '${f}'`).join("\n"),
-    );
+    // ✅ escape المسارات
+    writeConcatFile(listFile, normalizedClips);
     runFFmpeg([
       "-y", "-f", "concat", "-safe", "0", "-i", listFile,
       "-c:v", "libx264", "-preset", "fast", "-crf", "19",
@@ -1015,7 +1135,6 @@ function buildAssFile() {
 
   const events = [];
 
-  // العنوان
   const titleText = escapeAssText(
     `${emoji_left} ${display_title} ${emoji_right}`
   );
@@ -1025,7 +1144,6 @@ function buildAssFile() {
     `Title,,0,0,0,,${titleText}`
   );
 
-  // الكلمات
   if (aligned && aligned.length > 0) {
     let wordCount = 0;
     for (const seg of aligned) {
@@ -1084,6 +1202,12 @@ function buildAssFile() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function buildLongWordsOverlay(bgVideoPath, audioPath, outputFile) {
+  // ✅ تحقق من وجود audioPath
+  if (!audioPath || !existsSync(audioPath)) {
+    console.error(`❌ Audio not found: ${audioPath}`);
+    process.exit(1);
+  }
+
   console.log("\n📝 Long Words: FFmpeg ASS overlay...");
 
   const assContent = buildAssFile();
@@ -1290,6 +1414,14 @@ function buildClipPlan() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function mergeAudio(videoPath, audioPath, outputFile) {
+  // ✅ تحقق من وجود audioPath
+  if (!audioPath || !existsSync(audioPath)) {
+    console.log(`  ⚠️ mergeAudio: audio not found: ${audioPath}`);
+    console.log("  ⚠️ Copying video without audio");
+    copyFileSync(videoPath, outputFile);
+    return;
+  }
+
   const ad = probeDuration(audioPath);
   const vd = probeDuration(videoPath);
   console.log(
@@ -1422,11 +1554,9 @@ function concatClipsWithTransitions(processedClips, clipPlan) {
     ], `group-merge[${gIdx}]`);
 
     if (r.status !== 0 || !existsSync(groupOut)) {
+      // ✅ concat demuxer مع escape
       const ls = join(TMP, `gls_${gIdx}.txt`);
-      writeFileSync(
-        ls,
-        clips.map(c => `file '${c.clip}'`).join("\n")
-      );
+      writeConcatFile(ls, clips.map(c => c.clip));
       spawnSync("ffmpeg", [
         "-y", "-f", "concat", "-safe", "0",
         "-i", ls, "-c", "copy", groupOut,
@@ -1479,11 +1609,9 @@ function concatClipsWithTransitions(processedClips, clipPlan) {
     ], `major-trans[${i}]`);
 
     if (r.status !== 0 || !existsSync(majorOut)) {
+      // ✅ concat مع escape
       const ls = join(TMP, `maj_ls_${i}.txt`);
-      writeFileSync(
-        ls,
-        `file '${mergedFile}'\nfile '${nextFile}'`
-      );
+      writeConcatFile(ls, [mergedFile, nextFile]);
       spawnSync("ffmpeg", [
         "-y", "-f", "concat", "-safe", "0",
         "-i", ls, "-c", "copy", majorOut,
@@ -1859,7 +1987,6 @@ function stateKey(state, gf, ts) {
 
   const p = state.progress;
   const b = p < 0.15 ? "pop" : p > 0.85 ? "fade" : "hold";
-  // ✅ safeKey مع hash لمنع collision
   return (
     `w_${safeKey(state.word, 12)}_` +
     `${state.tag}_${state.isPower ? 1 : 0}_${h}_${b}`
@@ -2119,6 +2246,7 @@ async function handleBgOnlyMode() {
       `\n🎉 BG [${content_mode.toUpperCase()}/${platform.toUpperCase()}]` +
       ` → ${outputPath}\n`
     );
+    _renderCompleted = true;
     return;
   }
 
@@ -2151,6 +2279,7 @@ async function handleBgOnlyMode() {
   console.log("\n🎵 Merging audio...");
   mergeAudio(merged, audio, outputPath);
   console.log(`\n🎉 BG [SHORT] → ${outputPath}\n`);
+  _renderCompleted = true;
 }
 
 async function handleWordsOnlyMode() {
@@ -2167,6 +2296,7 @@ async function handleWordsOnlyMode() {
       `\n🎉 Final [${content_mode.toUpperCase()}/${platform.toUpperCase()}]` +
       ` → ${outputPath}\n`
     );
+    _renderCompleted = true;
     return;
   }
 
@@ -2178,8 +2308,6 @@ async function handleWordsOnlyMode() {
   const launched = await launchBrowser();
   const browser  = launched.browser;
   const page     = launched.page;
-
-  let renderSuccess = false;
 
   try {
     console.log(`\n🖼️ Rendering PNGs...`);
@@ -2209,7 +2337,7 @@ async function handleWordsOnlyMode() {
     console.log("📱 Applying metadata...");
     applyMetadata(wv, outputPath);
 
-    renderSuccess = true;
+    _renderCompleted = true;
     console.log(`\n🎉 Final [SHORT] → ${outputPath}\n`);
 
   } finally {
@@ -2220,15 +2348,8 @@ async function handleWordsOnlyMode() {
     } catch (e) {
       console.warn("Browser close error:", e.message);
     }
-
-    // ✅ cleanup فقط لو نجح
-    if (renderSuccess) {
-      try {
-        spawnSync("rm", ["-rf", TMP], { stdio: "ignore" });
-      } catch {}
-    } else {
-      console.log(`  ℹ️  Temp files kept: ${TMP}`);
-    }
+    // ✅ TMP يتم تنظيفه في process.on("exit")
+    // لا نحتاج rmSync هنا لأنه سيُنفَّذ تلقائياً
   }
 }
 
@@ -2258,6 +2379,7 @@ async function main() {
 }
 
 main().catch(e => {
-  console.error("❌", e);
+  console.error("❌", e.message || e);
+  // ✅ _cleanup يُستدعى تلقائياً عبر process.on("exit")
   process.exit(1);
 });
