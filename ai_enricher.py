@@ -1,12 +1,10 @@
 """
-🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.1
+🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.2
 
-Changes from v7:
-  ✅ 1. generate_visual_keywords() — تحقق من len(tags) == len(sentences)
-  ✅ 2. _handle_tag_suggestions() — تحقق من نجاح العملية
-  ✅ 3. _ensure_keys_loaded() — _keys_loaded داخل lock للقراءة والكتابة
-  ✅ 4. _call_groq() — total_attempts يُعاد حساب بعد كل rotation
-  ✅ 5. enrich_record() — تحقق من tagged بعد tag suggestions
+Changes from v7.1:
+  ✅ 1. _clean_json() — إصلاح علامات الاقتباس الزائدة ""text"
+  ✅ 2. _parse_json_response() — محاولة إضافية بعد fix_quotes
+  ✅ 3. enrich_record() — time.sleep(1.0) بين العمليات لتقليل Rate Limiting
 """
 
 from __future__ import annotations
@@ -30,9 +28,9 @@ from tags_parser import (
 
 log = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # CONFIG
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 MODEL = "llama-3.1-8b-instant"
 
@@ -61,6 +59,9 @@ BATCH_SIZE_KEYWORDS = 20
 BATCH_SLEEP         = 2.0
 ANALYSIS_CACHE_SIZE = 50
 
+# ✅ استراحة بين العمليات لتقليل Rate Limiting
+INTER_OPERATION_SLEEP = 1.0
+
 DEFAULT_EMOJI_LEFT   = "🔥"
 DEFAULT_EMOJI_RIGHT  = "💥"
 DEFAULT_INTENSITY    = 7
@@ -75,9 +76,9 @@ _VALID_LANGS = frozenset({"ar", "fr", "en"})
 _VALID_MODES = frozenset({"short", "long"})
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # LANGUAGE MAPS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 LANG_NAMES: dict[str, str] = {
     "ar": "Arabic",
@@ -86,9 +87,9 @@ LANG_NAMES: dict[str, str] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # TAG VISUAL STYLES
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 TAG_VISUAL_STYLE: dict[str, str] = {
     "intrigue":     "person whispering secret curious close up face",
@@ -113,9 +114,9 @@ TAG_VISUAL_STYLE: dict[str, str] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # ABSTRACT WORDS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 ABSTRACT_WORDS: frozenset[str] = frozenset({
     "mystery", "mysterious", "journey", "soul", "shadows",
@@ -129,9 +130,9 @@ ABSTRACT_WORDS: frozenset[str] = frozenset({
 })
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # VISUAL KEYWORDS EXAMPLES
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 VISUAL_KEYWORDS_EXAMPLES: dict[str, list[str]] = {
     "psychology": [
@@ -199,9 +200,9 @@ def _get_topic_examples(content_type: str) -> list[str]:
     )
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # STREET STYLES
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 STREET_STYLE: dict[str, dict] = {
     "ar": {
@@ -241,9 +242,9 @@ STREET_STYLE: dict[str, dict] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # DEFAULTS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 DEFAULT_ACCENT_COLORS: list[str] = [
     "#FF003C", "#FFD700", "#00FFFF", "#39FF14",
@@ -261,17 +262,17 @@ _STREET_FALLBACK: dict[str, str] = {
 }
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # EXCEPTIONS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 class AIEnrichmentError(Exception):
     pass
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # VALIDATION
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _validate_lang(lang: str) -> None:
     if lang not in _VALID_LANGS:
@@ -283,9 +284,9 @@ def _validate_mode(mode: str) -> None:
         raise ValueError(f"Invalid content_mode '{mode}'")
 
 
-# ═══════════════════════════════════════════════════════════════
-# ✅ THREAD-SAFE GROQ KEY ROTATION + CLIENT CACHING
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# THREAD-SAFE GROQ KEY ROTATION + CLIENT CACHING
+# ═════════════════════════════════════════════════════════════════════════════
 
 _groq_keys:   list[str]       = []
 _groq_index:  int             = 0
@@ -317,19 +318,12 @@ def _load_groq_keys() -> list[str]:
 
 
 def _ensure_keys_loaded() -> None:
-    """
-    ✅ Double-checked locking آمن.
-    _keys_loaded يُقرأ داخل lock عند الحاجة.
-    """
     global _groq_keys, _keys_loaded
 
-    # ✅ القراءة الأولى بدون lock مقبولة في Python
-    # بسبب GIL — bool assignment ذري
     if _keys_loaded:
         return
 
     with _groq_lock:
-        # ✅ إعادة التحقق داخل lock
         if _keys_loaded:
             return
         _groq_keys   = _load_groq_keys()
@@ -343,7 +337,7 @@ def _ensure_keys_loaded() -> None:
 
 
 def _get_client(key: str) -> Groq:
-    """✅ Thread-safe — محمي بـ _groq_lock."""
+    """✅ Thread-safe client caching."""
     with _groq_lock:
         if key not in _clients:
             _clients[key] = Groq(
@@ -354,7 +348,6 @@ def _get_client(key: str) -> Groq:
 
 
 def _rotate_groq_key() -> None:
-    """✅ كل القراءة والكتابة داخل lock."""
     global _groq_index
     with _groq_lock:
         n = len(_groq_keys)
@@ -375,14 +368,32 @@ def _is_rate_limit_error(error: str) -> bool:
     )
 
 
-# ═══════════════════════════════════════════════════════════════
-# ✅ JSON PARSER
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# ✅ JSON PARSER — مع إصلاح علامات الاقتباس الزائدة
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _fix_quotes(text: str) -> str:
+    """
+    ✅ إصلاح علامات الاقتباس الزائدة داخل JSON strings.
+
+    مثال على المشكلة (نص فرنسي):
+      ""La réponse est" → "La réponse est"
+
+    هذا يحدث عندما يضع الـ LLM علامة اقتباس
+    إضافية في بداية قيمة string.
+    """
+    # Pattern: "" في بداية قيمة → استبدل بـ "
+    text = re.sub(r'""([^"\n]+)"', r'"\1"', text)
+    # Pattern: قيمة تنتهي بـ "" أيضاً
+    text = re.sub(r'"([^"\n]+)""', r'"\1"', text)
+    return text
+
 
 def _clean_json(raw: str) -> str:
     """
     تنظيف واستخراج أول JSON كامل.
     ✅ escape sequences + Balanced Brackets.
+    ✅ إصلاح علامات الاقتباس الزائدة.
     """
     if not raw:
         return ""
@@ -391,6 +402,9 @@ def _clean_json(raw: str) -> str:
     text = re.sub(r"^```(?:json|JSON)?\s*\n?", "", text)
     text = re.sub(r"\n?\s*```\s*$",            "", text)
     text = text.strip()
+
+    # ✅ إصلاح علامات الاقتباس الزائدة قبل التحليل
+    text = _fix_quotes(text)
 
     start_obj = text.find("{")
     start_arr = text.find("[")
@@ -438,13 +452,17 @@ def _parse_json_response(
     expected_type: type,
     operation:     str,
 ) -> Any:
-    """Parse JSON مع 3 محاولات + MAX_SEARCH_ATTEMPTS."""
+    """
+    Parse JSON مع محاولات متعددة.
+    ✅ محاولة إضافية بعد _fix_quotes.
+    ✅ MAX_SEARCH_ATTEMPTS لمنع loop لا ينتهي.
+    """
     if not raw or not raw.strip():
         raise AIEnrichmentError(
             f"❌ {operation}: empty response"
         )
 
-    # Attempt 1
+    # Attempt 1: مباشر (يشمل _fix_quotes داخل _clean_json)
     try:
         cleaned = _clean_json(raw)
         data    = json.loads(cleaned)
@@ -459,7 +477,20 @@ def _parse_json_response(
     except ValueError as e:
         raise AIEnrichmentError(f"❌ {operation}: {e}")
 
-    # Attempt 2: backticks
+    # Attempt 2: تطبيق _fix_quotes على النص الخام أولاً
+    try:
+        fixed   = _fix_quotes(raw)
+        cleaned = _clean_json(fixed)
+        data    = json.loads(cleaned)
+        if isinstance(data, expected_type):
+            log.debug(
+                f"  ✓ {operation}: parsed after quote fix"
+            )
+            return data
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Attempt 3: إزالة backticks
     try:
         no_ticks = (
             raw
@@ -468,8 +499,9 @@ def _parse_json_response(
             .replace("```",     "")
             .strip()
         )
-        cleaned = _clean_json(no_ticks)
-        data    = json.loads(cleaned)
+        no_ticks = _fix_quotes(no_ticks)
+        cleaned  = _clean_json(no_ticks)
+        data     = json.loads(cleaned)
         if isinstance(data, expected_type):
             log.debug(
                 f"  ✓ {operation}: parsed after backtick"
@@ -478,7 +510,7 @@ def _parse_json_response(
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 3: search مع حد ✅
+    # Attempt 4: بحث في كل positions مع حد
     try:
         open_chars = (
             ["[", "{"] if expected_type == list
@@ -491,7 +523,10 @@ def _parse_json_response(
                 idx = raw.find(open_char, idx)
                 if idx == -1:
                     break
-                candidate = _clean_json(raw[idx:])
+                # ✅ تطبيق _fix_quotes على كل candidate
+                candidate = _clean_json(
+                    _fix_quotes(raw[idx:])
+                )
                 try:
                     data = json.loads(candidate)
                     if isinstance(data, expected_type):
@@ -513,9 +548,9 @@ def _parse_json_response(
     )
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # SAFE HELPERS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _safe_truncate(text: str, max_chars: int) -> str:
     if not text:
@@ -558,16 +593,17 @@ def _filter_abstract_keywords(
             result.append(kw)
         elif abstract_count < total:
             clean = [
-                w for w in words if w not in ABSTRACT_WORDS
+                w for w in words
+                if w not in ABSTRACT_WORDS
             ]
             if len(clean) >= 2:
                 result.append(" ".join(clean))
     return result
 
 
-# ═══════════════════════════════════════════════════════════════
-# ✅ CONTENT CACHE
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# CONTENT CACHE
+# ═════════════════════════════════════════════════════════════════════════════
 
 _analysis_cache:      dict[str, dict] = {}
 _analysis_cache_lock: threading.RLock = threading.RLock()
@@ -605,9 +641,9 @@ def _set_cached_analysis(
         _analysis_cache[key] = analysis
 
 
-# ═══════════════════════════════════════════════════════════════
-# ✅ CORE GROQ CALLER
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# CORE GROQ CALLER
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _call_groq(
     prompt:         str,
@@ -635,7 +671,6 @@ def _call_groq(
 
     for attempt in range(total_attempts):
 
-        # ✅ قراءة key و n_keys معاً داخل lock
         with _groq_lock:
             n_keys  = len(_groq_keys)
             cur_idx = _groq_index % n_keys
@@ -659,7 +694,6 @@ def _call_groq(
                 max_tokens  = max_tokens,
             )
 
-            # ✅ تحقق من choices
             if not resp.choices:
                 raise ValueError(
                     "Groq returned empty choices list"
@@ -678,7 +712,6 @@ def _call_groq(
             last_error = err_str
 
             if _is_rate_limit_error(err_str):
-                # ✅ Exponential backoff حقيقي
                 wait = min(
                     RATE_LIMIT_WAIT * (2 ** attempt),
                     RATE_LIMIT_WAIT_MAX,
@@ -705,9 +738,9 @@ def _call_groq(
     )
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # DATA EXTRACTION HELPERS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _extract_string_list(
     data:      Any,
@@ -716,7 +749,8 @@ def _extract_string_list(
     if not isinstance(data, list):
         return None
     values = [
-        str(x).strip() for x in data if str(x).strip()
+        str(x).strip() for x in data
+        if str(x).strip()
     ]
     if len(values) >= min_count:
         return values
@@ -731,7 +765,9 @@ def _extract_lang_value(
 ) -> list[str]:
     # Priority 1: اللغة المطلوبة
     if lang in data:
-        result = _extract_string_list(data[lang], min_count)
+        result = _extract_string_list(
+            data[lang], min_count
+        )
         if result:
             return result
 
@@ -755,7 +791,9 @@ def _extract_lang_value(
 
     # Priority 3: English fallback
     if "en" in data and lang != "en":
-        result = _extract_string_list(data["en"], min_count)
+        result = _extract_string_list(
+            data["en"], min_count
+        )
         if result:
             log.warning(
                 f"  ⚠️  {operation}: falling back to 'en'"
@@ -783,7 +821,9 @@ def _extract_en_value(
     min_count: int = 3,
 ) -> list[str]:
     if "en" in data:
-        result = _extract_string_list(data["en"], min_count)
+        result = _extract_string_list(
+            data["en"], min_count
+        )
         if result:
             return result
     for key, val in reversed(list(data.items())):
@@ -798,9 +838,9 @@ def _extract_en_value(
     )
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 1️⃣ CONTENT ANALYSIS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 REQUIRED_ANALYSIS_FIELDS = (
     "content_type", "primary_emotion",
@@ -852,17 +892,22 @@ def analyze_content(
         temperature    = 0.3,
         operation_name = "Content Analysis",
     )
-    data = _parse_json_response(raw, dict, "Content Analysis")
+    data = _parse_json_response(
+        raw, dict, "Content Analysis"
+    )
 
     for field in REQUIRED_ANALYSIS_FIELDS:
         if field not in data:
             raise AIEnrichmentError(
-                f"❌ Content Analysis missing field: {field}"
+                f"❌ Content Analysis missing field: "
+                f"{field}"
             )
 
     data["intensity"] = max(
         1,
-        min(10, int(data.get("intensity", DEFAULT_INTENSITY))),
+        min(10, int(data.get(
+            "intensity", DEFAULT_INTENSITY
+        ))),
     )
 
     _set_cached_analysis(title, content, lang, data)
@@ -875,9 +920,9 @@ def analyze_content(
     return data
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 2️⃣ TAG SUGGESTION
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _normalize_suggested_tag(tag: str) -> str:
     tag = str(tag).strip().lower()
@@ -979,13 +1024,15 @@ def suggest_tags_for_sentences(
         if end < n:
             time.sleep(BATCH_SLEEP)
 
-    log.info(f"  ✅ Suggested {len(all_tags)} tags total")
+    log.info(
+        f"  ✅ Suggested {len(all_tags)} tags total"
+    )
     return all_tags
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 3️⃣ POWER WORDS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _filter_power_words(
     words: list,
@@ -1063,9 +1110,9 @@ def generate_power_words(
     return result
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 4️⃣ VISUAL KEYWORDS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _generate_visual_keywords_batch(
     sentences: list[str],
@@ -1184,9 +1231,7 @@ def _generate_visual_keywords_batch(
                         )
             else:
                 log.debug(
-                    f"  ⚠️  Sentence {i + 1} using fallback. "
-                    f"Raw type: "
-                    f"{type(data[i]) if i < len(data) else 'missing'}"
+                    f"  ⚠️  Sentence {i + 1} using fallback."
                 )
                 kws = list(fallbacks)
 
@@ -1203,8 +1248,7 @@ def _generate_visual_keywords_batch(
         )
         if raw:
             log.debug(
-                f"  Raw response (first 500 chars): "
-                f"{raw[:500]}"
+                f"  Raw (first 500): {raw[:500]}"
             )
         return [list(fallbacks) for _ in range(n)]
 
@@ -1223,7 +1267,6 @@ def generate_visual_keywords(
 
     _validate_mode(content_mode)
 
-    # ✅ تصحيح tags إذا كانت أطول أو أقصر من sentences
     n = len(sentences)
     if tags is None:
         tags = ["information"] * n
@@ -1281,9 +1324,9 @@ def generate_visual_keywords(
     return result
 
 
-# ═══════════════════════════════════════════════════════════════
-# ✅ BILINGUAL HELPERS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
+# BILINGUAL HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _get_bilingual_json_format(
     lang:    str,
@@ -1381,14 +1424,16 @@ def _build_list_prompt(
         f"Type: {content_type} | "
         f"Emotion: {emotion}\n\n"
         f"Rules: {rules}\n\n"
+        f"IMPORTANT: Return ONLY valid JSON. "
+        f"Do NOT use double quotes inside string values.\n"
         f"Return ONLY JSON (no markdown, no extra text):\n"
         f"{json_format}"
     )
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 5️⃣ PATTERN INTERRUPTS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def generate_pattern_interrupts(
     title:   str,
@@ -1404,7 +1449,10 @@ def generate_pattern_interrupts(
         lang       = lang,
         safe_title = safe_title,
         context    = context,
-        rules      = "1-4 words MAX, shocking, can include emojis",
+        rules      = (
+            "1-4 words MAX, shocking, can include emojis. "
+            "Do NOT use double quotes inside phrases."
+        ),
         example    = '["phrase1","phrase2",...]',
     )
     return _generate_bilingual_content(
@@ -1418,9 +1466,9 @@ def generate_pattern_interrupts(
     )
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 6️⃣ ENGAGEMENT QUESTIONS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def generate_engagement_questions(
     title:   str,
@@ -1437,8 +1485,8 @@ def generate_engagement_questions(
         safe_title = safe_title,
         context    = context,
         rules      = (
-            "3-7 words, encourage comments, "
-            "can use emojis"
+            "3-7 words, encourage comments, can use emojis. "
+            "Do NOT use double quotes inside questions."
         ),
         example    = '["question1","question2",...]',
     )
@@ -1453,9 +1501,9 @@ def generate_engagement_questions(
     )
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 7️⃣ HASHTAGS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _clean_hashtags(tags: list) -> list[str]:
     result: list[str] = []
@@ -1500,7 +1548,9 @@ def generate_hashtags(
     data = _parse_json_response(raw, dict, "Hashtags")
 
     if lang == "en":
-        en_values = _extract_en_value(data, "Hashtags", 5)
+        en_values = _extract_en_value(
+            data, "Hashtags", 5
+        )
         result    = {
             "en": _clean_hashtags(en_values[:count])
         }
@@ -1516,7 +1566,9 @@ def generate_hashtags(
     lang_values = _extract_lang_value(
         data, lang, "Hashtags", 5
     )
-    en_values   = _extract_en_value(data, "Hashtags", 5)
+    en_values   = _extract_en_value(
+        data, "Hashtags", 5
+    )
     result = {
         lang: _clean_hashtags(lang_values[:count]),
         "en": _clean_hashtags(en_values[:count]),
@@ -1533,12 +1585,12 @@ def generate_hashtags(
     return result
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 8️⃣ CAPTIONS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _extract_caption(data: dict, lang: str) -> str:
-    """✅ اللغة المطلوبة أولاً دائماً — لا تعارض."""
+    """✅ اللغة المطلوبة أولاً دائماً."""
     if (
         lang in data
         and isinstance(data[lang], str)
@@ -1641,10 +1693,14 @@ def generate_captions(
             lang_caption, en_tags
         )
         result  = {"en": caption[:CAPTION_MAX_LENGTH]}
-        log.info(f"  ✅ Captions: EN({len(result['en'])})")
+        log.info(
+            f"  ✅ Captions: EN({len(result['en'])})"
+        )
         return result
 
-    lang_tags    = hashtags.get(lang, hashtags.get("en", []))
+    lang_tags    = hashtags.get(
+        lang, hashtags.get("en", [])
+    )
     en_tags      = hashtags.get("en", [])
     lang_caption = _append_hashtags_to_caption(
         lang_caption, lang_tags
@@ -1664,9 +1720,9 @@ def generate_captions(
     return result
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 9️⃣ STREET DESCRIPTION
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def generate_street_description(
     title:   str,
@@ -1674,9 +1730,13 @@ def generate_street_description(
     context: dict,
     lang:    str = "ar",
 ) -> str:
-    style        = STREET_STYLE.get(lang, STREET_STYLE["en"])
+    style        = STREET_STYLE.get(
+        lang, STREET_STYLE["en"]
+    )
     content_type = context.get("content_type", "general")
-    emotion      = context.get("primary_emotion", "curiosity")
+    emotion      = context.get(
+        "primary_emotion", "curiosity"
+    )
     safe_title   = _safe_title(title, TITLE_MAX_CHARS)
     safe_content = _safe_truncate(
         content, CONTENT_STREET_CHARS
@@ -1736,9 +1796,9 @@ def generate_street_description(
         )
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 🔟 ACCENT COLORS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _validate_hex_colors(
     colors: list,
@@ -1820,9 +1880,9 @@ def suggest_accent_colors(context: dict) -> list[str]:
         return list(DEFAULT_ACCENT_COLORS)
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 1️⃣1️⃣ HOOK KEYWORD
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 PROMPT_PREFIXES_TO_STRIP = (
     "keyword:", "answer:", "result:", "→", ":",
@@ -1896,9 +1956,9 @@ def generate_hook_keyword(
         return HOOK_FALLBACK_KEYWORD
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 1️⃣2️⃣ CUSTOM HOOK
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def generate_custom_hook(
     title:   str,
@@ -1959,9 +2019,9 @@ def generate_custom_hook(
         return safe_title
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 🎯 MASTER ENRICHMENT — HELPERS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def _build_attractive_title(title: str) -> dict:
     return {
@@ -1992,9 +2052,7 @@ def _handle_tag_suggestions(
     lang:         str,
     content_mode: str = "short",
 ) -> None:
-    """
-    ✅ يتحقق من نجاح العملية ويسجل تحذيراً عند الفشل.
-    """
+    """✅ يعالج الأخطاء ويُطبق DEFAULT_TAG عند الفشل."""
     if not tagged:
         return
 
@@ -2043,9 +2101,9 @@ def _prepare_keywords_input(
     return sentences, tags
 
 
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 # 🎯 MASTER ENRICHMENT
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════════════════
 
 def enrich_record(
     record:       dict,
@@ -2055,15 +2113,13 @@ def enrich_record(
     content_mode: str                  = "short",
 ) -> dict:
     """
-    الدالة الرئيسية للإثراء بالـ AI — v7.1
+    الدالة الرئيسية للإثراء بالـ AI — v7.2
 
-    ✅ الإصلاحات الكاملة:
-      - Thread-safety في كل العمليات
-      - Exponential backoff صحيح
-      - _extract_caption() بترتيب صحيح
-      - generate_visual_keywords() يُصحح len(tags)
-      - _handle_tag_suggestions() لا تُسقط استثناءات
-      - ops_done رسالة دقيقة
+    ✅ الإصلاحات:
+      - _fix_quotes() في _clean_json() و _parse_json_response()
+      - time.sleep(INTER_OPERATION_SLEEP) بين كل عملية
+      - "Do NOT use double quotes inside values" في الـ prompts
+      - جميع إصلاحات v7.1 محفوظة
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
@@ -2100,16 +2156,19 @@ def enrich_record(
 
     # 1. Content Analysis
     analysis = analyze_content(title, content, lang)
+    time.sleep(INTER_OPERATION_SLEEP)
 
-    # 2. Tag Suggestions — لا تُسقط استثناء
+    # 2. Tag Suggestions
     _handle_tag_suggestions(
         tagged, analysis, lang, content_mode
     )
+    time.sleep(INTER_OPERATION_SLEEP)
 
     # 3. Power Words
     power_words = generate_power_words(
         content, analysis, lang
     )
+    time.sleep(INTER_OPERATION_SLEEP)
 
     # 4. Visual Keywords
     sentences, tags = _prepare_keywords_input(
@@ -2122,40 +2181,48 @@ def enrich_record(
         tags         = tags,
         content_mode = content_mode,
     )
+    time.sleep(INTER_OPERATION_SLEEP)
 
     # 5. Pattern Interrupts
     interrupts = generate_pattern_interrupts(
         title, content, analysis, lang,
     )
+    time.sleep(INTER_OPERATION_SLEEP)
 
     # 6. Engagement Questions
     questions = generate_engagement_questions(
         title, content, analysis, lang,
     )
+    time.sleep(INTER_OPERATION_SLEEP)
 
     # 7. Hashtags
     hashtags = generate_hashtags(
         title, content, analysis, lang,
     )
+    time.sleep(INTER_OPERATION_SLEEP)
 
     # 8. Captions
     captions = generate_captions(
         title, content, analysis, hashtags, lang,
     )
+    time.sleep(INTER_OPERATION_SLEEP)
 
     # 9. Street Description
     street_description = generate_street_description(
         title, content, analysis, lang,
     )
+    time.sleep(INTER_OPERATION_SLEEP)
 
     # 10. Accent Colors
     accent_colors = suggest_accent_colors(analysis)
 
     # 11 & 12: Hooks — Short فقط
     if not is_long:
+        time.sleep(INTER_OPERATION_SLEEP)
         hook_keyword = generate_hook_keyword(
             title, content, analysis,
         )
+        time.sleep(INTER_OPERATION_SLEEP)
         custom_hook = generate_custom_hook(
             title, content, analysis, lang,
         )
