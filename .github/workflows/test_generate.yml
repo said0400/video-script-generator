@@ -33,20 +33,22 @@ on:
         type: choice
         options: ["false", "true"]
 
+# ✅ سطر واحد — بدون مسافات زائدة
 concurrency:
-  group: test-generate-${{ github.run_id }}
+  group: "generate-${{ github.ref_name }}-${{ github.event.inputs.lang }}-${{ github.event.inputs.content_mode }}"
   cancel-in-progress: false
 
 env:
   PYTHON_VERSION: "3.11"
   NODE_VERSION:   "20"
   TORCH_VERSION:  "2.5.1"
+  FW_VERSION:     "1.1.0"
 
 jobs:
 
-  # ══════════════════════════════════════════════════════════════
+  # ════════════════════════════════════════════════════════════
   # SETUP
-  # ══════════════════════════════════════════════════════════════
+  # ════════════════════════════════════════════════════════════
 
   setup:
     name: 🔧 Decide Matrix
@@ -64,31 +66,49 @@ jobs:
           LANG="${{ github.event.inputs.lang }}"
           MODE="${{ github.event.inputs.content_mode }}"
 
+          # ✅ تحقق من القيم
+          case "$LANG" in
+            ar|fr|en|all) ;;
+            *)
+              echo "❌ Invalid lang: '$LANG'"
+              exit 1
+              ;;
+          esac
+
+          case "$MODE" in
+            short|long|both) ;;
+            *)
+              echo "❌ Invalid mode: '$MODE'"
+              exit 1
+              ;;
+          esac
+
+          # ✅ JSON آمن — القيم مضمونة من case
           if [ "$LANG" = "all" ]; then
             LANGS='["ar","fr","en"]'
           else
-            LANGS="[\"$LANG\"]"
+            LANGS="[\"${LANG}\"]"
           fi
 
           if [ "$MODE" = "both" ]; then
             MODES='["short","long"]'
           else
-            MODES="[\"$MODE\"]"
+            MODES="[\"${MODE}\"]"
           fi
 
-          echo "langs=$LANGS" >> $GITHUB_OUTPUT
-          echo "modes=$MODES" >> $GITHUB_OUTPUT
-          echo "✅ Langs: $LANGS"
-          echo "✅ Modes: $MODES"
+          echo "langs=${LANGS}" >> $GITHUB_OUTPUT
+          echo "modes=${MODES}" >> $GITHUB_OUTPUT
+          echo "✅ Langs: ${LANGS}"
+          echo "✅ Modes: ${MODES}"
 
-  # ══════════════════════════════════════════════════════════════
+  # ════════════════════════════════════════════════════════════
   # GENERATE
-  # ══════════════════════════════════════════════════════════════
+  # ════════════════════════════════════════════════════════════
 
   generate:
     name: 🎬 ${{ matrix.lang }} / ${{ matrix.mode }}
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 350
     needs: setup
 
     strategy:
@@ -104,13 +124,27 @@ jobs:
 
       - name: 🧹 Free disk space
         run: |
+          echo "💾 Before cleanup:"
+          df -h /
+
           sudo rm -rf \
             /usr/share/dotnet \
             /usr/local/lib/android \
             /opt/ghc \
-            /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force || true
-          echo "💾 Disk after cleanup:"
+            /opt/hostedtoolcache/CodeQL \
+            /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk \
+            /opt/hostedtoolcache/Ruby \
+            /opt/hostedtoolcache/go \
+            /usr/local/share/powershell \
+            /usr/share/swift \
+            /usr/local/.ghcup \
+            /usr/lib/jvm \
+            || true
+
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+          echo "💾 After cleanup:"
           df -h /
 
       - name: 🐍 Setup Python ${{ env.PYTHON_VERSION }}
@@ -136,6 +170,7 @@ jobs:
           sudo fc-cache -fv
           echo "✅ ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
 
+      # ✅ Cache key سطر واحد — بدون مسافات زائدة
       - name: 💾 Cache Whisper/HuggingFace models
         uses: actions/cache@v4
         with:
@@ -144,32 +179,42 @@ jobs:
             ~/.cache/huggingface
             ~/.cache/torch
             ~/.cache/whisper
-          key: whisper-models-v2-${{ runner.os }}
+          key: "whisper-v3-${{ runner.os }}-torch${{ env.TORCH_VERSION }}-fw${{ env.FW_VERSION }}"
           restore-keys: |
-            whisper-models-v2-
-            whisper-models-
+            whisper-v3-${{ runner.os }}-torch${{ env.TORCH_VERSION }}-
+            whisper-v3-${{ runner.os }}-
 
       - name: 🔥 Install PyTorch ${{ env.TORCH_VERSION }} (CPU)
         run: |
-          pip install --upgrade pip setuptools wheel
+          pip install --upgrade pip
+          pip install "setuptools<81.0.0" wheel
           pip install \
             torch==${{ env.TORCH_VERSION }} \
             torchaudio==${{ env.TORCH_VERSION }} \
             --index-url https://download.pytorch.org/whl/cpu
-          python -c "import torch; print(f'✅ PyTorch: {torch.__version__}')"
+          python -c "
+          import torch
+          print(f'✅ PyTorch: {torch.__version__}')
+          "
 
       - name: 📦 Install Python requirements
         run: |
-          pip install "setuptools<81.0.0" wheel
-          pip install faster-whisper==1.1.0 --no-build-isolation
-          pip install --upgrade setuptools
+          pip install \
+            faster-whisper==${{ env.FW_VERSION }} \
+            --no-build-isolation
           pip install -r requirements.txt
           echo "✅ Requirements OK"
+          echo "📋 Key packages:"
+          pip list | grep -E "setuptools|faster-whisper|torch|stable-ts" || true
 
       - name: ✅ Verify key packages
         run: |
           python -c "
-          import torch, faster_whisper, stable_whisper, librosa, numpy as np
+          import torch
+          import faster_whisper
+          import stable_whisper
+          import librosa
+          import numpy as np
           print(f'✅ PyTorch       : {torch.__version__}')
           print(f'✅ faster-whisper: {faster_whisper.__version__}')
           print(f'✅ stable-ts     : {stable_whisper.__version__}')
@@ -197,40 +242,51 @@ jobs:
           python -m playwright install chromium --with-deps
           echo "✅ Playwright OK"
 
+      # ✅ artifact name سطر واحد
       - name: 📥 Restore Database
         uses: dawidd6/action-download-artifact@v6
         with:
-          name: vsg-database-${{ matrix.lang }}-${{ matrix.mode }}
+          name: "vsg-database-${{ matrix.lang }}-${{ matrix.mode }}"
           if_no_artifact_found: ignore
           search_artifacts: true
+          branch: ${{ github.ref_name }}
+          workflow: ${{ github.workflow }}
+
+      - name: 📋 Restore job database
+        run: |
+          DB_NAME="vsg_${{ matrix.lang }}_${{ matrix.mode }}.db"
+
+          if [ -f "$DB_NAME" ]; then
+            cp "$DB_NAME" vsg.db
+            echo "✅ Restored: $DB_NAME → vsg.db"
+            echo "   Size: $(du -sh vsg.db | cut -f1)"
+          elif [ -f "vsg.db" ]; then
+            echo "✅ Found vsg.db directly"
+            echo "   Size: $(du -sh vsg.db | cut -f1)"
+          else
+            echo "ℹ️ No existing DB — fresh start"
+          fi
 
       - name: 🎬 Generate ${{ matrix.lang }} / ${{ matrix.mode }}
         env:
-          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
-          GROQ_API_KEY1:     ${{ secrets.GROQ_API_KEY1 }}
-          GROQ_API_KEY2:     ${{ secrets.GROQ_API_KEY2 }}
-          GROQ_API_KEY3:     ${{ secrets.GROQ_API_KEY3 }}
-          GROQ_API_KEY4:     ${{ secrets.GROQ_API_KEY4 }}
-          GROQ_API_KEY5:     ${{ secrets.GROQ_API_KEY5 }}
-          GROQ_API_KEY_1:    ${{ secrets.GROQ_API_KEY1 }}
-          GROQ_API_KEY_2:    ${{ secrets.GROQ_API_KEY2 }}
-          GROQ_API_KEY_3:    ${{ secrets.GROQ_API_KEY3 }}
-          GROQ_API_KEY_4:    ${{ secrets.GROQ_API_KEY4 }}
-          GROQ_API_KEY_5:    ${{ secrets.GROQ_API_KEY5 }}
-          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_API_KEY1:   ${{ secrets.GEMINI_API_KEY1 }}
-          GEMINI_API_KEY2:   ${{ secrets.GEMINI_API_KEY2 }}
-          GEMINI_API_KEY3:   ${{ secrets.GEMINI_API_KEY3 }}
-          GEMINI_API_KEY4:   ${{ secrets.GEMINI_API_KEY4 }}
-          GEMINI_API_KEY5:   ${{ secrets.GEMINI_API_KEY5 }}
-          GEMINI_API_KEY_1:  ${{ secrets.GEMINI_API_KEY1 }}
-          GEMINI_API_KEY_2:  ${{ secrets.GEMINI_API_KEY2 }}
-          GEMINI_API_KEY_3:  ${{ secrets.GEMINI_API_KEY3 }}
-          GEMINI_API_KEY_4:  ${{ secrets.GEMINI_API_KEY4 }}
-          GEMINI_API_KEY_5:  ${{ secrets.GEMINI_API_KEY5 }}
-          PEXELS_API_KEY:    ${{ secrets.PEXELS_API_KEY }}
-          PEXELS_API_KEY_1:  ${{ secrets.PEXELS_API_KEY_1 }}
-          PEXELS_API_KEY_2:  ${{ secrets.PEXELS_API_KEY_2 }}
+          GROQ_API_KEY:  ${{ secrets.GROQ_API_KEY }}
+          GROQ_API_KEY1: ${{ secrets.GROQ_API_KEY1 }}
+          GROQ_API_KEY2: ${{ secrets.GROQ_API_KEY2 }}
+          GROQ_API_KEY3: ${{ secrets.GROQ_API_KEY3 }}
+          GROQ_API_KEY4: ${{ secrets.GROQ_API_KEY4 }}
+          GROQ_API_KEY5: ${{ secrets.GROQ_API_KEY5 }}
+
+          GEMINI_API_KEY:  ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY1: ${{ secrets.GEMINI_API_KEY1 }}
+          GEMINI_API_KEY2: ${{ secrets.GEMINI_API_KEY2 }}
+          GEMINI_API_KEY3: ${{ secrets.GEMINI_API_KEY3 }}
+          GEMINI_API_KEY4: ${{ secrets.GEMINI_API_KEY4 }}
+          GEMINI_API_KEY5: ${{ secrets.GEMINI_API_KEY5 }}
+
+          PEXELS_API_KEY:   ${{ secrets.PEXELS_API_KEY }}
+          PEXELS_API_KEY_1: ${{ secrets.PEXELS_API_KEY_1 }}
+          PEXELS_API_KEY_2: ${{ secrets.PEXELS_API_KEY_2 }}
+
           PIXABAY_API_KEY:   ${{ secrets.PIXABAY_API_KEY }}
           PIXABAY_API_KEY_1: ${{ secrets.PIXABAY_API_KEY_1 }}
           PIXABAY_API_KEY_2: ${{ secrets.PIXABAY_API_KEY_2 }}
@@ -241,8 +297,22 @@ jobs:
           PLATFORM="${{ github.event.inputs.platform || 'yt' }}"
           FORCE_AI="${{ github.event.inputs.force_ai || 'false' }}"
           VIDEO_NUM="${{ github.event.inputs.video_number }}"
-          INPUT_FILE="scripts/${LANG}_${MODE}.xlsx"
           OUTPUT_DIR="output/${LANG}_${MODE}"
+
+          # ✅ fallback لملف موجود
+          INPUT_FILE="scripts/${LANG}_${MODE}.xlsx"
+          if [ ! -f "$INPUT_FILE" ]; then
+            FALLBACK="scripts/${LANG}.xlsx"
+            if [ -f "$FALLBACK" ]; then
+              echo "⚠️ Using fallback: $FALLBACK"
+              INPUT_FILE="$FALLBACK"
+            else
+              echo "❌ No input file for $LANG/$MODE"
+              echo "Available scripts:"
+              ls scripts/*.xlsx 2>/dev/null || echo "  (none)"
+              exit 1
+            fi
+          fi
 
           mkdir -p "$OUTPUT_DIR"
 
@@ -250,10 +320,9 @@ jobs:
           echo "🌐 Lang     : $LANG"
           echo "📋 Mode     : $MODE"
           echo "🖥️  Platform : $PLATFORM"
-          echo "📁 Input    : $INPUT_FILE"
+          echo "📁 Input    : $INPUT_FILE ($(du -h "$INPUT_FILE" | cut -f1))"
           echo "📂 Output   : $OUTPUT_DIR"
           echo "════════════════════════════════"
-
           echo "🔑 API Keys:"
           [ -n "$GROQ_API_KEY" ]    && echo "  ✅ GROQ"    || echo "  ❌ GROQ"
           [ -n "$GROQ_API_KEY1" ]   && echo "  ✅ GROQ1"   || echo "  ⚠️  GROQ1"
@@ -262,15 +331,7 @@ jobs:
           [ -n "$PIXABAY_API_KEY" ] && echo "  ✅ PIXABAY" || echo "  ❌ PIXABAY"
           echo "════════════════════════════════"
 
-          if [ ! -f "$INPUT_FILE" ]; then
-            echo "❌ File not found: $INPUT_FILE"
-            ls -la scripts/ 2>/dev/null || echo "scripts/ not found"
-            exit 1
-          fi
-
-          echo "✅ Input: $(du -h "$INPUT_FILE" | cut -f1)"
-
-          # ✅ ARGS array بدل eval
+          # ✅ ARGS array آمن
           ARGS=(
             "$INPUT_FILE"
             --lang "$LANG"
@@ -288,6 +349,7 @@ jobs:
             echo "🎯 Auto-next"
           fi
 
+          # ✅ if بدل && chain
           if [ "$FORCE_AI" = "true" ]; then
             ARGS+=(--force-ai)
             echo "🤖 Force AI: yes"
@@ -319,32 +381,44 @@ jobs:
           echo "════════════════════════════════"
 
           if [ -d "$OUTPUT_DIR" ]; then
-            find "$OUTPUT_DIR" -type f \
-              \( -name "*.mp4" -o -name "*.srt" \
-                 -o -name "*.json" -o -name "*.wav" \
-                 -o -name "*.aac" -o -name "*.png" \) \
-              | sort | while read f; do
-                echo "  $(du -h "$f" | cut -f1)  $(basename "$f")"
-              done
+            MP4=0
+            SRT=0
+            AUD=0
+            PNG=0
 
-            MP4=$(find "$OUTPUT_DIR" -name "*.mp4" | wc -l)
-            SRT=$(find "$OUTPUT_DIR" -name "*.srt" | wc -l)
-            AUD=$(find "$OUTPUT_DIR" \( -name "*.wav" -o -name "*.aac" \) | wc -l)
-            PNG=$(find "$OUTPUT_DIR" -name "*.png" | wc -l)
+            # ✅ process substitution + $((n+1)) + find سطر واحد
+            while IFS= read -r f; do
+              SIZE=$(du -h "$f" 2>/dev/null | cut -f1)
+              echo "  ${SIZE}  $(basename "$f")"
+              case "$f" in
+                *.mp4)       MP4=$((MP4 + 1)) ;;
+                *.srt)       SRT=$((SRT + 1)) ;;
+                *.wav|*.aac) AUD=$((AUD + 1)) ;;
+                *.png)       PNG=$((PNG + 1)) ;;
+              esac
+            done < <(find "$OUTPUT_DIR" -type f \( -name "*.mp4" -o -name "*.srt" -o -name "*.json" -o -name "*.wav" -o -name "*.aac" -o -name "*.png" \) | sort)
+
             echo ""
-            echo "  📹 MP4: $MP4 | 📝 SRT: $SRT | 🎵 Audio: $AUD | 🖼️ PNG: $PNG"
+            echo "  📹 MP4   : $MP4"
+            echo "  📝 SRT   : $SRT"
+            echo "  🎵 Audio : $AUD"
+            echo "  🖼️  PNG   : $PNG"
           else
-            echo "⚠️ Output dir not found"
+            echo "⚠️ Output dir not found: $OUTPUT_DIR"
           fi
 
+          echo ""
           echo "💾 Disk: $(df -h / | tail -1)"
+
+      # ══════════════════════════════════════════════════════════
+      # ARTIFACTS
+      # ══════════════════════════════════════════════════════════
 
       - name: 📤 Upload final video
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: >-
-            video-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
+          name: "video-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}"
           path: |
             output/${{ matrix.lang }}_${{ matrix.mode }}/**/*_final.mp4
             output/${{ matrix.lang }}_${{ matrix.mode }}/**/*_published.mp4
@@ -355,8 +429,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: >-
-            audio-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
+          name: "audio-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}"
           path: |
             output/${{ matrix.lang }}_${{ matrix.mode }}/**/*.wav
             output/${{ matrix.lang }}_${{ matrix.mode }}/**/*.aac
@@ -367,8 +440,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: >-
-            srt-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
+          name: "srt-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}"
           path: |
             output/${{ matrix.lang }}_${{ matrix.mode }}/**/*.srt
           retention-days: 7
@@ -378,36 +450,48 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: >-
-            thumb-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
+          name: "thumb-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}"
           path: |
             output/${{ matrix.lang }}_${{ matrix.mode }}/**/*_thumbnail.png
           retention-days: 7
           if-no-files-found: ignore
 
-      - name: 📤 Upload all output
+      - name: 📤 Upload metadata
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: >-
-            output-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}
+          name: "meta-${{ matrix.lang }}-${{ matrix.mode }}-${{ github.run_number }}"
           path: |
-            output/${{ matrix.lang }}_${{ matrix.mode }}/
+            output/${{ matrix.lang }}_${{ matrix.mode }}/**/*.json
           retention-days: 3
           if-no-files-found: ignore
+
+      - name: 📋 Prepare database for upload
+        if: always()
+        run: |
+          DB_NAME="vsg_${{ matrix.lang }}_${{ matrix.mode }}.db"
+
+          if [ -f "vsg.db" ]; then
+            cp vsg.db "$DB_NAME"
+            echo "✅ DB prepared: $DB_NAME"
+            echo "   Size: $(du -sh "$DB_NAME" | cut -f1)"
+          else
+            echo "⚠️ vsg.db not found"
+          fi
 
       - name: 💾 Save Database
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: vsg-database-${{ matrix.lang }}-${{ matrix.mode }}
-          path: vsg.db
+          name: "vsg-database-${{ matrix.lang }}-${{ matrix.mode }}"
+          path: "vsg_${{ matrix.lang }}_${{ matrix.mode }}.db"
           retention-days: 90
           overwrite: true
+          if-no-files-found: ignore
 
-  # ══════════════════════════════════════════════════════════════
+  # ════════════════════════════════════════════════════════════
   # SUMMARY
-  # ══════════════════════════════════════════════════════════════
+  # ════════════════════════════════════════════════════════════
 
   summary:
     name: 📊 Summary
@@ -418,6 +502,8 @@ jobs:
     steps:
       - name: 📊 Final summary
         run: |
+          RESULT="${{ needs.generate.result }}"
+
           echo "════════════════════════════════════════════════"
           echo "📊 Generation Complete"
           echo "════════════════════════════════════════════════"
@@ -425,14 +511,32 @@ jobs:
           echo "  Mode     : ${{ github.event.inputs.content_mode }}"
           echo "  Platform : ${{ github.event.inputs.platform }}"
           echo "  Run      : #${{ github.run_number }}"
+          echo "  Branch   : ${{ github.ref_name }}"
+          echo "  Result   : $RESULT"
           echo ""
-          echo "📥 Artifacts:"
+
+          case "$RESULT" in
+            success)   echo "  ✅ All matrix jobs succeeded" ;;
+            failure)   echo "  ❌ Some matrix jobs failed" ;;
+            cancelled) echo "  ⚠️ Jobs were cancelled" ;;
+            skipped)   echo "  ⏭️ Jobs were skipped" ;;
+            *)         echo "  ⚠️ Unknown result: $RESULT" ;;
+          esac
+
+          echo ""
+          echo "📥 Artifacts (run #${{ github.run_number }}):"
           echo "  📹 video-{lang}-{mode}-${{ github.run_number }}"
           echo "  🎵 audio-{lang}-{mode}-${{ github.run_number }}"
           echo "  📝 srt-{lang}-{mode}-${{ github.run_number }}"
           echo "  🖼️  thumb-{lang}-{mode}-${{ github.run_number }}"
-          echo "  📂 output-{lang}-{mode}-${{ github.run_number }}"
-          echo "  💾 vsg-database-{lang}-{mode}"
+          echo "  📋 meta-{lang}-{mode}-${{ github.run_number }}"
           echo ""
-          echo "🔗 https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "💾 Databases (persistent):"
+          echo "  vsg-database-{lang}-{mode}"
+          echo ""
+          echo "🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo "════════════════════════════════════════════════"
+
+          if [ "$RESULT" = "failure" ]; then
+            exit 1
+          fi
