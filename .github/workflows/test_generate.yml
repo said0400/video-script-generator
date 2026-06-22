@@ -33,7 +33,7 @@ on:
         type: choice
         options: ["false", "true"]
 
-# ✅ سطر واحد — بدون مسافات زائدة
+# ✅ concurrency صحيح — سطر واحد بدون مسافات زائدة
 concurrency:
   group: "generate-${{ github.ref_name }}-${{ github.event.inputs.lang }}-${{ github.event.inputs.content_mode }}"
   cancel-in-progress: false
@@ -46,9 +46,9 @@ env:
 
 jobs:
 
-  # ════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   # SETUP
-  # ════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
 
   setup:
     name: 🔧 Decide Matrix
@@ -66,7 +66,8 @@ jobs:
           LANG="${{ github.event.inputs.lang }}"
           MODE="${{ github.event.inputs.content_mode }}"
 
-          # ✅ تحقق من القيم
+          # ✅ تحقق من القيم — type: choice يضمن ذلك
+          # لكن نتحقق مجدداً للأمان
           case "$LANG" in
             ar|fr|en|all) ;;
             *)
@@ -83,7 +84,7 @@ jobs:
               ;;
           esac
 
-          # ✅ JSON آمن — القيم مضمونة من case
+          # ✅ JSON آمن — القيم مضمونة من case أعلاه
           if [ "$LANG" = "all" ]; then
             LANGS='["ar","fr","en"]'
           else
@@ -101,13 +102,15 @@ jobs:
           echo "✅ Langs: ${LANGS}"
           echo "✅ Modes: ${MODES}"
 
-  # ════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   # GENERATE
-  # ════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
 
   generate:
     name: 🎬 ${{ matrix.lang }} / ${{ matrix.mode }}
     runs-on: ubuntu-latest
+    # ✅ 350 دقيقة — أقل من حد GitHub (360 دقيقة)
+    # Long mode + both platforms يحتاج ~4 ساعات
     timeout-minutes: 350
     needs: setup
 
@@ -122,6 +125,7 @@ jobs:
       - name: 📥 Checkout
         uses: actions/checkout@v4
 
+      # ✅ حذف أكبر المجلدات لتوفير مساحة
       - name: 🧹 Free disk space
         run: |
           echo "💾 Before cleanup:"
@@ -171,6 +175,7 @@ jobs:
           echo "✅ ffmpeg: $(ffmpeg -version 2>&1 | head -1)"
 
       # ✅ Cache key سطر واحد — بدون مسافات زائدة
+      # يشمل إصدارات torch و faster-whisper
       - name: 💾 Cache Whisper/HuggingFace models
         uses: actions/cache@v4
         with:
@@ -184,6 +189,12 @@ jobs:
             whisper-v3-${{ runner.os }}-torch${{ env.TORCH_VERSION }}-
             whisper-v3-${{ runner.os }}-
 
+      # ✅ ترتيب صحيح:
+      # 1. pip + setuptools بإصدار مقيّد
+      # 2. torch
+      # 3. faster-whisper (يحتاج setuptools<81)
+      # 4. requirements.txt
+      # setuptools لا يُرقّى بعد هذه النقطة
       - name: 🔥 Install PyTorch ${{ env.TORCH_VERSION }} (CPU)
         run: |
           pip install --upgrade pip
@@ -242,7 +253,10 @@ jobs:
           python -m playwright install chromium --with-deps
           echo "✅ Playwright OK"
 
-      # ✅ artifact name سطر واحد
+      # ✅ إصلاح رئيسي:
+      # حذف "workflow:" لأن github.workflow يُرجع
+      # اسم العرض وليس اسم الملف → Not Found error
+      # search_artifacts: true يكفي للبحث
       - name: 📥 Restore Database
         uses: dawidd6/action-download-artifact@v6
         with:
@@ -250,8 +264,8 @@ jobs:
           if_no_artifact_found: ignore
           search_artifacts: true
           branch: ${{ github.ref_name }}
-          workflow: ${{ github.workflow }}
 
+      # ✅ استعادة DB للمسار الصحيح
       - name: 📋 Restore job database
         run: |
           DB_NAME="vsg_${{ matrix.lang }}_${{ matrix.mode }}.db"
@@ -269,6 +283,7 @@ jobs:
 
       - name: 🎬 Generate ${{ matrix.lang }} / ${{ matrix.mode }}
         env:
+          # ✅ نمط واحد فقط — بدون تكرار
           GROQ_API_KEY:  ${{ secrets.GROQ_API_KEY }}
           GROQ_API_KEY1: ${{ secrets.GROQ_API_KEY1 }}
           GROQ_API_KEY2: ${{ secrets.GROQ_API_KEY2 }}
@@ -331,7 +346,7 @@ jobs:
           [ -n "$PIXABAY_API_KEY" ] && echo "  ✅ PIXABAY" || echo "  ❌ PIXABAY"
           echo "════════════════════════════════"
 
-          # ✅ ARGS array آمن
+          # ✅ ARGS array آمن — بدون eval
           ARGS=(
             "$INPUT_FILE"
             --lang "$LANG"
@@ -369,6 +384,8 @@ jobs:
 
           exit $EXIT_CODE
 
+      # ✅ process substitution + $((n+1))
+      # find في سطر واحد لتجنب مشاكل YAML
       - name: 📊 Show results
         if: always()
         run: |
@@ -386,7 +403,6 @@ jobs:
             AUD=0
             PNG=0
 
-            # ✅ process substitution + $((n+1)) + find سطر واحد
             while IFS= read -r f; do
               SIZE=$(du -h "$f" 2>/dev/null | cut -f1)
               echo "  ${SIZE}  $(basename "$f")"
@@ -411,7 +427,8 @@ jobs:
           echo "💾 Disk: $(df -h / | tail -1)"
 
       # ══════════════════════════════════════════════════════════
-      # ARTIFACTS
+      # ARTIFACTS — منفصلة بدون تداخل
+      # اسم كل artifact في سطر واحد بين " "
       # ══════════════════════════════════════════════════════════
 
       - name: 📤 Upload final video
@@ -456,6 +473,8 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+      # ✅ metadata فقط — JSON و logs
+      # لا تتداخل مع artifacts الكبيرة أعلاه
       - name: 📤 Upload metadata
         if: always()
         uses: actions/upload-artifact@v4
@@ -466,6 +485,7 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
 
+      # ✅ تحضير DB قبل الرفع
       - name: 📋 Prepare database for upload
         if: always()
         run: |
@@ -476,9 +496,12 @@ jobs:
             echo "✅ DB prepared: $DB_NAME"
             echo "   Size: $(du -sh "$DB_NAME" | cut -f1)"
           else
-            echo "⚠️ vsg.db not found"
+            echo "⚠️ vsg.db not found — nothing to save"
           fi
 
+      # ✅ DB منفصلة لكل matrix job
+      # اسم ثابت بدون run_number للسماح بـ overwrite
+      # واستعادة في الـ run التالي
       - name: 💾 Save Database
         if: always()
         uses: actions/upload-artifact@v4
@@ -489,9 +512,9 @@ jobs:
           overwrite: true
           if-no-files-found: ignore
 
-  # ════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
   # SUMMARY
-  # ════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════
 
   summary:
     name: 📊 Summary
@@ -537,6 +560,7 @@ jobs:
           echo "🔗 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           echo "════════════════════════════════════════════════"
 
+          # ✅ exit code صحيح
           if [ "$RESULT" = "failure" ]; then
             exit 1
           fi
