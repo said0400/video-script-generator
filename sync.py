@@ -1,33 +1,38 @@
 """
-🎤 Word-level Alignment via stable-ts (Modern Stack)
+🎤 Word-level Alignment via stable-ts v2.0 — Final Production Edition
 
 Features:
   ✅ Powered by stable-ts (latest, maintained)
   ✅ Built-in word-level alignment (no pyannote needed)
   ✅ No HF_TOKEN required
-  ✅ Singleton model loading
+  ✅ Thread-safe singleton model loading
   ✅ Backward compatible API
   ✅ Same output format as old WhisperX-based sync.py
+  ✅ Fallback to minimal options on TypeError
+  ✅ Global word counter for visible_word_count
+  ✅ MIN_WORD_DURATION enforced in fallback too
+  ✅ Better FPS parsing (avg_frame_rate priority)
+  ✅ MIN_REMAP_WORDS_RATIO = 0.15 (more flexible)
+  ✅ Word timestamps sorted before remap
+  ✅ total_duration=0 fallback protection
+  ✅ ffprobe not found → -1.0 (distinct from 0.0)
 
 IMPORTANT:
   Audio passed = Audio that will play in final video
-
-Migration notes:
-  - Replaces WhisperX with stable-ts
-  - No more pyannote.audio
-  - No more HF_TOKEN
-  - Same API for main.py compatibility
 """
 
 from __future__ import annotations
 
 import logging
 import subprocess
+import threading
 import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+
+log = logging.getLogger(__name__)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -38,9 +43,8 @@ WHISPER_MODEL  = "medium"
 WHISPER_DEVICE = "cpu"
 COMPUTE_TYPE   = "int8"
 
-# Cache directory
+# Cache directory (created on first use, not on import)
 MODEL_CACHE_DIR = Path.home() / ".cache" / "stable-ts"
-MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Language mapping
 LANG_MAP: dict[str, str] = {
@@ -53,34 +57,27 @@ LANG_MAP: dict[str, str] = {
 FFPROBE_TIMEOUT = 15
 
 # Validation thresholds
-MIN_REMAP_WORDS_RATIO = 0.05   # 5% tolerance for remap
-MIN_WORD_DURATION     = 0.05   # ثوانٍ (50ms minimum)
+MIN_REMAP_WORDS_RATIO = 0.15   # 15% tolerance (was 0.05)
+MIN_WORD_DURATION     = 0.05   # 50ms minimum
 
 # stable-ts options
 TRANSCRIBE_OPTIONS = {
-    "word_timestamps":         True,
-    "regroup":                 True,
-    "suppress_silence":        True,
-    "suppress_word_ts":        False,
-    "use_word_position":       True,
-    "vad":                     False,  # تعطيل VAD للسرعة
-    "verbose":                 None,   # silent
+    "word_timestamps":   True,
+    "regroup":           True,
+    "suppress_silence":  True,
+    "suppress_word_ts":  False,
+    "use_word_position": True,
+    "vad":               False,
+    "verbose":           None,
 }
 
-# Logging
-logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(message)s",
-)
-log = logging.getLogger(__name__)
-
 
 # ═════════════════════════════════════════════════════════════════════════════
-# GLOBAL STATE
+# GLOBAL STATE (Thread-safe)
 # ═════════════════════════════════════════════════════════════════════════════
 
-# Singleton model instance
-_MODEL: Any = None
+_MODEL:      Any            = None
+_MODEL_LOCK: threading.Lock = threading.Lock()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -115,7 +112,8 @@ def get_audio_duration(path: str) -> float:
     الحصول على مدة ملف صوتي بالثواني.
 
     Returns:
-        المدة أو 0.0 عند الفشل
+        المدة (موجبة) أو 0.0 عند الفشل
+        -1.0 إذا ffprobe غير موجود
     """
     try:
         r = subprocess.run(
@@ -131,60 +129,75 @@ def get_audio_duration(path: str) -> float:
         )
 
         output = r.stdout.strip()
-        return float(output) if output else 0.0
+        try:
+            return float(output) if output else 0.0
+        except ValueError:
+            return 0.0
 
-    except (
-        ValueError,
-        subprocess.TimeoutExpired,
-        FileNotFoundError,
-    ):
+    except FileNotFoundError:
+        log.error("  ❌ ffprobe not found — install FFmpeg")
+        return -1.0
+    except subprocess.TimeoutExpired:
+        log.warning("  ⚠️  ffprobe timeout")
+        return 0.0
+    except Exception as e:
+        log.debug("  ffprobe error: %s", e)
         return 0.0
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MODEL LOADING (Singleton)
+# MODEL LOADING (Thread-safe Singleton)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _load_model() -> Any:
     """
-    تحميل stable-ts model (singleton).
+    تحميل stable-ts model (singleton, thread-safe).
 
     Returns:
         Model instance أو None
     """
     global _MODEL
 
+    # Fast path (no lock)
     if _MODEL is not None:
         return _MODEL
 
-    try:
-        import stable_whisper
-    except ImportError as e:
-        log.error(f"  ❌ stable-ts not installed: {e}")
-        log.error("     Install: pip install stable-ts")
-        return None
+    with _MODEL_LOCK:
+        # Double-check inside lock
+        if _MODEL is not None:
+            return _MODEL
 
-    try:
-        log.info(
-            f"  📥 Loading stable-ts '{WHISPER_MODEL}'..."
-        )
-        t0 = time.time()
+        try:
+            import stable_whisper
+        except ImportError as e:
+            log.error("  ❌ stable-ts not installed: %s", e)
+            log.error("     Install: pip install stable-ts")
+            return None
 
-        # تحميل faster-whisper backend (أسرع وأخف على CPU)
-        _MODEL = stable_whisper.load_faster_whisper(
-            WHISPER_MODEL,
-            device         = WHISPER_DEVICE,
-            compute_type   = COMPUTE_TYPE,
-            download_root  = str(MODEL_CACHE_DIR),
-        )
+        try:
+            # Create cache dir on first use
+            MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-        elapsed = time.time() - t0
-        log.info(f"  ✅ Loaded in {elapsed:.1f}s")
+            log.info(
+                "  📥 Loading stable-ts '%s'...",
+                WHISPER_MODEL
+            )
+            t0 = time.time()
 
-    except Exception as e:
-        log.error(f"  ❌ Model load failed: {e}")
-        traceback.print_exc()
-        return None
+            _MODEL = stable_whisper.load_faster_whisper(
+                WHISPER_MODEL,
+                device        = WHISPER_DEVICE,
+                compute_type  = COMPUTE_TYPE,
+                download_root = str(MODEL_CACHE_DIR),
+            )
+
+            elapsed = time.time() - t0
+            log.info("  ✅ Loaded in %.1fs", elapsed)
+
+        except Exception as e:
+            log.error("  ❌ Model load failed: %s", e)
+            traceback.print_exc()
+            return None
 
     return _MODEL
 
@@ -204,7 +217,7 @@ def _transcribe_with_alignment(
     Returns:
         WhisperResult object أو None
     """
-    log.info(f"  📝 Transcribing + Aligning ({lang})...")
+    log.info("  📝 Transcribing + Aligning (%s)...", lang)
     t0 = time.time()
 
     try:
@@ -218,13 +231,36 @@ def _transcribe_with_alignment(
         n_segs  = len(result.segments) if result else 0
 
         log.info(
-            f"  ✅ {n_segs} segments in {elapsed:.1f}s"
+            "  ✅ %d segments in %.1fs", n_segs, elapsed
         )
 
         return result
 
+    except TypeError as e:
+        # Fallback for unknown options in different stable-ts versions
+        log.warning(
+            "  ⚠️  transcribe option error: %s — retrying minimal",
+            e
+        )
+        try:
+            result = model.transcribe_stable(
+                audio_path,
+                language        = lang,
+                word_timestamps = True,
+            )
+            elapsed = time.time() - t0
+            n_segs  = len(result.segments) if result else 0
+            log.info(
+                "  ✅ %d segments in %.1fs (minimal options)",
+                n_segs, elapsed
+            )
+            return result
+        except Exception as e2:
+            log.error("  ❌ Transcribe fallback failed: %s", e2)
+            return None
+
     except Exception as e:
-        log.error(f"  ❌ Transcribe failed: {e}")
+        log.error("  ❌ Transcribe failed: %s", e)
         traceback.print_exc()
         return None
 
@@ -256,7 +292,7 @@ def _extract_words_from_segment(
     """
     seg_words: list[WordEntry] = []
 
-    # في stable-ts: segment.words is list of WordTiming
+    # Get words from segment
     words = getattr(segment, "words", None) or []
 
     for w_idx, word_obj in enumerate(words):
@@ -287,7 +323,7 @@ def _extract_words_from_segment(
             w_idx = w_idx,
         ))
 
-    # Fallback: توزيع متساوٍ إذا لم نحصل على كلمات
+    # Fallback: equal distribution if no valid words found
     if not seg_words:
         seg_text  = (
             getattr(segment, "text", "") or ""
@@ -304,15 +340,19 @@ def _extract_words_from_segment(
             word_dur = (seg_end - seg_start) / len(tokens)
 
             for w_idx, tok in enumerate(tokens):
+                ws = round(seg_start + w_idx * word_dur, 4)
+                we = round(
+                    seg_start + (w_idx + 1) * word_dur, 4
+                )
+
+                # Enforce MIN_WORD_DURATION in fallback too
+                if not _is_valid_timestamp(ws, we):
+                    continue
+
                 seg_words.append(WordEntry(
                     word  = tok,
-                    start = round(
-                        seg_start + w_idx * word_dur, 4
-                    ),
-                    end   = round(
-                        seg_start + (w_idx + 1) * word_dur,
-                        4,
-                    ),
+                    start = ws,
+                    end   = we,
                     s_idx = s_idx,
                     w_idx = w_idx,
                 ))
@@ -367,6 +407,10 @@ def _build_aligned_output(
         sw = [w for w in all_words if w.s_idx == s_idx]
 
         if not sw:
+            log.debug(
+                "  ⚠️  No words for sentence %d: %r",
+                s_idx, sent[:40]
+            )
             continue
 
         aligned_out.append({
@@ -387,15 +431,17 @@ def _build_aligned_output(
 
 
 def _build_timeline(all_words: list[WordEntry]) -> list[dict]:
-    """بناء timeline من الكلمات."""
-    timeline = [
-        {
+    """بناء timeline من الكلمات (global word counter)."""
+    timeline   = []
+    global_idx = 0
+
+    for w in all_words:
+        timeline.append({
             "time":               w.start,
             "sentence_idx":       w.s_idx,
-            "visible_word_count": w.w_idx + 1,
-        }
-        for w in all_words
-    ]
+            "visible_word_count": global_idx + 1,
+        })
+        global_idx += 1
 
     timeline.sort(key=lambda x: x["time"])
     return timeline
@@ -412,8 +458,8 @@ def _print_extraction_report(
 ) -> None:
     """طباعة تقرير الاستخراج."""
     log.info(
-        f"  ✅ {len(sentences)} sentences, "
-        f"{len(all_words)} words"
+        "  ✅ %d sentences, %d words",
+        len(sentences), len(all_words)
     )
 
     if not all_words:
@@ -423,8 +469,8 @@ def _print_extraction_report(
     log.info("  🔍 First 8:")
     for w in all_words[:8]:
         log.info(
-            f"     {w.start:.3f}s → {w.end:.3f}s  "
-            f"'{w.word}'"
+            "     %.3fs → %.3fs  '%s'",
+            w.start, w.end, w.word
         )
 
     # نسبة التغطية
@@ -434,9 +480,10 @@ def _print_extraction_report(
             / aud_dur * 100
         )
         log.info(
-            f"  📊 {all_words[0].start:.3f}s "
-            f"→ {all_words[-1].end:.3f}s "
-            f"({coverage:.0f}%)"
+            "  📊 %.3fs → %.3fs (%.0f%%)",
+            all_words[0].start,
+            all_words[-1].end,
+            coverage
         )
 
 
@@ -481,16 +528,9 @@ def extract_transcript_from_audio(
     aud_dur = get_audio_duration(audio_path)
 
     log.info(
-        f"\n  🎤 {Path(audio_path).name} | "
-        f"lang={lang} | {aud_dur:.3f}s"
+        "\n  🎤 %s | lang=%s | %.3fs",
+        Path(audio_path).name, lang, aud_dur
     )
-
-    # تحميل stable-ts
-    try:
-        import stable_whisper  # noqa: F401
-    except ImportError as e:
-        log.error(f"  ❌ stable-ts not installed: {e}")
-        return _empty_result(aud_dur)
 
     try:
         # تحميل model
@@ -498,7 +538,7 @@ def extract_transcript_from_audio(
         if model is None:
             return _empty_result(aud_dur)
 
-        # Transcribe + Align (مدمج في stable-ts)
+        # Transcribe + Align
         result = _transcribe_with_alignment(
             model, audio_path, wlang,
         )
@@ -572,6 +612,8 @@ def _try_remap_timestamps(
     """
     محاولة re-map timestamps على جمل السكريبت الأصلية.
 
+    MIN_REMAP_WORDS_RATIO = 0.15 (15% tolerance)
+
     Returns:
         list of word entries أو None
     """
@@ -584,7 +626,13 @@ def _try_remap_timestamps(
     ):
         return None
 
-    # التحقق من نسبة التطابق
+    # Sort word_timestamps by start time
+    word_timestamps = sorted(
+        word_timestamps,
+        key=lambda x: x.get("start", 0)
+    )
+
+    # Check ratio
     diff_ratio = (
         abs(len(word_timestamps) - total_w) / total_w
     )
@@ -632,7 +680,7 @@ def build_word_timeline(
     if not sentences:
         return [], []
 
-    # محاولة re-map
+    # Try re-map
     wt = _try_remap_timestamps(sentences, word_timestamps)
 
     if wt:
@@ -649,9 +697,17 @@ def _equal_split(
     """
     توزيع متساوٍ للكلمات على total_duration.
 
-    Fix: s_idx صحيح دائماً حتى عند تكرار نفس الكلمة.
+    Handles total_duration=0 safely.
     """
-    # بناء قائمة كل الكلمات
+    # Protect against total_duration=0
+    if total_duration <= 0:
+        log.warning(
+            "  ⚠️  total_duration=0 — using fallback (%.1fs)",
+            max(1.0, len(sentences) * 0.3)
+        )
+        total_duration = max(1.0, len(sentences) * 0.3)
+
+    # Build word list
     all_w: list[tuple[int, int, str]] = []
 
     for s_idx, sentence in enumerate(sentences):
@@ -661,7 +717,7 @@ def _equal_split(
     if not all_w:
         return [], []
 
-    # توزيع متساوٍ
+    # Equal distribution
     word_duration = total_duration / len(all_w)
     wt: list[dict] = []
 
@@ -705,14 +761,17 @@ def _build_output(
             ],
         })
 
-    timeline = [
-        {
+    # Build timeline with global word counter
+    timeline   = []
+    global_idx = 0
+
+    for w in word_times:
+        timeline.append({
             "time":               w["start"],
             "sentence_idx":       w["s_idx"],
-            "visible_word_count": w["w_idx"] + 1,
-        }
-        for w in word_times
-    ]
+            "visible_word_count": global_idx + 1,
+        })
+        global_idx += 1
 
     timeline.sort(key=lambda x: x["time"])
     return timeline, aligned
