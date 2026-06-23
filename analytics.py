@@ -1,5 +1,5 @@
 """
-📊 Smart Analytics System
+📊 Smart Analytics System v2.0 — Final Production Edition
 
 Features:
   ✅ Period-based reports (day, week, month, all)
@@ -7,29 +7,40 @@ Features:
         - By language (AR, FR, EN)
         - By content mode (short, long)
         - By platform (Facebook, YouTube)
-        - By hour (best publishing times)
+        - By hour (best publishing times — UTC)
         - By tags (most used)
         - By errors (patterns)
         - Duration statistics
   ✅ Output formats: console, JSON, HTML
   ✅ WhatsApp notifications
   ✅ Save reports to file
+  ✅ Try/except per section (crash-safe)
+  ✅ SQL parameterized (no injection)
+  ✅ HTML escape (XSS protection)
+  ✅ UTC timezone-aware
+  ✅ None-safe dict access (.get)
 """
 
 from __future__ import annotations
 
 import argparse
+import html as html_module
 import json
 import logging
+import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
+# ⚠️ _conn temporary (TODO: move queries to db.py)
 from db import _conn, init_db
+
 from notifier import notify_info
+
+log = logging.getLogger(__name__)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
@@ -72,13 +83,6 @@ SECTION_WIDTH = 50
 # Bar chart
 MAX_BAR_LENGTH = 30
 TAG_BAR_LENGTH = 20
-
-# Logging
-logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(message)s",
-)
-log = logging.getLogger(__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -133,7 +137,9 @@ class StatsBlock:
 class PlatformStats:
     """إحصائيات منصة."""
     total:   int            = 0
-    by_mode: dict[str, int] = field(default_factory=dict)
+    by_mode: dict[str, int] = field(
+        default_factory=dict
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -163,11 +169,18 @@ class DurationStats:
         return cls(
             count       = len(durations),
             avg         = round(
-                sum(durations) / len(durations), 1
+                sum(durations) / len(durations),
+                1,
             ),
-            min         = round(min(durations), 1),
-            max         = round(max(durations), 1),
-            total_hours = round(sum(durations) / 3600, 2),
+            min         = round(
+                min(durations), 1
+            ),
+            max         = round(
+                max(durations), 1
+            ),
+            total_hours = round(
+                sum(durations) / 3600, 2
+            ),
         )
 
     def to_dict(self) -> dict:
@@ -205,52 +218,55 @@ class ErrorEntry:
 
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
-    p = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description = "📊 Analytics System",
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--period",
         type    = str,
         default = Period.DAY.value,
-        choices = [p.value for p in Period],
+        choices = [
+            period.value for period in Period
+        ],
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--lang",
         type    = str,
         default = "all",
         choices = ["all", *LANGS],
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--format",
         type    = str,
         default = OutputFormat.CONSOLE.value,
-        choices = [f.value for f in OutputFormat],
+        choices = [
+            fmt.value for fmt in OutputFormat
+        ],
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--notify",
         action = "store_true",
         help   = "إرسال التقرير عبر WhatsApp",
     )
 
-    p.add_argument(
+    parser.add_argument(
         "--save",
         type    = str,
         default = None,
         help    = "حفظ التقرير في ملف",
     )
 
-    return p.parse_args()
+    return parser.parse_args()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# DATE HELPERS
+# DATE HELPERS (UTC-aware)
 # ═════════════════════════════════════════════════════════════════════════════
 
-# Period labels
 PERIOD_LABELS: dict[str, str] = {
     Period.DAY.value:   "Today",
     Period.WEEK.value:  "Last 7 days",
@@ -259,15 +275,17 @@ PERIOD_LABELS: dict[str, str] = {
 }
 
 
-def _get_date_range(period: str) -> tuple[str, str]:
-    """تحديد نطاق التاريخ حسب الفترة."""
-    now = datetime.now()
+def _get_date_range(
+    period: str,
+) -> tuple[str, str]:
+    """تحديد نطاق التاريخ (UTC)."""
+    now = datetime.now(timezone.utc)
 
     if period == Period.DAY.value:
         start = now.replace(
-            hour   = 0,
-            minute = 0,
-            second = 0,
+            hour        = 0,
+            minute      = 0,
+            second      = 0,
             microsecond = 0,
         )
     elif period == Period.WEEK.value:
@@ -275,7 +293,9 @@ def _get_date_range(period: str) -> tuple[str, str]:
     elif period == Period.MONTH.value:
         start = now - timedelta(days=30)
     else:  # ALL
-        start = datetime(2020, 1, 1)
+        start = datetime(
+            2020, 1, 1, tzinfo=timezone.utc
+        )
 
     fmt = "%Y-%m-%d %H:%M:%S"
     return start.strftime(fmt), now.strftime(fmt)
@@ -287,40 +307,46 @@ def _get_period_label(period: str) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# QUERY HELPERS
+# QUERY HELPERS (Parameterized, safe)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _build_lang_filter(lang: str) -> tuple[str, list]:
-    """
-    بناء lang filter للـ SQL.
-
-    Returns:
-        (filter_sql, extra_params)
-    """
+def _build_lang_filter(
+    lang: str,
+) -> tuple[str, list]:
+    """بناء lang filter للـ SQL."""
     if lang == "all":
         return "", []
     return "AND lang = ?", [lang]
 
 
 def _count_rows(
-    table:       str,
-    where:       str,
-    params:      list,
+    table:  str,
+    where:  str,
+    params: list,
 ) -> int:
     """عد الصفوف بـ WHERE."""
-    sql = f"SELECT COUNT(*) FROM {table} WHERE {where}"
-    row = _conn().execute(sql, params).fetchone()
-    return row[0] if row else 0
+    try:
+        sql = (
+            f"SELECT COUNT(*) FROM {table} "
+            f"WHERE {where}"
+        )
+        row = _conn().execute(
+            sql, params
+        ).fetchone()
+        return row[0] if row else 0
+    except sqlite3.Error as e:
+        log.debug("Count rows error: %s", e)
+        return 0
 
 
 def _count_published(
-    start: str,
-    end:   str,
-    extra_where: str = "",
+    start:        str,
+    end:          str,
+    extra_where:  str            = "",
     extra_params: Optional[list] = None,
 ) -> int:
     """عد المنشور."""
-    where = "published_at BETWEEN ? AND ?"
+    where  = "published_at BETWEEN ? AND ?"
     params = [start, end]
 
     if extra_where:
@@ -328,22 +354,23 @@ def _count_published(
         if extra_params:
             params.extend(extra_params)
 
-    return _count_rows("publish_tracker", where, params)
+    return _count_rows(
+        "publish_tracker", where, params
+    )
 
 
 def _count_renders(
     start:        str,
     end:          str,
     status:       str,
-    extra_where:  str = "",
+    extra_where:  str            = "",
     extra_params: Optional[list] = None,
 ) -> int:
-    """عد renders بحالة معينة."""
-    where = (
-        f"status = '{status}' "
-        f"AND updated_at BETWEEN ? AND ?"
+    """عد renders بحالة معينة (parameterized)."""
+    where  = (
+        "status = ? AND updated_at BETWEEN ? AND ?"
     )
-    params = [start, end]
+    params = [status, start, end]
 
     if extra_where:
         where += f" {extra_where}"
@@ -351,9 +378,7 @@ def _count_renders(
             params.extend(extra_params)
 
     return _count_rows("renders", where, params)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
+  # ═════════════════════════════════════════════════════════════════════════════
 # ANALYTICS QUERIES
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -365,26 +390,29 @@ def get_overview(
     """نظرة عامة على الإنتاج."""
     lang_filter, lang_params = _build_lang_filter(lang)
 
-    # إجمالي المنشور
     total_published = _count_published(
         start_date, end_date,
         lang_filter, lang_params,
     )
 
-    # عدد الفيديوهات الفريدة
-    c = _conn()
-    params = [start_date, end_date] + lang_params
-    unique_videos = c.execute(
-        f"""SELECT COUNT(DISTINCT
-                video_number || '_' || lang || '_' || content_mode
-            )
-            FROM publish_tracker
-            WHERE published_at BETWEEN ? AND ?
-              {lang_filter}""",
-        params,
-    ).fetchone()[0]
+    # Unique videos
+    try:
+        c = _conn()
+        params = [start_date, end_date] + lang_params
+        unique_videos = c.execute(
+            f"""SELECT COUNT(DISTINCT
+                    video_number || '_' || lang
+                    || '_' || content_mode
+                )
+                FROM publish_tracker
+                WHERE published_at BETWEEN ? AND ?
+                  {lang_filter}""",
+            params,
+        ).fetchone()[0]
+    except Exception as e:
+        log.debug("Unique videos error: %s", e)
+        unique_videos = 0
 
-    # Renders
     total_rendered = _count_renders(
         start_date, end_date, "done",
         lang_filter, lang_params,
@@ -394,7 +422,6 @@ def get_overview(
         lang_filter, lang_params,
     )
 
-    # Success rate
     stats = StatsBlock(
         rendered = total_rendered,
         failed   = failed_renders,
@@ -449,7 +476,9 @@ def get_by_mode(
     lang_filter, lang_params = _build_lang_filter(lang)
 
     for mode in MODES:
-        extra_where  = f"AND content_mode = ? {lang_filter}"
+        extra_where  = (
+            f"AND content_mode = ? {lang_filter}"
+        )
         extra_params = [mode] + lang_params
 
         stats = StatsBlock()
@@ -485,18 +514,17 @@ def get_by_platform(
     for platform in PLATFORMS:
         platform_stats = PlatformStats()
 
-        # العدد الإجمالي
         platform_stats.total = _count_published(
             start_date, end_date,
             f"AND platform = ? {lang_filter}",
             [platform] + lang_params,
         )
 
-        # التفصيل حسب الـ mode
         for mode in MODES:
             count = _count_published(
                 start_date, end_date,
-                f"AND platform = ? AND content_mode = ? "
+                f"AND platform = ? "
+                f"AND content_mode = ? "
                 f"{lang_filter}",
                 [platform, mode] + lang_params,
             )
@@ -512,22 +540,33 @@ def get_by_hour(
     end_date:   str,
     lang:       str = "all",
 ) -> dict[str, int]:
-    """تحليل حسب الساعة."""
+    """تحليل حسب الساعة (UTC)."""
     lang_filter, lang_params = _build_lang_filter(lang)
     params = [start_date, end_date] + lang_params
 
-    rows = _conn().execute(
-        f"""SELECT strftime('%H', published_at) as hour,
-                   COUNT(*) as count
-            FROM publish_tracker
-            WHERE published_at BETWEEN ? AND ?
-              {lang_filter}
-            GROUP BY hour
-            ORDER BY count DESC""",
-        params,
-    ).fetchall()
+    try:
+        rows = _conn().execute(
+            f"""SELECT
+                    strftime('%H', published_at)
+                    as hour,
+                    COUNT(*) as count
+                FROM publish_tracker
+                WHERE published_at BETWEEN ? AND ?
+                  {lang_filter}
+                GROUP BY hour
+                ORDER BY count DESC""",
+            params,
+        ).fetchall()
+    except Exception as e:
+        log.debug("By hour error: %s", e)
+        return {}
 
-    return {str(r["hour"]): r["count"] for r in rows}
+    # Filter out None values
+    return {
+        str(r["hour"]): r["count"]
+        for r in rows
+        if r["hour"] is not None
+    }
 
 
 def get_top_tags(
@@ -540,12 +579,16 @@ def get_top_tags(
     lang_filter, lang_params = _build_lang_filter(lang)
     params = [start_date, end_date] + lang_params
 
-    rows = _conn().execute(
-        f"""SELECT tagged FROM ai_cache
-            WHERE created_at BETWEEN ? AND ?
-              {lang_filter}""",
-        params,
-    ).fetchall()
+    try:
+        rows = _conn().execute(
+            f"""SELECT tagged FROM ai_cache
+                WHERE created_at BETWEEN ? AND ?
+                  {lang_filter}""",
+            params,
+        ).fetchall()
+    except Exception as e:
+        log.debug("Top tags error: %s", e)
+        return {}
 
     tag_counter: Counter = Counter()
 
@@ -556,7 +599,9 @@ def get_top_tags(
         try:
             tagged = json.loads(row["tagged"])
             for sent in tagged:
-                tag = sent.get("final_tag", "information")
+                tag = sent.get(
+                    "final_tag", "information"
+                )
                 if tag:
                     tag_counter[tag] += 1
         except (json.JSONDecodeError, TypeError):
@@ -573,19 +618,28 @@ def get_errors(
 ) -> list[dict]:
     """جلب أحدث الأخطاء."""
     lang_filter, lang_params = _build_lang_filter(lang)
-    params = [start_date, end_date] + lang_params + [limit]
+    params = (
+        [start_date, end_date]
+        + lang_params + [limit]
+    )
 
-    rows = _conn().execute(
-        f"""SELECT video_number, lang, content_mode,
-                   error, updated_at
-            FROM renders
-            WHERE status = 'failed'
-              AND updated_at BETWEEN ? AND ?
-              {lang_filter}
-            ORDER BY updated_at DESC
-            LIMIT ?""",
-        params,
-    ).fetchall()
+    try:
+        rows = _conn().execute(
+            f"""SELECT
+                    video_number, lang,
+                    content_mode,
+                    error, updated_at
+                FROM renders
+                WHERE status = 'failed'
+                  AND updated_at BETWEEN ? AND ?
+                  {lang_filter}
+                ORDER BY updated_at DESC
+                LIMIT ?""",
+            params,
+        ).fetchall()
+    except Exception as e:
+        log.debug("Errors query error: %s", e)
+        return []
 
     return [
         ErrorEntry(
@@ -604,7 +658,9 @@ ERROR_PATTERNS: list[tuple[str, list[str]]] = [
     ("Rate Limit",       ["rate limit", "429"]),
     ("Timeout",          ["timeout"]),
     ("Token/Auth Error", ["token", "401", "403"]),
-    ("WhisperX/STT",     ["whisperx", "whisper", "stable-ts"]),
+    ("WhisperX/STT",     [
+        "whisperx", "whisper", "stable-ts",
+    ]),
     ("Render/FFmpeg",    ["render", "ffmpeg"]),
     ("Facebook",         ["facebook"]),
     ("YouTube",          ["youtube"]),
@@ -628,18 +684,22 @@ def get_error_patterns(
     end_date:   str,
 ) -> dict[str, int]:
     """تحليل أنماط الأخطاء."""
-    rows = _conn().execute(
-        """SELECT error FROM renders
-           WHERE status = 'failed'
-             AND error IS NOT NULL
-             AND updated_at BETWEEN ? AND ?""",
-        (start_date, end_date),
-    ).fetchall()
+    try:
+        rows = _conn().execute(
+            """SELECT error FROM renders
+               WHERE status = 'failed'
+                 AND error IS NOT NULL
+                 AND updated_at BETWEEN ? AND ?""",
+            (start_date, end_date),
+        ).fetchall()
+    except Exception as e:
+        log.debug("Error patterns error: %s", e)
+        return {}
 
     patterns: Counter = Counter()
 
     for row in rows:
-        error = row["error"] or ""
+        error   = row["error"] or ""
         pattern = _classify_error(error)
         patterns[pattern] += 1
 
@@ -656,76 +716,114 @@ def get_duration_stats(
     lang_filter, lang_params = _build_lang_filter(lang)
 
     for mode in MODES:
-        params = [mode, start_date, end_date] + lang_params
+        params = (
+            [mode, start_date, end_date]
+            + lang_params
+        )
 
-        rows = _conn().execute(
-            f"""SELECT duration_s FROM renders
-                WHERE content_mode = ?
-                  AND status = 'done'
-                  AND duration_s > 0
-                  AND updated_at BETWEEN ? AND ?
-                  {lang_filter}""",
-            params,
-        ).fetchall()
+        try:
+            rows = _conn().execute(
+                f"""SELECT duration_s FROM renders
+                    WHERE content_mode = ?
+                      AND status = 'done'
+                      AND duration_s > 0
+                      AND updated_at BETWEEN ? AND ?
+                      {lang_filter}""",
+                params,
+            ).fetchall()
+        except Exception as e:
+            log.debug(
+                "Duration query error: %s", e
+            )
+            rows = []
 
         durations = [
             r["duration_s"] for r in rows
             if r["duration_s"]
         ]
 
-        stats = DurationStats.from_durations(durations)
+        stats = DurationStats.from_durations(
+            durations
+        )
         result[mode] = stats.to_dict()
 
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# REPORT GENERATOR
+# REPORT GENERATOR (try/except per section)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def generate_report(
     period: str = "day",
     lang:   str = "all",
 ) -> dict:
-    """توليد التقرير الكامل."""
+    """توليد التقرير الكامل (crash-safe)."""
     start_date, end_date = _get_date_range(period)
 
-    return {
-        "period":         period,
-        "label":          _get_period_label(period),
-        "lang":           lang,
-        "start_date":     start_date,
-        "end_date":       end_date,
-        "generated":      datetime.now().isoformat(),
+    report = {
+        "period":     period,
+        "label":      _get_period_label(period),
+        "lang":       lang,
+        "start_date": start_date,
+        "end_date":   end_date,
+        "generated":  datetime.now(
+            timezone.utc
+        ).isoformat(),
+        "errors":     [],
+    }
 
-        "overview":       get_overview(
-            start_date, end_date, lang,
+    # Sections with try/except
+    sections = {
+        "overview": lambda: get_overview(
+            start_date, end_date, lang
         ),
-        "by_language":    get_by_language(
-            start_date, end_date,
+        "by_language": lambda: get_by_language(
+            start_date, end_date
         ),
-        "by_mode":        get_by_mode(
-            start_date, end_date, lang,
+        "by_mode": lambda: get_by_mode(
+            start_date, end_date, lang
         ),
-        "by_platform":    get_by_platform(
-            start_date, end_date, lang,
+        "by_platform": lambda: get_by_platform(
+            start_date, end_date, lang
         ),
-        "by_hour":        get_by_hour(
-            start_date, end_date, lang,
+        "by_hour": lambda: get_by_hour(
+            start_date, end_date, lang
         ),
-        "top_tags":       get_top_tags(
-            start_date, end_date, lang,
+        "top_tags": lambda: get_top_tags(
+            start_date, end_date, lang
         ),
-        "recent_errors":  get_errors(
-            start_date, end_date, lang,
+        "recent_errors": lambda: get_errors(
+            start_date, end_date, lang
         ),
-        "error_patterns": get_error_patterns(
-            start_date, end_date,
+        "error_patterns": lambda: (
+            get_error_patterns(
+                start_date, end_date
+            )
         ),
-        "duration_stats": get_duration_stats(
-            start_date, end_date, lang,
+        "duration_stats": lambda: (
+            get_duration_stats(
+                start_date, end_date, lang
+            )
         ),
     }
+
+    for key, func in sections.items():
+        try:
+            report[key] = func()
+        except Exception as e:
+            log.warning(
+                "  ⚠️  %s failed: %s", key, e
+            )
+            report[key] = (
+                {} if key != "recent_errors"
+                else []
+            )
+            report["errors"].append(
+                f"{key}: {str(e)[:100]}"
+            )
+
+    return report
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -743,24 +841,33 @@ def _section_header(
     ]
 
 
-def _build_console_overview(overview: dict) -> list[str]:
+def _build_console_overview(
+    overview: dict,
+) -> list[str]:
     """بناء قسم Overview."""
-    lines = _section_header("📈 Production Overview")
+    lines = _section_header(
+        "📈 Production Overview"
+    )
 
     lines.append(
-        f"     Total Published : {overview['total_published']}"
+        f"     Total Published : "
+        f"{overview.get('total_published', 0)}"
     )
     lines.append(
-        f"     Unique Videos   : {overview['unique_videos']}"
+        f"     Unique Videos   : "
+        f"{overview.get('unique_videos', 0)}"
     )
     lines.append(
-        f"     Total Rendered  : {overview['total_rendered']}"
+        f"     Total Rendered  : "
+        f"{overview.get('total_rendered', 0)}"
     )
     lines.append(
-        f"     Failed Renders  : {overview['failed_renders']}"
+        f"     Failed Renders  : "
+        f"{overview.get('failed_renders', 0)}"
     )
     lines.append(
-        f"     Success Rate    : {overview['success_rate']}%"
+        f"     Success Rate    : "
+        f"{overview.get('success_rate', 0)}%"
     )
 
     return lines
@@ -776,9 +883,9 @@ def _build_console_by_language(
         flag = LANG_FLAGS.get(lang, "🌐")
         lines.append(
             f"     {flag} {lang.upper()}: "
-            f"{stats['published']} published | "
-            f"{stats['rendered']} rendered | "
-            f"{stats['success_rate']}% success"
+            f"{stats.get('published', 0)} published | "
+            f"{stats.get('rendered', 0)} rendered | "
+            f"{stats.get('success_rate', 0)}% success"
         )
 
     return lines
@@ -788,14 +895,16 @@ def _build_console_by_mode(
     by_mode: dict,
 ) -> list[str]:
     """بناء قسم By Mode."""
-    lines = _section_header("📹 By Content Type")
+    lines = _section_header(
+        "📹 By Content Type"
+    )
 
     for mode, stats in by_mode.items():
         emoji = MODE_EMOJIS.get(mode, "📹")
         lines.append(
             f"     {emoji} {mode.upper():<6}: "
-            f"{stats['published']} published | "
-            f"{stats['success_rate']}% success"
+            f"{stats.get('published', 0)} published | "
+            f"{stats.get('success_rate', 0)}% success"
         )
 
     return lines
@@ -808,16 +917,24 @@ def _build_console_by_platform(
     lines = _section_header("📤 By Platform")
 
     for platform, stats in by_platform.items():
-        emoji = PLATFORM_EMOJIS.get(platform, "📤")
+        emoji = PLATFORM_EMOJIS.get(
+            platform, "📤"
+        )
         lines.append(
-            f"     {emoji} {platform.title():<10}: "
-            f"{stats['total']} total"
+            f"     {emoji} "
+            f"{platform.title():<10}: "
+            f"{stats.get('total', 0)} total"
         )
 
-        for mode, count in stats["by_mode"].items():
-            mode_emoji = MODE_EMOJIS.get(mode, "📹")
+        for mode, count in stats.get(
+            "by_mode", {}
+        ).items():
+            mode_emoji = MODE_EMOJIS.get(
+                mode, "📹"
+            )
             lines.append(
-                f"        └── {mode_emoji} {mode}: {count}"
+                f"        └── "
+                f"{mode_emoji} {mode}: {count}"
             )
 
     return lines
@@ -826,21 +943,27 @@ def _build_console_by_platform(
 def _build_console_by_hour(
     by_hour: dict,
 ) -> list[str]:
-    """بناء قسم By Hour."""
+    """بناء قسم By Hour (UTC)."""
     if not by_hour:
         return []
 
-    lines = _section_header("⏰ Top Publishing Hours")
+    lines = _section_header(
+        "⏰ Top Publishing Hours (UTC)"
+    )
 
     sorted_hours = sorted(
         by_hour.items(),
-        key     = lambda x: int(x[1]),
+        key     = lambda x: x[1],
         reverse = True,
     )[:DEFAULT_TOP_HOURS_LIMIT]
 
     for hour, count in sorted_hours:
-        bar = "█" * min(count, MAX_BAR_LENGTH)
-        lines.append(f"     {hour}:00 │ {bar} {count}")
+        bar = "█" * min(
+            count, MAX_BAR_LENGTH
+        )
+        lines.append(
+            f"     {hour}:00 │ {bar} {count}"
+        )
 
     return lines
 
@@ -852,13 +975,19 @@ def _build_console_top_tags(
     if not top_tags:
         return []
 
-    lines = _section_header("🏷️  Top Tags Used")
+    lines = _section_header(
+        "🏷️  Top Tags Used"
+    )
     max_count = max(top_tags.values())
 
     for tag, count in top_tags.items():
-        bar_len = int((count / max_count) * TAG_BAR_LENGTH)
-        bar     = "█" * bar_len
-        lines.append(f"     {tag:<14} {bar} {count}")
+        bar_len = int(
+            (count / max_count) * TAG_BAR_LENGTH
+        ) if max_count > 0 else 0
+        bar = "█" * bar_len
+        lines.append(
+            f"     {tag:<14} {bar} {count}"
+        )
 
     return lines
 
@@ -867,20 +996,22 @@ def _build_console_duration_stats(
     duration_stats: dict,
 ) -> list[str]:
     """بناء قسم Duration Stats."""
-    lines = _section_header("⏱️  Duration Statistics")
+    lines = _section_header(
+        "⏱️  Duration Statistics"
+    )
 
     for mode, stats in duration_stats.items():
-        if stats["count"] == 0:
+        if stats.get("count", 0) == 0:
             continue
 
         emoji   = MODE_EMOJIS.get(mode, "📹")
-        avg_min = stats["avg"] / 60
+        avg_min = stats.get("avg", 0) / 60
 
         lines.append(
             f"     {emoji} {mode.upper():<6}: "
-            f"{stats['count']} videos | "
+            f"{stats.get('count', 0)} videos | "
             f"avg {avg_min:.1f}min | "
-            f"total {stats['total_hours']}h"
+            f"total {stats.get('total_hours', 0)}h"
         )
 
     return lines
@@ -893,10 +1024,14 @@ def _build_console_error_patterns(
     if not error_patterns:
         return []
 
-    lines = _section_header("⚠️  Error Patterns")
+    lines = _section_header(
+        "⚠️  Error Patterns"
+    )
 
     for pattern, count in error_patterns.items():
-        lines.append(f"     {pattern:<20}: {count}x")
+        lines.append(
+            f"     {pattern:<20}: {count}x"
+        )
 
     return lines
 
@@ -909,68 +1044,102 @@ def _build_console_recent_errors(
         return []
 
     lines = _section_header(
-        f"❌ Recent Errors (last {DEFAULT_RECENT_ERRORS})"
+        f"❌ Recent Errors "
+        f"(last {DEFAULT_RECENT_ERRORS})"
     )
 
-    for err in recent_errors[:DEFAULT_RECENT_ERRORS]:
-        flag       = LANG_FLAGS.get(err["lang"], "🌐")
+    for err in recent_errors[
+        :DEFAULT_RECENT_ERRORS
+    ]:
+        flag = LANG_FLAGS.get(
+            err.get("lang", ""), "🌐"
+        )
         mode_emoji = MODE_EMOJIS.get(
-            err["content_mode"], "📹"
+            err.get("content_mode", ""), "📹"
         )
 
         lines.append(
-            f"     #{err['video_number']} "
+            f"     #{err.get('video_number', '?')} "
             f"{flag} {mode_emoji} "
-            f"{err['date'][:16]}"
+            f"{err.get('date', '')[:16]}"
         )
 
-        error_msg = (err["error"] or "")[:60]
-        lines.append(f"        └── {error_msg}")
+        error_msg = (
+            err.get("error", "") or ""
+        )[:60]
+        lines.append(
+            f"        └── {error_msg}"
+        )
 
     return lines
 
 
 def build_console_report(report: dict) -> str:
-    """بناء تقرير مفصل للـ console."""
+    """بناء تقرير console."""
     sep = "═" * SUMMARY_WIDTH
     lines = ["\n" + sep]
 
     # Header
     lines.append(
-        f"  📊 Analytics Report — {report['label']}"
+        f"  📊 Analytics Report — "
+        f"{report['label']}"
     )
     lines.append(
-        f"  📅 {report['start_date']} → {report['end_date']}"
+        f"  📅 {report['start_date']} → "
+        f"{report['end_date']} (UTC)"
     )
 
     if report["lang"] != "all":
-        flag = LANG_FLAGS.get(report["lang"], "🌐")
+        flag = LANG_FLAGS.get(
+            report["lang"], "🌐"
+        )
         lines.append(
-            f"  🌐 Language: {flag} {report['lang'].upper()}"
+            f"  🌐 Language: {flag} "
+            f"{report['lang'].upper()}"
         )
 
     lines.append(sep)
 
-    # Sections
-    lines.extend(_build_console_overview(report["overview"]))
+    # Sections (safe access)
+    lines.extend(_build_console_overview(
+        report.get("overview", {})
+    ))
+    lines.extend(_build_console_by_language(
+        report.get("by_language", {})
+    ))
+    lines.extend(_build_console_by_mode(
+        report.get("by_mode", {})
+    ))
+    lines.extend(_build_console_by_platform(
+        report.get("by_platform", {})
+    ))
+    lines.extend(_build_console_by_hour(
+        report.get("by_hour", {})
+    ))
+    lines.extend(_build_console_top_tags(
+        report.get("top_tags", {})
+    ))
+    lines.extend(_build_console_duration_stats(
+        report.get("duration_stats", {})
+    ))
     lines.extend(
-        _build_console_by_language(report["by_language"])
-    )
-    lines.extend(_build_console_by_mode(report["by_mode"]))
-    lines.extend(
-        _build_console_by_platform(report["by_platform"])
-    )
-    lines.extend(_build_console_by_hour(report["by_hour"]))
-    lines.extend(_build_console_top_tags(report["top_tags"]))
-    lines.extend(
-        _build_console_duration_stats(report["duration_stats"])
+        _build_console_error_patterns(
+            report.get("error_patterns", {})
+        )
     )
     lines.extend(
-        _build_console_error_patterns(report["error_patterns"])
+        _build_console_recent_errors(
+            report.get("recent_errors", [])
+        )
     )
-    lines.extend(
-        _build_console_recent_errors(report["recent_errors"])
-    )
+
+    # Show generation errors
+    if report.get("errors"):
+        lines.append(
+            "\n  ⚠️  Generation Errors:"
+        )
+        for err in report["errors"]:
+            lines.append(f"     - {err}")
 
     lines.append("\n" + sep + "\n")
     return "\n".join(lines)
@@ -980,66 +1149,89 @@ def build_console_report(report: dict) -> str:
 # WHATSAPP REPORT
 # ═════════════════════════════════════════════════════════════════════════════
 
-def build_whatsapp_report(report: dict) -> str:
+def build_whatsapp_report(
+    report: dict,
+) -> str:
     """تقرير مختصر للـ WhatsApp."""
     lines    = []
-    overview = report["overview"]
+    overview = report.get("overview", {})
 
-    # Header
-    lines.append(f"📊 Analytics — {report['label']}\n")
-
-    # Overview
     lines.append(
-        f"📈 {overview['total_published']} published | "
-        f"{overview['success_rate']}% success"
+        f"📊 Analytics — {report['label']}\n"
+    )
+
+    lines.append(
+        f"📈 "
+        f"{overview.get('total_published', 0)} "
+        f"published | "
+        f"{overview.get('success_rate', 0)}% success"
     )
     lines.append("")
 
     # By Language
     lines.append("🌍 By Language:")
-    for lang, stats in report["by_language"].items():
+    for lang, stats in report.get(
+        "by_language", {}
+    ).items():
         flag = LANG_FLAGS.get(lang, "🌐")
         lines.append(
-            f"{flag} {lang.upper()}: {stats['published']}"
+            f"{flag} {lang.upper()}: "
+            f"{stats.get('published', 0)}"
         )
     lines.append("")
 
     # By Mode
     lines.append("📹 By Type:")
-    for mode, stats in report["by_mode"].items():
+    for mode, stats in report.get(
+        "by_mode", {}
+    ).items():
         emoji = MODE_EMOJIS.get(mode, "📹")
         lines.append(
-            f"{emoji} {mode}: {stats['published']}"
+            f"{emoji} {mode}: "
+            f"{stats.get('published', 0)}"
         )
     lines.append("")
 
     # By Platform
     lines.append("📤 By Platform:")
-    for platform, stats in report["by_platform"].items():
-        emoji = PLATFORM_EMOJIS.get(platform, "📤")
+    for platform, stats in report.get(
+        "by_platform", {}
+    ).items():
+        emoji = PLATFORM_EMOJIS.get(
+            platform, "📤"
+        )
         lines.append(
-            f"{emoji} {platform}: {stats['total']}"
+            f"{emoji} {platform}: "
+            f"{stats.get('total', 0)}"
         )
 
     # Top Tags
-    if report["top_tags"]:
+    top_tags = report.get("top_tags", {})
+    if top_tags:
         lines.append("\n🏷️ Top Tags:")
-        for tag, count in list(report["top_tags"].items())[:5]:
+        for tag, count in list(
+            top_tags.items()
+        )[:5]:
             lines.append(f"  {tag}: {count}")
 
     # Errors
-    if report["error_patterns"]:
+    error_patterns = report.get(
+        "error_patterns", {}
+    )
+    if error_patterns:
         lines.append("\n⚠️ Errors:")
         for pattern, count in list(
-            report["error_patterns"].items()
+            error_patterns.items()
         )[:3]:
-            lines.append(f"  {pattern}: {count}x")
+            lines.append(
+                f"  {pattern}: {count}x"
+            )
 
     return "\n".join(lines)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# HTML REPORT
+# HTML REPORT (with XSS protection)
 # ═════════════════════════════════════════════════════════════════════════════
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -1097,7 +1289,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     .bar {{
       display: inline-block;
       height: 20px;
-      background: linear-gradient(90deg, #007aff, #5ac8fa);
+      background: linear-gradient(
+          90deg, #007aff, #5ac8fa
+      );
       border-radius: 4px;
       vertical-align: middle;
     }}
@@ -1110,7 +1304,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   <h1>📊 Analytics Report</h1>
   <p>
     <strong>{label}</strong> |
-    {start_date} → {end_date}
+    {start_date} → {end_date} (UTC)
   </p>
 
   {body}
@@ -1119,32 +1313,48 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def _build_html_overview(overview: dict) -> str:
+def _build_html_overview(
+    overview: dict,
+) -> str:
     """بناء قسم Overview HTML."""
     return f"""
   <div class="card">
     <h2>📈 Overview</h2>
     <div class="stat">
-      <div class="stat-value">{overview['total_published']}</div>
-      <div class="stat-label">Total Published</div>
+      <div class="stat-value">
+        {overview.get('total_published', 0)}
+      </div>
+      <div class="stat-label">
+        Total Published
+      </div>
     </div>
     <div class="stat">
-      <div class="stat-value">{overview['total_rendered']}</div>
+      <div class="stat-value">
+        {overview.get('total_rendered', 0)}
+      </div>
       <div class="stat-label">Rendered</div>
     </div>
     <div class="stat">
-      <div class="stat-value success">{overview['success_rate']}%</div>
-      <div class="stat-label">Success Rate</div>
+      <div class="stat-value success">
+        {overview.get('success_rate', 0)}%
+      </div>
+      <div class="stat-label">
+        Success Rate
+      </div>
     </div>
     <div class="stat">
-      <div class="stat-value error">{overview['failed_renders']}</div>
+      <div class="stat-value error">
+        {overview.get('failed_renders', 0)}
+      </div>
       <div class="stat-label">Failed</div>
     </div>
   </div>
 """
 
 
-def _build_html_by_language(by_language: dict) -> str:
+def _build_html_by_language(
+    by_language: dict,
+) -> str:
     """بناء قسم By Language HTML."""
     html = """
   <div class="card">
@@ -1162,10 +1372,15 @@ def _build_html_by_language(by_language: dict) -> str:
         flag = LANG_FLAGS.get(lang, "🌐")
         html += f"""
       <tr>
-        <td>{flag} {lang.upper()}</td>
-        <td>{stats['published']}</td>
-        <td>{stats['rendered']}</td>
-        <td class="success">{stats['success_rate']}%</td>
+        <td>
+          {flag}
+          {html_module.escape(lang.upper())}
+        </td>
+        <td>{stats.get('published', 0)}</td>
+        <td>{stats.get('rendered', 0)}</td>
+        <td class="success">
+          {stats.get('success_rate', 0)}%
+        </td>
       </tr>
 """
 
@@ -1173,7 +1388,9 @@ def _build_html_by_language(by_language: dict) -> str:
     return html
 
 
-def _build_html_by_platform(by_platform: dict) -> str:
+def _build_html_by_platform(
+    by_platform: dict,
+) -> str:
     """بناء قسم By Platform HTML."""
     html = """
   <div class="card">
@@ -1183,11 +1400,18 @@ def _build_html_by_platform(by_platform: dict) -> str:
 """
 
     for platform, stats in by_platform.items():
-        emoji = PLATFORM_EMOJIS.get(platform, "📤")
+        emoji = PLATFORM_EMOJIS.get(
+            platform, "📤"
+        )
         html += f"""
       <tr>
-        <td>{emoji} {platform.title()}</td>
-        <td>{stats['total']}</td>
+        <td>
+          {emoji}
+          {html_module.escape(
+              platform.title()
+          )}
+        </td>
+        <td>{stats.get('total', 0)}</td>
       </tr>
 """
 
@@ -1195,7 +1419,9 @@ def _build_html_by_platform(by_platform: dict) -> str:
     return html
 
 
-def _build_html_top_tags(top_tags: dict) -> str:
+def _build_html_top_tags(
+    top_tags: dict,
+) -> str:
     """بناء قسم Top Tags HTML."""
     if not top_tags:
         return ""
@@ -1208,12 +1434,23 @@ def _build_html_top_tags(top_tags: dict) -> str:
 
     max_count = max(top_tags.values())
     for tag, count in top_tags.items():
-        width = int((count / max_count) * 300)
+        # Avoid division by zero
+        width = (
+            int((count / max_count) * 300)
+            if max_count > 0
+            else 0
+        )
         html += f"""
       <tr>
-        <td><strong>{tag}</strong></td>
         <td>
-          <div class="bar" style="width:{width}px"></div>
+          <strong>
+            {html_module.escape(tag)}
+          </strong>
+        </td>
+        <td>
+          <div class="bar"
+               style="width:{width}px">
+          </div>
           {count}
         </td>
       </tr>
@@ -1224,17 +1461,32 @@ def _build_html_top_tags(top_tags: dict) -> str:
 
 
 def build_html_report(report: dict) -> str:
-    """تقرير HTML أنيق."""
+    """تقرير HTML (مع XSS protection)."""
     body  = ""
-    body += _build_html_overview(report["overview"])
-    body += _build_html_by_language(report["by_language"])
-    body += _build_html_by_platform(report["by_platform"])
-    body += _build_html_top_tags(report["top_tags"])
+    body += _build_html_overview(
+        report.get("overview", {})
+    )
+    body += _build_html_by_language(
+        report.get("by_language", {})
+    )
+    body += _build_html_by_platform(
+        report.get("by_platform", {})
+    )
+    body += _build_html_top_tags(
+        report.get("top_tags", {})
+    )
 
+    # HTML escape for safety
     return HTML_TEMPLATE.format(
-        label      = report["label"],
-        start_date = report["start_date"],
-        end_date   = report["end_date"],
+        label      = html_module.escape(
+            report["label"]
+        ),
+        start_date = html_module.escape(
+            report["start_date"]
+        ),
+        end_date   = html_module.escape(
+            report["end_date"]
+        ),
         body       = body,
     )
 
@@ -1249,7 +1501,9 @@ def _format_output(
 ) -> str:
     """تنسيق التقرير حسب الـ format."""
     if fmt == OutputFormat.JSON.value:
-        return json.dumps(report, indent=2, default=str)
+        return json.dumps(
+            report, indent=2, default=str
+        )
 
     if fmt == OutputFormat.HTML.value:
         return build_html_report(report)
@@ -1263,13 +1517,19 @@ def _save_report(
 ) -> None:
     """حفظ التقرير في ملف."""
     save_path = Path(path).resolve()
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    save_path.write_text(output, encoding="utf-8")
+    save_path.parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    save_path.write_text(
+        output, encoding="utf-8"
+    )
 
-    log.info(f"\n  💾 Saved to: {save_path}")
+    log.info("\n  💾 Saved to: %s", save_path)
 
 
-def _send_whatsapp_notification(report: dict) -> None:
+def _send_whatsapp_notification(
+    report: dict,
+) -> None:
     """إرسال التقرير عبر WhatsApp."""
     whatsapp_msg = build_whatsapp_report(report)
     notify_info(whatsapp_msg, skip_rate=True)
@@ -1282,29 +1542,42 @@ def _send_whatsapp_notification(report: dict) -> None:
 
 def main() -> None:
     """نقطة الدخول الرئيسية."""
+    # Logging — entry point only
+    logging.basicConfig(
+        level   = logging.INFO,
+        format  = (
+            "%(asctime)s | %(levelname)-8s | "
+            "%(message)s"
+        ),
+        datefmt = "%H:%M:%S",
+    )
+
     args = parse_args()
     init_db()
 
     log.info(
-        f"\n  📊 Generating analytics report "
-        f"({args.period})..."
+        "\n  📊 Generating analytics report "
+        "(%s)...",
+        args.period
     )
 
-    # توليد التقرير
+    # Generate report
     report = generate_report(
         period = args.period,
         lang   = args.lang,
     )
 
-    # تنسيق + طباعة
-    output = _format_output(report, args.format)
+    # Format + print
+    output = _format_output(
+        report, args.format
+    )
     print(output)
 
-    # حفظ
+    # Save
     if args.save:
         _save_report(output, args.save)
 
-    # إشعار
+    # Notify
     if args.notify:
         _send_whatsapp_notification(report)
 
