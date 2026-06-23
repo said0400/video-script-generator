@@ -1,986 +1,775 @@
 """
-🏥 System Health Check
+📱 Notification System v2.0 — Final Production Edition
 
-Daily checks:
-  ✅ Database integrity & size
-  ✅ API Keys (Gemini, Groq, Pexels, Pixabay)
-  ✅ Platform Tokens (YouTube, Facebook)
-  ✅ Storage directories
-  ✅ Today's publishing status
-  ✅ Disk usage
+Channels (priority order):
+  1. WhatsApp via Green-API (primary)
+  2. Telegram Bot (backup)
+  3. Console log (always)
+  4. Log file (always)
 
 Features:
-  ✅ WhatsApp notifications
-  ✅ Urgent alerts on critical errors
-  ✅ JSON & Console output formats
-  ✅ Granular check selection
+  ✅ Multi-channel delivery
+  ✅ Rate limiting (5 min per identical message)
+  ✅ Auto-cleanup of old rate limits
+  ✅ Rich notification templates
+  ✅ Telegram plain text by default (safe from injection)
+  ✅ Per-level logging (error/warning/info)
+  ✅ Smart final notification (errors vs success)
+  ✅ Rate limit: no file write when rate-limited
+  ✅ %s logging (no f-string)
 """
 
 from __future__ import annotations
 
-import argparse
+import hashlib
 import json
 import logging
 import os
-import shutil
-import sys
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Optional
 
 import requests
 
-from db import _conn, init_db
-from notifier import (
-    notify_error,
-    notify_info,
-    notify_token_expired,
-    notify_token_warning,
-    notify_warning,
-)
-from token_manager import (
-    check_facebook_token,
-    check_youtube_token,
-)
+log = logging.getLogger(__name__)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Paths
-BASE_DIR = Path(__file__).parent.resolve()
-DB_PATH  = BASE_DIR / "vsg.db"
+BASE_DIR        = Path(__file__).parent.resolve()
+NOTIFY_LOG      = BASE_DIR / "notifications.log"
+RATE_LIMIT_FILE = BASE_DIR / ".notify_rate_limit.json"
 
-# Supported values
-LANGS = ("ar", "fr", "en")
-MODES = ("short", "long")
-
-# Thresholds
-DB_MAX_SIZE_MB        = 500
-DB_WARNING_SIZE_MB    = 200
-DISK_WARNING_PERCENT  = 85
-DISK_CRITICAL_PERCENT = 95
-PUBLISH_WARNING_HOURS = 12
-OUTPUT_WARNING_GB     = 5
-HIGH_FAILED_RENDERS   = 10
-
-# API Key counting
-MAX_GEMINI_KEYS  = 50
-MAX_OTHER_KEYS   = 10
-MIN_GEMINI_KEYS  = 5
+# Rate limiting
+RATE_LIMIT_SECONDS  = 300       # 5 minutes
+CLEANUP_MULTIPLIER  = 2         # cleanup older than 10 minutes
+MESSAGE_HASH_LENGTH = 200       # text length for hash
 
 # Timeouts
-API_TEST_TIMEOUT = 10
+WHATSAPP_TIMEOUT = 15
+TELEGRAM_TIMEOUT = 15
 
-# Display
-SUMMARY_WIDTH = 65
-SECTION_WIDTH = 50
-
-# Required structure
-REQUIRED_DIRS: dict[str, str] = {
-    "assets/music":    "Music files",
-    "assets/videos":   "Local videos",
-    "sfx/swoosh":      "Swoosh SFX",
-    "sfx/whoosh":      "Whoosh SFX",
-    "sfx/smart":       "Smart SFX",
-    "sfx/transitions": "Transition SFX",
-    "scripts":         "Scripts",
-}
-
-REQUIRED_SCRIPTS: list[str] = [
-    "scripts/videos_ar.xlsx",
-    "scripts/videos_fr.xlsx",
-    "scripts/videos_en.xlsx",
-    "scripts/videos_ar_long.xlsx",
-    "scripts/videos_fr_long.xlsx",
-    "scripts/videos_en_long.xlsx",
-]
-
-# Output folders to monitor
-MONITORED_OUTPUT_DIRS = ("output", "output_long")
-
-# Logging
-logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(message)s",
-)
-log = logging.getLogger(__name__)
+# API URLs
+GREEN_API_BASE    = "https://api.green-api.com"
+TELEGRAM_API_BASE = "https://api.telegram.org"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ENUMS & DATA CLASSES
 # ═════════════════════════════════════════════════════════════════════════════
 
-class CheckStatus(str, Enum):
-    """حالة الفحص."""
-    HEALTHY = "healthy"
+class NotificationLevel(str, Enum):
+    """مستويات الإشعارات."""
+    SUCCESS = "success"
     WARNING = "warning"
     ERROR   = "error"
-    UNKNOWN = "unknown"
+    INFO    = "info"
 
 
-@dataclass
-class CheckResult:
-    """نتيجة فحص واحد."""
-    name:     str
-    status:   str            = CheckStatus.UNKNOWN
-    checks:   list[str]      = field(default_factory=list)
-    warnings: list[str]      = field(default_factory=list)
-    errors:   list[str]      = field(default_factory=list)
-    stats:    dict[str, Any] = field(default_factory=dict)
+# Emojis per level
+LEVEL_EMOJIS: dict[str, str] = {
+    NotificationLevel.SUCCESS.value: "✅",
+    NotificationLevel.WARNING.value: "⚠️",
+    NotificationLevel.ERROR.value:   "❌",
+    NotificationLevel.INFO.value:    "ℹ️",
+}
 
-    def finalize_status(self) -> None:
-        """تحديد الحالة النهائية بناءً على errors/warnings."""
-        if self.errors:
-            self.status = CheckStatus.ERROR
-        elif self.warnings:
-            self.status = CheckStatus.WARNING
-        else:
-            self.status = CheckStatus.HEALTHY
+# Emojis for platforms and languages
+LANG_FLAGS: dict[str, str] = {
+    "ar": "🇸🇦",
+    "fr": "🇫🇷",
+    "en": "🇺🇸",
+}
 
-    def to_dict(self) -> dict:
-        return {
-            "name":     self.name,
-            "status":   self.status,
-            "checks":   self.checks,
-            "warnings": self.warnings,
-            "errors":   self.errors,
-            "stats":    self.stats,
-        }
+PLATFORM_EMOJIS: dict[str, str] = {
+    "facebook": "📘",
+    "youtube":  "📺",
+}
 
-
-# Status emojis
-STATUS_EMOJIS: dict[str, str] = {
-    CheckStatus.HEALTHY: "✅",
-    CheckStatus.WARNING: "⚠️",
-    CheckStatus.ERROR:   "❌",
-    CheckStatus.UNKNOWN: "❓",
+MODE_EMOJIS: dict[str, str] = {
+    "short": "⚡",
+    "long":  "🎬",
 }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# CLI
-# ═════════════════════════════════════════════════════════════════════════════
+@dataclass
+class WhatsAppCreds:
+    """WhatsApp Green-API credentials."""
+    instance_id: str
+    api_token:   str
+    phone:       str
 
-CHECK_CHOICES = (
-    "all",
-    "database",
-    "api_keys",
-    "tokens",
-    "storage",
-    "publishing",
-    "disk",
-)
+    def is_valid(self) -> bool:
+        return bool(self.instance_id and self.api_token)
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments."""
-    p = argparse.ArgumentParser(
-        description = "🏥 System Health Check",
-    )
+@dataclass
+class TelegramCreds:
+    """Telegram Bot credentials."""
+    bot_token: str
+    chat_id:   str
 
-    p.add_argument(
-        "--check",
-        type    = str,
-        default = "all",
-        choices = CHECK_CHOICES,
-        help    = "ما الذي تريد فحصه",
-    )
-
-    p.add_argument(
-        "--format",
-        type    = str,
-        default = "console",
-        choices = ["console", "json"],
-    )
-
-    p.add_argument(
-        "--notify",
-        action = "store_true",
-        help   = "إرسال التقرير عبر WhatsApp",
-    )
-
-    p.add_argument(
-        "--no-fail",
-        action = "store_true",
-        help   = "لا يخرج بـ exit code 1 حتى عند الأخطاء",
-    )
-
-    return p.parse_args()
+    def is_valid(self) -> bool:
+        return bool(self.bot_token and self.chat_id)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CHECK 1: DATABASE
+# HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _check_db_size(result: CheckResult) -> bool:
-    """فحص حجم DB. يرجع False إذا فشل (يجب التوقف)."""
-    if not DB_PATH.exists():
-        result.errors.append("DB file not found")
+def _get_lang_flag(lang: str) -> str:
+    """جلب علم اللغة."""
+    return LANG_FLAGS.get(lang, "🌐")
+
+
+def _get_platform_emoji(platform: str) -> str:
+    """جلب emoji المنصة."""
+    return PLATFORM_EMOJIS.get(platform, "📤")
+
+
+def _get_mode_emoji(mode: str) -> str:
+    """جلب emoji نوع المحتوى."""
+    return MODE_EMOJIS.get(mode, "📹")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RATE LIMITING
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _hash_message(message: str) -> str:
+    """بناء hash للرسالة لمنع التكرار."""
+    text = message[:MESSAGE_HASH_LENGTH]
+    return hashlib.sha256(
+        text.encode()
+    ).hexdigest()[:16]
+
+
+def _load_rate_limits() -> dict:
+    """تحميل rate limits من الملف."""
+    if not RATE_LIMIT_FILE.exists():
+        return {}
+
+    try:
+        return json.loads(
+            RATE_LIMIT_FILE.read_text(encoding="utf-8")
+        )
+    except Exception:
+        return {}
+
+
+def _save_rate_limits(data: dict) -> None:
+    """حفظ rate limits في الملف."""
+    try:
+        RATE_LIMIT_FILE.write_text(
+            json.dumps(data, indent=2),
+            encoding = "utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _cleanup_old_limits(
+    limits: dict,
+    now:    float,
+) -> dict:
+    """تنظيف الإدخالات القديمة."""
+    cutoff = RATE_LIMIT_SECONDS * CLEANUP_MULTIPLIER
+    return {
+        k: v
+        for k, v in limits.items()
+        if (now - v) < cutoff
+    }
+
+
+def _is_rate_limited(message_hash: str) -> bool:
+    """
+    التحقق إذا كانت الرسالة أُرسلت مؤخراً.
+
+    Only updates file when message is NOT rate-limited
+    (saves disk I/O on repeated calls).
+
+    Returns:
+        True if rate-limited (don't send)
+        False if OK to send
+    """
+    limits    = _load_rate_limits()
+    last_sent = limits.get(message_hash, 0)
+    now       = time.time()
+
+    # Rate-limited: don't update file, just return
+    if (now - last_sent) < RATE_LIMIT_SECONDS:
+        return True
+
+    # Not rate-limited: update + cleanup + save
+    cleaned = _cleanup_old_limits(limits, now)
+    cleaned[message_hash] = now
+    _save_rate_limits(cleaned)
+
+    return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WHATSAPP (Green-API)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _get_whatsapp_creds() -> WhatsAppCreds:
+    """جلب WhatsApp credentials من البيئة."""
+    return WhatsAppCreds(
+        instance_id = os.environ.get(
+            "GREEN_API_INSTANCE_ID", ""
+        ).strip(),
+        api_token = os.environ.get(
+            "GREEN_API_TOKEN", ""
+        ).strip(),
+        phone = os.environ.get(
+            "WHATSAPP_PHONE_NUMBER", ""
+        ).strip(),
+    )
+
+
+def _build_whatsapp_chat_id(phone: str) -> str:
+    """
+    بناء chat ID لـ Green-API.
+
+    Format: 212786850913@c.us
+    """
+    return f"{phone}@c.us"
+
+
+def _build_whatsapp_url(
+    instance_id: str,
+    api_token:   str,
+) -> str:
+    """بناء URL لـ Green-API."""
+    return (
+        f"{GREEN_API_BASE}/waInstance{instance_id}"
+        f"/sendMessage/{api_token}"
+    )
+
+
+def send_whatsapp(
+    message: str,
+    phone:   str = "",
+) -> bool:
+    """
+    إرسال رسالة WhatsApp عبر Green-API.
+
+    Args:
+        message: نص الرسالة
+        phone:   رقم الهاتف (بدون +، مع كود الدولة)
+                 مثال: "212786850913"
+                 إذا فارغ، يستخدم WHATSAPP_PHONE_NUMBER
+
+    Returns:
+        True إذا نجح الإرسال
+    """
+    creds = _get_whatsapp_creds()
+
+    if not creds.is_valid():
         return False
 
-    size_mb = DB_PATH.stat().st_size / 1_048_576
-    result.checks.append(f"Size: {size_mb:.1f} MB")
+    # Phone from parameter or env
+    target_phone = phone or creds.phone
+    if not target_phone:
+        log.warning("  ⚠️  WhatsApp: No phone number set")
+        return False
 
-    if size_mb > DB_MAX_SIZE_MB:
-        result.errors.append(
-            f"DB too large: {size_mb:.0f} MB "
-            f"(max {DB_MAX_SIZE_MB} MB)"
-        )
-    elif size_mb > DB_WARNING_SIZE_MB:
-        result.warnings.append(
-            f"DB getting large: {size_mb:.0f} MB"
-        )
-
-    return True
-
-
-def _check_db_stats(result: CheckResult) -> None:
-    """فحص إحصائيات DB."""
-    init_db()
-    c = _conn()
-
-    # عدد الجداول
-    tables = c.execute(
-        "SELECT name FROM sqlite_master "
-        "WHERE type='table'"
-    ).fetchall()
-    result.checks.append(f"Tables: {len(tables)}")
-
-    # إحصائيات
-    queries = [
-        ("Used videos",   "SELECT COUNT(*) FROM used_videos"),
-        ("Renders done",  "SELECT COUNT(*) FROM renders WHERE status='done'"),
-        ("Renders failed", "SELECT COUNT(*) FROM renders WHERE status='failed'"),
-        ("AI cached",     "SELECT COUNT(*) FROM ai_cache"),
-        ("Published",     "SELECT COUNT(*) FROM publish_tracker"),
-    ]
-
-    for label, query in queries:
-        count = c.execute(query).fetchone()[0]
-        result.checks.append(f"{label}: {count}")
-
-        # تحذير على failed renders
-        if label == "Renders failed" and count > HIGH_FAILED_RENDERS:
-            result.warnings.append(
-                f"High failed renders: {count}"
-            )
-
-
-def check_database() -> CheckResult:
-    """فحص صحة قاعدة البيانات."""
-    result = CheckResult(name="Database")
-
-    if not _check_db_size(result):
-        result.finalize_status()
-        return result
+    chat_id = _build_whatsapp_chat_id(target_phone)
+    url     = _build_whatsapp_url(
+        creds.instance_id, creds.api_token,
+    )
 
     try:
-        _check_db_stats(result)
-    except Exception as e:
-        result.errors.append(f"DB read error: {str(e)[:100]}")
-
-    result.finalize_status()
-    return result
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# CHECK 2: API KEYS
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _count_keys(prefix: str, max_n: int = 50) -> int:
-    """يحسب عدد المفاتيح المتاحة لخدمة معينة."""
-    count = 0
-
-    if os.environ.get(prefix, "").strip():
-        count += 1
-
-    for i in range(1, max_n + 1):
-        if os.environ.get(f"{prefix}_{i}", "").strip():
-            count += 1
-
-    return count
-
-
-def _test_api(
-    url:     str,
-    headers: Optional[dict] = None,
-) -> bool:
-    """اختبار سريع لـ API."""
-    try:
-        r = requests.get(
+        r = requests.post(
             url,
-            headers = headers or {},
-            timeout = API_TEST_TIMEOUT,
+            json = {
+                "chatId":  chat_id,
+                "message": message,
+            },
+            timeout = WHATSAPP_TIMEOUT,
         )
+
+        if r.status_code == 200:
+            return True
+
+        log.warning(
+            "  ⚠️  WhatsApp failed: %d — %s",
+            r.status_code, r.text[:100]
+        )
+        return False
+
+    except requests.exceptions.Timeout:
+        log.warning("  ⚠️  WhatsApp timeout")
+        return False
+
+    except Exception as e:
+        log.warning("  ⚠️  WhatsApp error: %s", e)
+        return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TELEGRAM
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _get_telegram_creds() -> TelegramCreds:
+    """جلب Telegram credentials من البيئة."""
+    return TelegramCreds(
+        bot_token = os.environ.get(
+            "TELEGRAM_BOT_TOKEN", ""
+        ).strip(),
+        chat_id = os.environ.get(
+            "TELEGRAM_CHAT_ID", ""
+        ).strip(),
+    )
+
+
+def _build_telegram_url(bot_token: str) -> str:
+    """بناء URL لـ Telegram Bot API."""
+    return (
+        f"{TELEGRAM_API_BASE}/bot{bot_token}/sendMessage"
+    )
+
+
+def _escape_html_for_telegram(text: str) -> str:
+    """
+    Escape HTML characters for Telegram safety.
+
+    Telegram allows: <b>, <i>, <code>, <pre>, <a>
+    But arbitrary HTML must be escaped.
+    """
+    if not text:
+        return ""
+
+    return (
+        text
+        .replace("&", "&amp;")   # Must be first!
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def send_telegram(
+    message:    str,
+    parse_mode: str = "",
+) -> bool:
+    """
+    إرسال رسالة Telegram.
+
+    Args:
+        message:    نص الرسالة
+        parse_mode: "" (plain text, safe) | "HTML" | "MarkdownV2"
+                    Default: "" (no parsing — safe from injection)
+
+    Returns:
+        True إذا نجح الإرسال
+    """
+    creds = _get_telegram_creds()
+
+    if not creds.is_valid():
+        return False
+
+    url = _build_telegram_url(creds.bot_token)
+
+    # Build safe payload
+    payload = {
+        "chat_id": creds.chat_id,
+        "text":    message,
+    }
+
+    # HTML parse_mode only if explicitly requested
+    if parse_mode == "HTML":
+        payload["parse_mode"] = "HTML"
+    elif parse_mode == "MarkdownV2":
+        payload["parse_mode"] = "MarkdownV2"
+
+    try:
+        r = requests.post(
+            url,
+            json    = payload,
+            timeout = TELEGRAM_TIMEOUT,
+        )
+
         return r.status_code == 200
+
     except Exception:
         return False
 
 
-def _test_gemini() -> bool:
-    """اختبار Gemini API."""
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not key:
-        return False
+# ═════════════════════════════════════════════════════════════════════════════
+# LOG FILE
+# ═════════════════════════════════════════════════════════════════════════════
 
-    url = (
-        f"https://generativelanguage.googleapis.com"
-        f"/v1beta/models?key={key}"
-    )
-    return _test_api(url)
-
-
-def _test_groq() -> bool:
-    """اختبار Groq API."""
-    key = os.environ.get("GROQ_API_KEY", "").strip()
-    if not key:
-        return False
-
-    return _test_api(
-        "https://api.groq.com/openai/v1/models",
-        headers = {"Authorization": f"Bearer {key}"},
-    )
-
-
-def _test_pexels() -> bool:
-    """اختبار Pexels API."""
-    key = os.environ.get("PEXELS_API_KEY", "").strip()
-    if not key:
-        return False
-
-    return _test_api(
-        "https://api.pexels.com/videos/search"
-        "?query=test&per_page=1",
-        headers = {"Authorization": key},
-    )
-
-
-def _test_pixabay() -> bool:
-    """اختبار Pixabay API."""
-    key = os.environ.get("PIXABAY_API_KEY", "").strip()
-    if not key:
-        return False
-
-    url = (
-        f"https://pixabay.com/api/videos/"
-        f"?key={key}&q=test&per_page=3"
-    )
-    return _test_api(url)
-
-
-def _check_service_keys(
-    result:        CheckResult,
-    name:          str,
-    prefix:        str,
-    max_n:         int,
-    min_warning:   int,
-    is_required:   bool,
-    test_function: Callable[[], bool],
-) -> int:
-    """فحص مفاتيح خدمة معينة."""
-    count = _count_keys(prefix, max_n)
-    result.checks.append(
-        f"{name:8}: {count} keys configured"
-    )
-
-    # تحذيرات على العدد
-    if is_required and count == 0:
-        result.errors.append(f"No {name} keys!")
-    elif count < min_warning:
-        result.warnings.append(
-            f"Few {name} keys: {count} "
-            f"(recommended: {min_warning}+)"
+def _log_to_file(message: str, level: str) -> None:
+    """حفظ الإشعارات في ملف log."""
+    try:
+        timestamp = datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        log_line = (
+            f"[{timestamp}] [{level.upper()}] "
+            f"{message}\n"
         )
 
-    # اختبار التشغيل
-    if count > 0:
-        if test_function():
-            result.checks.append(f"{name:8}: ✅ working")
+        NOTIFY_LOG.parent.mkdir(
+            parents  = True,
+            exist_ok = True,
+        )
+
+        with open(
+            NOTIFY_LOG, "a", encoding="utf-8"
+        ) as f:
+            f.write(log_line)
+
+    except Exception:
+        # Silent fail (don't crash because of logging)
+        pass
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MAIN NOTIFY FUNCTION
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _format_message(
+    message: str,
+    level:   str,
+) -> str:
+    """تنسيق الرسالة مع emoji و timestamp."""
+    emoji     = LEVEL_EMOJIS.get(level, "ℹ️")
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    return f"{emoji} [{timestamp}] {message}"
+
+
+def notify(
+    message:   str,
+    level:     str  = "info",
+    skip_rate: bool = False,
+    silent:    bool = False,
+) -> bool:
+    """
+    إرسال إشعار عبر كل القنوات المتاحة.
+
+    Args:
+        message:   نص الرسالة
+        level:     success | warning | error | info
+        skip_rate: تجاوز rate limiting
+        silent:    لا تطبع في console أو log
+
+    Returns:
+        True إذا أُرسلت على الأقل عبر قناة واحدة
+    """
+    if not message or not message.strip():
+        return False
+
+    formatted = _format_message(message, level)
+
+    # Console via log (per-level)
+    if not silent:
+        if level == NotificationLevel.ERROR.value:
+            log.error("\n  %s", formatted)
+        elif level == NotificationLevel.WARNING.value:
+            log.warning("\n  %s", formatted)
         else:
-            result.errors.append(
-                f"{name} main key invalid!"
-            )
+            log.info("\n  %s", formatted)
 
-    return count
+    # Log to file (always, even if silent)
+    _log_to_file(message, level)
+
+    # Rate limiting
+    if not skip_rate:
+        msg_hash = _hash_message(message)
+        if _is_rate_limited(msg_hash):
+            if not silent:
+                log.info("  ⏭️  Skipped (rate limited)")
+            return False
+
+    # Send via channels
+    sent_count = 0
+
+    if send_whatsapp(formatted):
+        sent_count += 1
+
+    if send_telegram(formatted):
+        sent_count += 1
+
+    return sent_count > 0
 
 
-def check_api_keys() -> CheckResult:
-    """فحص جميع مفاتيح API."""
-    result = CheckResult(name="API Keys")
+# ═════════════════════════════════════════════════════════════════════════════
+# CONVENIENCE FUNCTIONS
+# ═════════════════════════════════════════════════════════════════════════════
 
-    log.info("  🧪 Testing API connections...")
+def notify_success(message: str, **kwargs) -> bool:
+    """إشعار نجاح."""
+    return notify(message, level="success", **kwargs)
 
-    # Gemini
-    _check_service_keys(
-        result        = result,
-        name          = "Gemini",
-        prefix        = "GEMINI_API_KEY",
-        max_n         = MAX_GEMINI_KEYS,
-        min_warning   = MIN_GEMINI_KEYS,
-        is_required   = False,
-        test_function = _test_gemini,
+
+def notify_warning(message: str, **kwargs) -> bool:
+    """إشعار تحذير."""
+    return notify(message, level="warning", **kwargs)
+
+
+def notify_error(message: str, **kwargs) -> bool:
+    """إشعار خطأ."""
+    return notify(message, level="error", **kwargs)
+
+
+def notify_info(message: str, **kwargs) -> bool:
+    """إشعار معلومات."""
+    return notify(message, level="info", **kwargs)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# RICH NOTIFICATIONS
+# ═════════════════════════════════════════════════════════════════════════════
+
+def notify_video_published(
+    video_number: str,
+    lang:         str,
+    content_mode: str,
+    platform:     str,
+    title:        str = "",
+) -> bool:
+    """إشعار نشر فيديو ناجح."""
+    lang_flag      = _get_lang_flag(lang)
+    platform_emoji = _get_platform_emoji(platform)
+    mode_emoji     = _get_mode_emoji(content_mode)
+
+    message = (
+        f"{mode_emoji} Video #{video_number} published!\n"
+        f"{lang_flag} {lang.upper()} | "
+        f"{platform_emoji} {platform.title()}\n"
     )
 
-    # Groq
-    _check_service_keys(
-        result        = result,
-        name          = "Groq",
-        prefix        = "GROQ_API_KEY",
-        max_n         = MAX_OTHER_KEYS,
-        min_warning   = 2,
-        is_required   = True,
-        test_function = _test_groq,
+    if title:
+        message += f"\n📌 {title[:60]}"
+
+    return notify_success(message, skip_rate=True)
+
+
+def notify_video_failed(
+    video_number: str,
+    lang:         str,
+    content_mode: str,
+    error:        str,
+    platform:     str = "",
+) -> bool:
+    """إشعار فشل نشر فيديو."""
+    lang_flag = _get_lang_flag(lang)
+
+    message = (
+        f"❌ Video #{video_number} FAILED!\n"
+        f"{lang_flag} {lang.upper()} "
+        f"[{content_mode.upper()}]\n"
     )
 
-    # Pexels
-    _check_service_keys(
-        result        = result,
-        name          = "Pexels",
-        prefix        = "PEXELS_API_KEY",
-        max_n         = MAX_OTHER_KEYS,
-        min_warning   = 1,
-        is_required   = True,
-        test_function = _test_pexels,
+    if platform:
+        message += (
+            f"📤 Platform: {platform}\n"
+        )
+
+    message += f"\n💬 Error: {error[:200]}"
+
+    return notify_error(message, skip_rate=True)
+
+
+def notify_token_warning(
+    platform:   str,
+    lang:       str,
+    days_left:  int,
+    expires_at: str = "",
+) -> bool:
+    """تحذير اقتراب انتهاء التوكن."""
+    lang_flag      = _get_lang_flag(lang)
+    platform_emoji = _get_platform_emoji(platform)
+
+    message = (
+        f"⚠️  TOKEN WARNING!\n"
+        f"{platform_emoji} {platform.title()} "
+        f"({lang_flag} {lang.upper()})\n"
+        f"⏰ Expires in {days_left} days"
     )
 
-    # Pixabay
-    _check_service_keys(
-        result        = result,
-        name          = "Pixabay",
-        prefix        = "PIXABAY_API_KEY",
-        max_n         = MAX_OTHER_KEYS,
-        min_warning   = 1,
-        is_required   = True,
-        test_function = _test_pixabay,
+    if expires_at:
+        message += f"\n📅 {expires_at}"
+
+    message += "\n\n🔄 Please renew the token soon!"
+
+    return notify_warning(message, skip_rate=True)
+
+
+def notify_token_expired(
+    platform: str,
+    lang:     str,
+    error:    str = "",
+) -> bool:
+    """التوكن انتهى نهائياً."""
+    lang_flag      = _get_lang_flag(lang)
+    platform_emoji = _get_platform_emoji(platform)
+
+    message = (
+        f"🚨 TOKEN EXPIRED!\n"
+        f"{platform_emoji} {platform.title()} "
+        f"({lang_flag} {lang.upper()})\n"
     )
 
-    result.finalize_status()
-    return result
+    if error:
+        message += f"\n💬 {error[:150]}"
+
+    message += (
+        "\n\n❗ Publishing is STOPPED for this account!"
+        "\n🔧 Please renew immediately!"
+    )
+
+    return notify_error(message, skip_rate=True)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# CHECK 3: PLATFORM TOKENS
-# ═════════════════════════════════════════════════════════════════════════════
+def notify_daily_summary(stats: dict) -> bool:
+    """
+    ملخص يومي للنشر.
 
-def _check_youtube_tokens(result: CheckResult) -> None:
-    """فحص جميع YouTube tokens."""
-    log.info("  📺 Checking YouTube tokens...")
+    Args:
+        stats: {
+            "ar": {"short": 5, "long": 1},
+            "fr": {"short": 5, "long": 1},
+            "en": {"short": 5, "long": 1},
+        }
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    message = f"📊 Daily Summary — {today}\n\n"
 
-    for lang in LANGS:
-        yt = check_youtube_token(lang)
+    for lang in ("ar", "fr", "en"):
+        lang_flag   = _get_lang_flag(lang)
+        lang_stats  = stats.get(lang, {})
+        short_count = lang_stats.get("short", 0)
+        long_count  = lang_stats.get("long",  0)
 
-        if yt["valid"]:
-            result.checks.append(
-                f"YouTube {lang.upper()}: ✅ valid"
-            )
-        else:
-            error = yt.get("error", "invalid")
-            result.errors.append(
-                f"YouTube {lang.upper()}: ❌ {error}"
-            )
-
-            # إشعار عاجل
-            notify_token_expired(
-                platform = "youtube",
-                lang     = lang,
-                error    = error,
-            )
-
-
-def _check_facebook_token(result: CheckResult) -> None:
-    """فحص Facebook token (واحد لكل run)."""
-    log.info("  📘 Checking Facebook token...")
-
-    page_id = os.environ.get("FB_PAGE_ID",    "").strip()
-    token   = os.environ.get("FB_PAGE_TOKEN", "").strip()
-
-    if not (page_id and token):
-        result.warnings.append(
-            "Facebook credentials not configured"
-        )
-        return
-
-    current_lang = os.environ.get(
-        "CURRENT_LANG", "ar"
-    ).lower()
-
-    fb = check_facebook_token(current_lang)
-
-    if not fb["valid"]:
-        error = fb.get("error", "invalid")
-        result.errors.append(f"Facebook: ❌ {error}")
-        notify_token_expired(
-            platform = "facebook",
-            lang     = current_lang,
-            error    = error,
-        )
-        return
-
-    days    = fb.get("days_left", 0)
-    expires = fb.get("expires_at", "")
-
-    if days == 999:
-        result.checks.append("Facebook: ✅ permanent")
-    elif days <= 7:
-        result.warnings.append(
-            f"Facebook expires in {days} days! "
-            f"({expires})"
-        )
-        notify_token_warning(
-            platform   = "facebook",
-            lang       = current_lang,
-            days_left  = days,
-            expires_at = expires,
-        )
-    else:
-        result.checks.append(
-            f"Facebook: ✅ valid ({days} days left)"
+        message += (
+            f"{lang_flag} {lang.upper()}: "
+            f"{short_count} short + "
+            f"{long_count} long\n"
         )
 
+    total = sum(
+        s.get("short", 0) + s.get("long", 0)
+        for s in stats.values()
+    )
 
-def check_tokens() -> CheckResult:
-    """فحص YouTube و Facebook tokens."""
-    result = CheckResult(name="Platform Tokens")
+    message += f"\n📈 Total: {total} videos"
 
-    _check_youtube_tokens(result)
-    _check_facebook_token(result)
-
-    result.finalize_status()
-    return result
+    return notify_info(message, skip_rate=True)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# CHECK 4: STORAGE
-# ═════════════════════════════════════════════════════════════════════════════
+def notify_workflow_start(
+    lang:         str,
+    content_mode: str,
+) -> bool:
+    """إشعار بدء workflow."""
+    lang_flag  = _get_lang_flag(lang)
+    mode_emoji = _get_mode_emoji(content_mode)
 
-def _check_required_dirs(result: CheckResult) -> None:
-    """فحص المجلدات المطلوبة."""
-    for dir_path, description in REQUIRED_DIRS.items():
-        full_path = BASE_DIR / dir_path
+    message = (
+        f"🚀 Workflow started\n"
+        f"{lang_flag} {lang.upper()} "
+        f"{mode_emoji} [{content_mode.upper()}]"
+    )
 
-        if not full_path.exists():
-            result.errors.append(
-                f"Missing: {dir_path} ({description})"
-            )
-            continue
-
-        # عد الملفات
-        files = [
-            f for f in full_path.glob("*")
-            if f.is_file()
-        ]
-
-        if not files:
-            result.warnings.append(f"Empty: {dir_path}")
-        else:
-            result.checks.append(
-                f"{dir_path}: {len(files)} files"
-            )
+    return notify_info(message, silent=True)
 
 
-def _check_required_scripts(result: CheckResult) -> None:
-    """فحص ملفات السكريبتات."""
-    for script in REQUIRED_SCRIPTS:
-        full_path = BASE_DIR / script
-        if not full_path.exists():
-            result.warnings.append(
-                f"Script missing: {script}"
-            )
+def notify_workflow_complete(
+    lang:         str,
+    content_mode: str,
+    success:      int,
+    failed:       int,
+) -> bool:
+    """إشعار انتهاء workflow."""
+    lang_flag  = _get_lang_flag(lang)
+    mode_emoji = _get_mode_emoji(content_mode)
+    status     = "✅" if failed == 0 else "⚠️"
 
+    message = (
+        f"{status} Workflow complete\n"
+        f"{lang_flag} {lang.upper()} "
+        f"{mode_emoji} [{content_mode.upper()}]\n\n"
+        f"✅ Success: {success}\n"
+        f"❌ Failed:  {failed}"
+    )
 
-def check_storage() -> CheckResult:
-    """فحص المجلدات والملفات المطلوبة."""
-    result = CheckResult(name="Storage")
-
-    _check_required_dirs(result)
-    _check_required_scripts(result)
-
-    result.finalize_status()
-    return result
+    return notify_info(message, skip_rate=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# CHECK 5: TODAY'S PUBLISHING
+# TEST FUNCTION
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _get_today_count(
-    lang: str,
-    mode: str,
-    today: str,
-) -> int:
-    """جلب عدد المنشور اليوم."""
-    c = _conn()
-    row = c.execute(
-        """SELECT COUNT(*) FROM publish_tracker
-           WHERE lang = ?
-             AND content_mode = ?
-             AND date(published_at) = ?""",
-        (lang, mode, today),
-    ).fetchone()
-    return row[0] if row else 0
-
-
-def _check_lang_publishing(
-    result: CheckResult,
-    lang:   str,
-    today:  str,
+def _print_creds_status(
+    label:   str,
+    creds:   list[tuple[str, bool]],
 ) -> None:
-    """فحص نشر لغة واحدة."""
-    lang_stats = {}
+    """طباعة حالة credentials."""
+    log.info("\n  %s", label)
+    for name, has_value in creds:
+        status = "✅" if has_value else "❌"
+        log.info("     %-10s: %s", name, status)
 
-    for mode in MODES:
-        lang_stats[mode] = _get_today_count(lang, mode, today)
 
-    result.stats[lang] = lang_stats
+def test_notifications() -> None:
+    """اختبار جميع قنوات الإشعار."""
+    log.info("\n%s", "═" * 55)
+    log.info("  🧪 Testing Notifications")
+    log.info("%s", "═" * 55)
 
-    short_count = lang_stats.get("short", 0)
-    long_count  = lang_stats.get("long",  0)
-
-    result.checks.append(
-        f"{lang.upper()}: "
-        f"{short_count} short + {long_count} long"
+    # WhatsApp
+    wa_creds = _get_whatsapp_creds()
+    _print_creds_status(
+        "📱 WhatsApp:",
+        [
+            ("Instance", bool(wa_creds.instance_id)),
+            ("Token",    bool(wa_creds.api_token)),
+            ("Phone",    bool(wa_creds.phone)),
+        ],
     )
 
-    # تحذيرات حسب الوقت
-    current_hour = datetime.now().hour
-
-    if current_hour >= 12 and short_count == 0:
-        result.warnings.append(
-            f"{lang.upper()}: No short videos published today!"
-        )
-
-    if current_hour >= 23 and long_count == 0:
-        result.warnings.append(
-            f"{lang.upper()}: No long video published today!"
-        )
-
-
-def _check_last_publish(result: CheckResult) -> None:
-    """فحص آخر نشر."""
-    c = _conn()
-    row = c.execute(
-        """SELECT lang, content_mode, platform, published_at
-           FROM publish_tracker
-           ORDER BY published_at DESC
-           LIMIT 1"""
-    ).fetchone()
-
-    if not row:
-        return
-
-    try:
-        last_time = datetime.fromisoformat(row["published_at"])
-        hours_ago = (
-            datetime.now() - last_time
-        ).total_seconds() / 3600
-
-        result.checks.append(
-            f"Last publish: {hours_ago:.1f}h ago "
-            f"({row['lang'].upper()} {row['platform']})"
-        )
-
-        if hours_ago > PUBLISH_WARNING_HOURS:
-            result.warnings.append(
-                f"No publish in last {hours_ago:.0f} hours!"
-            )
-
-    except Exception as e:
-        result.warnings.append(
-            f"Cannot parse last publish time: {e}"
-        )
-
-
-def check_publishing() -> CheckResult:
-    """فحص حالة النشر اليوم."""
-    result = CheckResult(name="Today's Publishing")
-
-    try:
-        init_db()
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        # كل لغة
-        for lang in LANGS:
-            _check_lang_publishing(result, lang, today)
-
-        # آخر نشر
-        _check_last_publish(result)
-
-    except Exception as e:
-        result.errors.append(
-            f"Cannot check publishing: {str(e)[:100]}"
-        )
-
-    result.finalize_status()
-    return result
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# CHECK 6: DISK USAGE
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _bytes_to_gb(size_bytes: int) -> float:
-    """تحويل bytes إلى GB."""
-    return size_bytes / 1_073_741_824
-
-
-def _check_disk_space(result: CheckResult) -> None:
-    """فحص مساحة القرص."""
-    usage = shutil.disk_usage(BASE_DIR)
-
-    total_gb = _bytes_to_gb(usage.total)
-    used_gb  = _bytes_to_gb(usage.used)
-    free_gb  = _bytes_to_gb(usage.free)
-    percent  = (usage.used / usage.total) * 100
-
-    result.checks.append(f"Total: {total_gb:.1f} GB")
-    result.checks.append(
-        f"Used:  {used_gb:.1f} GB ({percent:.1f}%)"
-    )
-    result.checks.append(f"Free:  {free_gb:.1f} GB")
-
-    if percent > DISK_CRITICAL_PERCENT:
-        result.errors.append(
-            f"Disk almost full: {percent:.0f}%"
-        )
-    elif percent > DISK_WARNING_PERCENT:
-        result.warnings.append(
-            f"Disk usage high: {percent:.0f}%"
-        )
-
-
-def _check_output_folders(result: CheckResult) -> None:
-    """فحص حجم مجلدات الإخراج."""
-    for folder in MONITORED_OUTPUT_DIRS:
-        folder_path = BASE_DIR / folder
-        if not folder_path.exists():
-            continue
-
-        try:
-            size_bytes = sum(
-                f.stat().st_size
-                for f in folder_path.rglob("*")
-                if f.is_file()
-            )
-            size_gb = _bytes_to_gb(size_bytes)
-
-            result.checks.append(
-                f"{folder}/: {size_gb:.2f} GB"
-            )
-
-            if size_gb > OUTPUT_WARNING_GB:
-                result.warnings.append(
-                    f"{folder}/ is large: {size_gb:.1f} GB"
-                )
-        except Exception:
-            pass
-
-
-def check_disk() -> CheckResult:
-    """فحص مساحة القرص."""
-    result = CheckResult(name="Disk Usage")
-
-    try:
-        _check_disk_space(result)
-        _check_output_folders(result)
-    except Exception as e:
-        result.errors.append(
-            f"Cannot check disk: {str(e)[:100]}"
-        )
-
-    result.finalize_status()
-    return result
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# REPORT BUILDERS
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _get_status_emoji(status: str) -> str:
-    """جلب emoji حسب الحالة."""
-    return STATUS_EMOJIS.get(status, "❓")
-
-
-def _count_by_status(
-    results: list[CheckResult],
-    status:  str,
-) -> int:
-    """عد النتائج حسب الحالة."""
-    return sum(1 for r in results if r.status == status)
-
-
-def build_console_report(
-    results: list[CheckResult],
-) -> str:
-    """بناء تقرير مفصل للـ console."""
-    lines     = []
-    separator = "═" * SUMMARY_WIDTH
-    sub_sep   = "─" * SECTION_WIDTH
-    now       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    lines.append(f"\n{separator}")
-    lines.append("  🏥 System Health Check Report")
-    lines.append(f"  📅 {now}")
-    lines.append(separator)
-
-    for r in results:
-        emoji = _get_status_emoji(r.status)
-        lines.append(f"\n  {emoji} {r.name}")
-        lines.append(f"  {sub_sep}")
-
-        for check in r.checks:
-            lines.append(f"     {check}")
-
-        if r.warnings:
-            lines.append("")
-            for w in r.warnings:
-                lines.append(f"     ⚠️  {w}")
-
-        if r.errors:
-            lines.append("")
-            for e in r.errors:
-                lines.append(f"     ❌ {e}")
-
-    # Summary
-    total_checks = len(results)
-    healthy = _count_by_status(results, CheckStatus.HEALTHY)
-    warnings = _count_by_status(results, CheckStatus.WARNING)
-    errors  = _count_by_status(results, CheckStatus.ERROR)
-
-    lines.append(f"\n{separator}")
-    lines.append("  📊 Summary")
-    lines.append(f"     ✅ Healthy : {healthy}/{total_checks}")
-    lines.append(f"     ⚠️  Warnings: {warnings}")
-    lines.append(f"     ❌ Errors  : {errors}")
-    lines.append(f"{separator}\n")
-
-    return "\n".join(lines)
-
-
-def build_whatsapp_report(
-    results: list[CheckResult],
-) -> str:
-    """بناء تقرير مختصر للـ WhatsApp."""
-    now   = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines = [f"🏥 Health Check — {now}\n"]
-
-    for r in results:
-        emoji = _get_status_emoji(r.status)
-        lines.append(f"{emoji} {r.name}")
-
-        # عرض الأخطاء (max 3)
-        if r.errors:
-            for e in r.errors[:3]:
-                lines.append(f"  ❌ {e}")
-
-        # عرض التحذيرات إذا لا أخطاء (max 2)
-        elif r.warnings:
-            for w in r.warnings[:2]:
-                lines.append(f"  ⚠️ {w}")
-
-        lines.append("")
-
-    # Summary
-    healthy  = _count_by_status(results, CheckStatus.HEALTHY)
-    warnings = _count_by_status(results, CheckStatus.WARNING)
-    errors   = _count_by_status(results, CheckStatus.ERROR)
-
-    lines.append("📊 Summary:")
-    lines.append(f"✅ {healthy} healthy")
-    if warnings:
-        lines.append(f"⚠️ {warnings} warnings")
-    if errors:
-        lines.append(f"❌ {errors} errors")
-
-    return "\n".join(lines)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# CHECK ORCHESTRATOR
-# ═════════════════════════════════════════════════════════════════════════════
-
-# Mapping: check name → function
-CHECK_FUNCTIONS: dict[str, tuple[str, Callable[[], CheckResult]]] = {
-    "database":   ("🗄️  Checking database...",         check_database),
-    "api_keys":   ("🔑 Checking API keys...",          check_api_keys),
-    "tokens":     ("🎫 Checking platform tokens...",  check_tokens),
-    "storage":    ("📂 Checking storage...",           check_storage),
-    "publishing": ("📤 Checking publishing status...", check_publishing),
-    "disk":       ("💾 Checking disk usage...",        check_disk),
-}
-
-
-def run_checks(check_filter: str = "all") -> list[CheckResult]:
-    """تشغيل الفحوصات حسب الـ filter."""
-    results: list[CheckResult] = []
-
-    for check_name, (label, func) in CHECK_FUNCTIONS.items():
-        if check_filter not in ("all", check_name):
-            continue
-
-        log.info(f"\n  {label}")
-        results.append(func())
-
-    return results
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# NOTIFICATION
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _send_notification(results: list[CheckResult]) -> None:
-    """إرسال التقرير عبر WhatsApp."""
-    whatsapp_report = build_whatsapp_report(results)
-
-    has_errors   = any(
-        r.status == CheckStatus.ERROR for r in results
-    )
-    has_warnings = any(
-        r.status == CheckStatus.WARNING for r in results
+    # Telegram
+    tg_creds = _get_telegram_creds()
+    _print_creds_status(
+        "📨 Telegram:",
+        [
+            ("Bot Token", bool(tg_creds.bot_token)),
+            ("Chat ID",   bool(tg_creds.chat_id)),
+        ],
     )
 
-    if has_errors:
-        notify_error(whatsapp_report, skip_rate=True)
-    elif has_warnings:
-        notify_warning(whatsapp_report, skip_rate=True)
-    else:
-        notify_info(whatsapp_report, skip_rate=True)
+    log.info("\n  📤 Sending test messages...")
 
+    notify_success(
+        "Test notification — System is working! 🎉",
+        skip_rate = True,
+    )
+    notify_warning(
+        "This is a test warning",
+        skip_rate = True,
+    )
+    notify_error(
+        "This is a test error",
+        skip_rate = True,
+    )
 
-# ═════════════════════════════════════════════════════════════════════════════
-# MAIN
-# ═════════════════════════════════════════════════════════════════════════════
-
-def main() -> None:
-    """نقطة الدخول الرئيسية."""
-    args = parse_args()
-
-    log.info("\n  🏥 Running Health Check...")
-
-    # تشغيل الفحوصات
-    results = run_checks(args.check)
-
-    # عرض التقرير
-    if args.format == "json":
-        results_dict = [r.to_dict() for r in results]
-        print(json.dumps(results_dict, indent=2, default=str))
-    else:
-        print(build_console_report(results))
-
-    # إرسال إشعار
-    if args.notify:
-        _send_notification(results)
-
-    # Exit code
-    if not args.no_fail:
-        has_errors = any(
-            r.status == CheckStatus.ERROR for r in results
-        )
-        if has_errors:
-            sys.exit(1)
+    log.info("\n  ✅ Test complete!")
+    log.info("%s\n", "═" * 55)
 
 
 if __name__ == "__main__":
-    main()
+    # Logging — entry point only
+    logging.basicConfig(
+        level   = logging.INFO,
+        format  = "%(asctime)s | %(levelname)-8s | %(message)s",
+        datefmt = "%H:%M:%S",
+    )
+
+    test_notifications()
