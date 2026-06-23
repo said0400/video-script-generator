@@ -1,36 +1,46 @@
 """
-🎙️ Text-to-Speech via Google Gemini TTS
+🎙️ Text-to-Speech via Google Gemini TTS v2.0 — Street Style Edition
 
 Features:
-  ✅ Algenib voice for all languages
-  ✅ Language-specific styles (AR, FR, EN)
+  ✅ Per-language voices (different voice for each lang)
+  ✅ Saudi Arabic street style (Charon)
+  ✅ Parisian French street style (Puck)
+  ✅ American Gen Z street style (Fenrir)
+  ✅ Authentic dialect prompting
+  ✅ Tag-aware voice instructions (22 tags)
   ✅ Multi-key rotation (up to 50 keys)
   ✅ Supports both naming conventions:
        - GEMINI_API_KEY1   (no underscore)
        - GEMINI_API_KEY_1  (with underscore)
-  ✅ Tag-aware voice instructions
   ✅ Auto-retry on rate limits
-  ✅ Truncation detection
+  ✅ Truncation detection (per-language WPM)
   ✅ Thread-safe
+  ✅ Merges ALL audio chunks (no truncated audio!)
   ✅ Compatible with google-genai 0.x and 1.x
+  ✅ Reliable MIME → extension mapping
 """
 
 from __future__ import annotations
 
 import logging
-import mimetypes
 import os
 import struct
 import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from google import genai
 from google.genai import types
 
-from tags_parser import DEFAULT_TAG
+# DEFAULT_TAG with fallback
+try:
+    from tags_parser import DEFAULT_TAG
+except ImportError:
+    DEFAULT_TAG = "information"
+
+log = logging.getLogger(__name__)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
@@ -46,114 +56,248 @@ MAX_KEYS_SCAN  = 50
 # Timeouts
 FFPROBE_TIMEOUT = 15
 
-# امتدادات صوتية آمنة
+# Words per minute (per language — for truncation detection)
+WPM_BY_LANG: dict[str, int] = {
+    "ar": 140,   # Arabic: slower
+    "fr": 180,   # French: medium
+    "en": 160,   # English: standard
+}
+
+# Safe audio extensions
 SAFE_AUDIO_EXTENSIONS: set[str] = {
     ".wav", ".mp3", ".ogg", ".aac", ".m4a", ".flac",
 }
 
+# Reliable MIME → extension mapping (no mimetypes.guess_extension)
+_MIME_TO_EXT: dict[str, str] = {
+    "audio/wav":  ".wav",
+    "audio/wave": ".wav",
+    "audio/l16":  ".wav",
+    "audio/l24":  ".wav",
+    "audio/mp3":  ".mp3",
+    "audio/mpeg": ".mp3",
+    "audio/ogg":  ".ogg",
+    "audio/aac":  ".aac",
+    "audio/flac": ".flac",
+}
+
 # Rate limit indicators
 RATE_LIMIT_KEYWORDS = (
-    "429",
-    "resource_exhausted",
-    "quota",
-    "rate limit",
-    "ratequota",
+    "429", "resource_exhausted", "quota",
+    "rate limit", "ratequota",
 )
-
-# Logging
-logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(message)s",
-)
-log = logging.getLogger(__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# VOICES
+# VOICES — Different voice per language
 # ═════════════════════════════════════════════════════════════════════════════
 
 VOICES: dict[str, str] = {
-    "male_smooth":  "Orus",
-    "male_warm":    "Charon",
-    "female_clear": "Zephyr",
-    "female_warm":  "Aoede",
-    "neutral":      "Fenrir",
-    "algenib":      "Algenib",
+    "algenib":  "Algenib",
+    "charon":   "Charon",    # ← قوي ذكوري (Saudi)
+    "puck":     "Puck",      # ← شبابي حيوي (French)
+    "fenrir":   "Fenrir",    # ← حاد قوي (American)
+    "orus":     "Orus",
+    "aoede":    "Aoede",
+    "zephyr":   "Zephyr",
+    "kore":     "Kore",
+    "apophis":  "Apophis",
+    "achird":   "Achird",
 }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# VOICE CONFIGURATIONS PER LANGUAGE
+# VOICE CONFIGURATIONS PER LANGUAGE — STREET STYLE
 # ═════════════════════════════════════════════════════════════════════════════
 
 VOICE_CONFIGS: dict[str, dict] = {
+
+    # ═══════════════════════════════════════════════════════════════
+    # 🇸🇦 ARABIC — Saudi Street Style (Khaliji)
+    # ═══════════════════════════════════════════════════════════════
     "ar": {
-        "voice_key":  "algenib",
-        "voice_name": "Algenib",
+        "voice_key":  "charon",
+        "voice_name": "Charon",
         "director_note": (
             "# Audio Profile\n"
-            "A smooth, premium narrator voice.\n\n"
-            "# Director's note\n"
-            "Style: Empathetic, emotionally connected, "
-            "deeply feeling.\n"
-            "Pace: Natural, moderate speed.\n"
-            "Accent: Neutral Arabic, clear pronunciation.\n\n"
-            "## Scene:\n"
-            "An intimate recording studio.\n\n"
-            "## Sample Context:\n"
-            "Motivational short-form video. The narrator speaks "
-            "with deep empathy, connecting emotionally with every "
-            "word. Feel the pain, the hope, the truth. Each "
-            "sentence carries weight and meaning. Speak as if "
-            "confiding in your closest friend."
+            "Young Saudi Arabian street narrator. "
+            "Confident male voice in his late 20s.\n\n"
+
+            "# Director's Note\n"
+            "Style: Saudi Khaliji street dialect — "
+            "casual, intense, direct, raw.\n"
+            "Pace: Moderate-fast conversational pace "
+            "with dramatic pauses for impact.\n"
+            "Accent: AUTHENTIC Saudi Arabian "
+            "(Najdi/Hijazi blend), street vernacular. "
+            "NOT Egyptian, NOT Levantine, NOT Fusha.\n"
+            "Tone: Confident street wisdom — like a "
+            "trusted big brother giving real advice.\n\n"
+
+            "## Scene\n"
+            "A young Saudi influencer recording a viral "
+            "video on his phone in a Riyadh cafe. "
+            "Speaking directly to his audience as if "
+            "talking to his close friends.\n\n"
+
+            "## Pronunciation Rules\n"
+            "- Pronounce ق as 'g' (Saudi style): "
+            "قال = 'gaal', قلب = 'galb'\n"
+            "- Use Khaliji intonation patterns\n"
+            "- Drop case endings (no حركات الإعراب)\n"
+            "- Natural elision: كيف الحال = 'keef-haalak'\n"
+            "- Emphasize emotional words\n\n"
+
+            "## Sample Context\n"
+            "Motivational/psychology short-form video for "
+            "Saudi/Khaliji youth. The narrator uses Saudi "
+            "street expressions naturally: والله، يبيلك، "
+            "خوش، زين، شدة، ولا يهمك، هالشي، عادي، تراني، "
+            "صدق، يا حبيب القلب، تكفى، طيب، شف، اسمع، "
+            "والنبي.\n\n"
+
+            "## Critical Rules\n"
+            "1. Speak EXACTLY as written - no formal "
+            "corrections\n"
+            "2. NEVER use Fusha (formal Arabic)\n"
+            "3. NEVER use Egyptian or Levantine accent\n"
+            "4. Use Saudi 'g' for ق consistently\n"
+            "5. Sound like a real Saudi, not a "
+            "TV presenter\n"
+            "6. Emotional weight on dramatic words"
         ),
     },
+
+    # ═══════════════════════════════════════════════════════════════
+    # 🇫🇷 FRENCH — Parisian Street Slang
+    # ═══════════════════════════════════════════════════════════════
     "fr": {
-        "voice_key":  "algenib",
-        "voice_name": "Algenib",
+        "voice_key":  "puck",
+        "voice_name": "Puck",
         "director_note": (
             "# Audio Profile\n"
-            "A smooth, premium narrator voice.\n\n"
-            "# Director's note\n"
-            "Style: Whisper, intimate, secretive, close-to-mic.\n"
-            "Pace: Rapid Fire, very fast delivery but clear.\n"
-            "Accent: Transatlantic French, elegant and "
-            "sophisticated.\n\n"
-            "## Scene:\n"
-            "A dark, intimate whisper booth.\n\n"
-            "## Sample Context:\n"
-            "Viral French short-form video. The narrator whispers "
-            "urgently, as if sharing a dangerous secret that nobody "
-            "else knows. Fast but perfectly articulated. Every word "
-            "drips with mystery. The listener must lean in to catch "
-            "every syllable."
+            "Young Parisian street narrator. "
+            "Confident male voice in his mid-20s "
+            "with urban attitude.\n\n"
+
+            "# Director's Note\n"
+            "Style: French street slang (argot urbain) — "
+            "raw, direct, modern, banlieue energy.\n"
+            "Pace: Rapid fire delivery but perfectly "
+            "articulated, with sharp emphatic pauses.\n"
+            "Accent: AUTHENTIC modern Parisian street "
+            "French (banlieue/cité influenced). "
+            "NOT formal Parisian, NOT Marseille, "
+            "NOT Quebec.\n"
+            "Tone: Cool street confidence — like a "
+            "young Parisian dropping hard truths to "
+            "his frérots.\n\n"
+
+            "## Scene\n"
+            "A young French content creator filming in "
+            "Paris. Speaking directly to camera with "
+            "raw street confidence, the kind of guy "
+            "who talks straight without sugar-coating.\n\n"
+
+            "## Pronunciation Rules\n"
+            "- Drop final consonants when natural: "
+            "'pas' → 'pas' (silent s)\n"
+            "- Use street contractions: 'tu es' → "
+            "'t'es', 'je ne sais pas' → 'j'sais pas'\n"
+            "- Modern Parisian liaison patterns\n"
+            "- Emphasize verlan and slang words\n"
+            "- Natural urban rhythm\n\n"
+
+            "## Sample Context\n"
+            "Viral French short-form video for young "
+            "French audience. The narrator naturally "
+            "uses Parisian street expressions: "
+            "wesh, c'est ouf, trop stylé, carrément, "
+            "tranquille, grave, c'est chaud, t'as vu, "
+            "frérot, en mode, du coup, genre, vraiment, "
+            "ça pue, mortel, ouf, chelou.\n\n"
+
+            "## Critical Rules\n"
+            "1. Speak EXACTLY as written - no formal "
+            "corrections\n"
+            "2. NEVER use formal French (français "
+            "soutenu)\n"
+            "3. NEVER use Quebec accent\n"
+            "4. Use modern Parisian street patterns\n"
+            "5. Sound like a real young Parisian, "
+            "not a news anchor\n"
+            "6. Drop syllables naturally as French "
+            "youth do"
         ),
     },
+
+    # ═══════════════════════════════════════════════════════════════
+    # 🇺🇸 ENGLISH — American Urban Street Style (Gen Z)
+    # ═══════════════════════════════════════════════════════════════
     "en": {
-        "voice_key":  "algenib",
-        "voice_name": "Algenib",
+        "voice_key":  "fenrir",
+        "voice_name": "Fenrir",
         "director_note": (
             "# Audio Profile\n"
-            "A smooth, premium narrator voice.\n\n"
-            "# Director's note\n"
-            "Style: Vocal Smile, warm, friendly, inviting.\n"
-            "Pace: Natural, comfortable and conversational.\n"
-            "Accent: American Southern, warm drawl with charm.\n\n"
-            "## Scene:\n"
-            "A warm, sunlit porch conversation.\n\n"
-            "## Sample Context:\n"
-            "Motivational short-form video for American audience. "
-            "The narrator smiles while speaking — you can HEAR "
-            "the smile. Warm, genuine Southern charm. Like a "
-            "trusted friend giving life advice. Friendly, "
-            "approachable, with natural charisma."
+            "Young American urban narrator. "
+            "Confident male voice in his mid-20s with "
+            "modern street energy.\n\n"
+
+            "# Director's Note\n"
+            "Style: Modern American street slang — "
+            "Gen Z urban vernacular, authentic, raw.\n"
+            "Pace: Conversational rhythm with sharp "
+            "emphasis on key words, natural street "
+            "cadence.\n"
+            "Accent: AUTHENTIC modern American urban "
+            "(NYC/LA Gen Z blend). NOT Southern, "
+            "NOT British, NOT corporate American.\n"
+            "Tone: Real street wisdom — like talking "
+            "to your day-one homie about real life.\n\n"
+
+            "## Scene\n"
+            "A young American content creator filming "
+            "a viral TikTok/Reel. Speaking directly to "
+            "camera with authentic Gen Z street energy, "
+            "dropping hard truths.\n\n"
+
+            "## Pronunciation Rules\n"
+            "- Use modern Gen Z intonation patterns\n"
+            "- Natural contractions: 'gonna', 'wanna', "
+            "'tryna', 'finna'\n"
+            "- Drop unnecessary syllables: 'probably' "
+            "→ 'prob'ly'\n"
+            "- Urban rhythm with hip-hop influence\n"
+            "- Sharp emphasis on slang and emotional "
+            "words\n\n"
+
+            "## Sample Context\n"
+            "Motivational/psychology short-form video "
+            "for American Gen Z. The narrator uses "
+            "modern street expressions: "
+            "no cap, fr fr, lowkey, bussin, it's "
+            "giving, slay, periodt, facts, bet, "
+            "that's wild, deadass, finna, hits "
+            "different, on god, bro, real talk, "
+            "straight up, no lie.\n\n"
+
+            "## Critical Rules\n"
+            "1. Speak EXACTLY as written - no formal "
+            "corrections\n"
+            "2. NEVER use formal English (no 'shall', "
+            "'thus', 'whilst')\n"
+            "3. NEVER use Southern drawl\n"
+            "4. NEVER use British pronunciation\n"
+            "5. Use modern urban Gen Z patterns\n"
+            "6. Sound like a real young American on "
+            "TikTok, not a news anchor"
         ),
     },
 }
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAG VOICE INSTRUCTIONS
+# TAG VOICE INSTRUCTIONS (22 tags)
 # ═════════════════════════════════════════════════════════════════════════════
 
 TAG_VOICE_INSTRUCTIONS: dict[str, str] = {
@@ -218,6 +362,78 @@ TAG_VOICE_INSTRUCTIONS: dict[str, str] = {
         "- Vulnerable, authentic delivery\n"
         "- Make the listener FEEL what you feel"
     ),
+    "hook": (
+        "🪝 ATTENTION GRABBER\n"
+        "- Maximum energy from the first word\n"
+        "- Shocking, abrupt, demanding attention\n"
+        "- Make it impossible to scroll away"
+    ),
+    "direct": (
+        "🎯 DIRECT & RAW\n"
+        "- No fluff, straight to the point\n"
+        "- Like grabbing someone by the shoulders\n"
+        "- Crystal clear, no room for doubt"
+    ),
+    "cta": (
+        "📣 CALL TO ACTION\n"
+        "- Energetic and motivating\n"
+        "- Urgent invitation to act NOW\n"
+        "- End with confident momentum"
+    ),
+    "pause": (
+        "⏸️ DRAMATIC PAUSE\n"
+        "- Very slow, almost silent\n"
+        "- Let the previous moment breathe\n"
+        "- Build anticipation"
+    ),
+    "whisper": (
+        "🤫 SECRETIVE WHISPER\n"
+        "- Very quiet, close-to-mic\n"
+        "- Like sharing a dangerous secret\n"
+        "- Force the listener to lean in"
+    ),
+    "curiosity": (
+        "🔍 PROVOCATIVE QUESTION\n"
+        "- Tone that demands engagement\n"
+        "- Slight upward inflection\n"
+        "- Make them WANT the answer"
+    ),
+    "storytelling": (
+        "📖 NARRATIVE FLOW\n"
+        "- Engaging, like reading bedtime story\n"
+        "- Natural rhythm, immersive\n"
+        "- Bring characters to life"
+    ),
+    "dramatic": (
+        "🎭 THEATRICAL INTENSITY\n"
+        "- Maximum emotional weight\n"
+        "- Cinematic delivery\n"
+        "- Every word HITS"
+    ),
+    "revelation": (
+        "💡 MOMENT OF TRUTH\n"
+        "- Build-up then sudden reveal\n"
+        "- Like dropping a bombshell\n"
+        "- Slight pause before the reveal"
+    ),
+    "tension": (
+        "⚡ BUILDING TENSION\n"
+        "- Gradual escalation\n"
+        "- Sharper consonants\n"
+        "- Tension rising in voice"
+    ),
+    "climax": (
+        "🔥 PEAK INTENSITY\n"
+        "- MAXIMUM impact moment\n"
+        "- Everything builds to this\n"
+        "- Loud, sharp, undeniable"
+    ),
+    "powerful": (
+        "💪 RAW POWER\n"
+        "- Grounded, weighted delivery\n"
+        "- Confident command of voice\n"
+        "- Every syllable is concrete"
+    ),
 }
 
 DEFAULT_VOICE_INSTRUCTION = (
@@ -230,124 +446,101 @@ DEFAULT_VOICE_INSTRUCTION = (
 # API KEY ROTATION (Thread-safe)
 # ═════════════════════════════════════════════════════════════════════════════
 
-_key_lock  = threading.Lock()
-_key_index: int       = 0
-_API_KEYS:  list[str] = []
+_key_lock     = threading.Lock()
+_key_index:   int                       = 0
+_API_KEYS:    list[str]                 = []
+_keys_loaded: bool                      = False
+_clients:     dict[str, "genai.Client"] = {}
 
 
 def _load_keys() -> list[str]:
-    """
-    تحميل كل مفاتيح Gemini من البيئة.
-
-    يدعم تسميتين معاً:
-        ✅ GEMINI_API_KEY        (الأساسي)
-        ✅ GEMINI_API_KEY1       (بدون شرطة سفلية)
-        ✅ GEMINI_API_KEY_1      (مع شرطة سفلية)
-        ...
-        ✅ GEMINI_API_KEY50
-        ✅ GEMINI_API_KEY_50
-
-    Returns:
-        قائمة المفاتيح الفريدة (بدون تكرار)
-    """
+    """Load all Gemini keys (supports multiple naming)."""
     keys: list[str] = []
     seen: set[str]  = set()
 
-    # ✅ المفتاح الأساسي
+    # Main key
     main_key = os.environ.get("GEMINI_API_KEY", "").strip()
     if main_key and main_key not in seen:
         keys.append(main_key)
         seen.add(main_key)
 
-    # ✅ المفاتيح المرقمة — يدعم التسميتين
+    # Numbered keys (both formats)
     for i in range(1, MAX_KEYS_SCAN + 1):
-        # بدون شرطة سفلية: GEMINI_API_KEY1, GEMINI_API_KEY2, ...
-        key_no_underscore = os.environ.get(
-            f"GEMINI_API_KEY{i}", ""
-        ).strip()
-        if key_no_underscore and key_no_underscore not in seen:
-            keys.append(key_no_underscore)
-            seen.add(key_no_underscore)
+        # Without underscore: GEMINI_API_KEY1
+        k1 = os.environ.get(f"GEMINI_API_KEY{i}", "").strip()
+        if k1 and k1 not in seen:
+            keys.append(k1)
+            seen.add(k1)
 
-        # مع شرطة سفلية: GEMINI_API_KEY_1, GEMINI_API_KEY_2, ...
-        key_with_underscore = os.environ.get(
-            f"GEMINI_API_KEY_{i}", ""
-        ).strip()
-        if key_with_underscore and key_with_underscore not in seen:
-            keys.append(key_with_underscore)
-            seen.add(key_with_underscore)
+        # With underscore: GEMINI_API_KEY_1
+        k2 = os.environ.get(f"GEMINI_API_KEY_{i}", "").strip()
+        if k2 and k2 not in seen:
+            keys.append(k2)
+            seen.add(k2)
 
     return keys
 
 
 def _ensure_keys_loaded() -> None:
-    """تحميل المفاتيح إذا لم تُحمَّل بعد."""
-    global _API_KEYS
+    """Thread-safe key loading with double-check."""
+    global _API_KEYS, _keys_loaded
 
-    if _API_KEYS:
+    if _keys_loaded:
         return
 
-    _API_KEYS = _load_keys()
-
-    if _API_KEYS:
-        log.info(
-            f"  🔑 Loaded {len(_API_KEYS)} Gemini API keys"
-        )
-    else:
-        log.warning("  ⚠️  No Gemini API keys found")
-
-
-def _get_current_key_index() -> int:
-    """الحصول على index الحالي بطريقة آمنة."""
     with _key_lock:
-        return _key_index
-
-
-def _get_client() -> genai.Client:
-    """
-    الحصول على Gemini client مع المفتاح الحالي.
-
-    Raises:
-        RuntimeError: إذا لم توجد مفاتيح
-    """
-    _ensure_keys_loaded()
-
-    if not _API_KEYS:
-        # Fallback: محاولة من env مباشرة
-        key = os.environ.get("GEMINI_API_KEY", "").strip()
-        if not key:
-            raise RuntimeError(
-                "No GEMINI_API_KEY found in environment.\n"
-                "Set it in .env or GitHub Secrets."
+        if _keys_loaded:
+            return
+        _API_KEYS    = _load_keys()
+        _keys_loaded = True
+        if _API_KEYS:
+            log.info(
+                "  🔑 Loaded %d Gemini API keys",
+                len(_API_KEYS)
             )
-        return genai.Client(api_key=key)
+        else:
+            log.warning("  ⚠️  No Gemini API keys found")
 
-    idx = _get_current_key_index()
-    return genai.Client(
-        api_key = _API_KEYS[idx % len(_API_KEYS)]
-    )
+
+def _get_client(key: str) -> "genai.Client":
+    """Thread-safe client caching."""
+    with _key_lock:
+        if key not in _clients:
+            _clients[key] = genai.Client(api_key=key)
+        return _clients[key]
+
+
+def _get_current_key() -> str:
+    """Get current key."""
+    _ensure_keys_loaded()
+    with _key_lock:
+        if not _API_KEYS:
+            return ""
+        return _API_KEYS[_key_index % len(_API_KEYS)]
 
 
 def _rotate_key() -> None:
-    """تدوير مفتاح Gemini عند الفشل (thread-safe)."""
+    """Rotate to next key (thread-safe)."""
     global _key_index
-
-    n = len(_API_KEYS)
-    if n <= 1:
-        log.warning("  ⚠️  No additional Gemini keys to rotate")
-        return
-
     with _key_lock:
+        n = len(_API_KEYS)
+        if n <= 1:
+            if n == 1:
+                log.warning(
+                    "  ⚠️  No additional Gemini keys to rotate"
+                )
+            return
         _key_index = (_key_index + 1) % n
-        new_idx = _key_index
-
+        new_idx    = _key_index
+        total      = n
     log.info(
-        f"  🔄 Gemini key rotated → #{new_idx + 1}/{n}"
+        "  🔄 Gemini key rotated → #%d/%d",
+        new_idx + 1, total
     )
 
 
 def _is_rate_limit(e: Exception) -> bool:
-    """التحقق إذا كان الخطأ rate limit."""
+    """Check if error is rate limit."""
     msg = str(e).lower()
     return any(kw in msg for kw in RATE_LIMIT_KEYWORDS)
 
@@ -357,26 +550,29 @@ def _is_rate_limit(e: Exception) -> bool:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_lang_note(lang: str) -> str:
-    """جلب lang note للـ prompt."""
+    """Language-specific reading instruction."""
     notes = {
         "ar": (
-            "Text is in ARABIC. "
-            "Read with native Arabic pronunciation."
+            "Text is in ARABIC (Saudi street dialect). "
+            "Read with AUTHENTIC Saudi Arabian pronunciation. "
+            "Use 'g' for ق. Drop case endings. Sound natural."
         ),
         "fr": (
-            "Text is in FRENCH. "
-            "Read with native French pronunciation."
+            "Text is in FRENCH (Parisian street slang). "
+            "Read with AUTHENTIC modern Parisian street accent. "
+            "Use street contractions. Sound urban and real."
         ),
         "en": (
-            "Text is in ENGLISH. "
-            "Read with native American English pronunciation."
+            "Text is in ENGLISH (American Gen Z urban). "
+            "Read with AUTHENTIC modern American urban accent. "
+            "Use natural contractions. Sound like Gen Z TikTok."
         ),
     }
     return notes.get(lang, notes["en"])
 
 
 def _build_tags_legend(tagged_sentences: list[dict]) -> str:
-    """بناء قاموس الـ tags المستخدمة."""
+    """Build tags legend for used tags."""
     used_tags: set[str] = {
         s.get("final_tag", DEFAULT_TAG)
         for s in tagged_sentences
@@ -393,7 +589,7 @@ def _build_tags_legend(tagged_sentences: list[dict]) -> str:
 
 
 def _build_script_text(tagged_sentences: list[dict]) -> str:
-    """بناء النص مع الـ tags."""
+    """Build script text with tags."""
     lines = []
     for sent in tagged_sentences:
         tag  = sent.get("final_tag", DEFAULT_TAG)
@@ -407,12 +603,7 @@ def _build_tagged_prompt(
     tagged_sentences: list[dict],
     lang:             str,
 ) -> str:
-    """
-    بناء prompt مع Director's Note + Tags.
-
-    Raises:
-        ValueError: إذا tagged_sentences فارغ
-    """
+    """Build comprehensive prompt with director's note + tags."""
     if not tagged_sentences:
         raise ValueError("No tagged sentences provided")
 
@@ -423,11 +614,11 @@ def _build_tagged_prompt(
     script_text   = _build_script_text(tagged_sentences)
     n             = len(tagged_sentences)
 
-    return f"""Read the following transcript based on the audio profile and director's note.
+    return f"""Read the following transcript with AUTHENTIC street accent and emotion.
 
 {director_note}
 
-# Language
+# Language Instructions
 {lang_note}
 
 # Tag Instructions
@@ -439,17 +630,20 @@ CHANGE your voice style for each different tag.
 
 # Pacing Guide ({n} sentences)
 - Sentence 1: MAXIMUM energy (hook)
-- Middle sentences: Build intensity
+- Middle sentences: Build intensity, vary the rhythm
 - Last sentence: Deliver with complete conviction
 
 # Transcript
 {script_text}
 
-# Critical Rules
+# CRITICAL RULES
 1. Read EVERY word from start to finish
 2. Never trail off or stop early
 3. Different tags = DIFFERENT voice styles
-4. Make transitions feel natural"""
+4. Make transitions feel natural and emotional
+5. Use AUTHENTIC street accent as specified in director note
+6. NEVER switch to formal/literary pronunciation
+7. Sound like a REAL person, not an AI"""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -458,10 +652,11 @@ CHANGE your voice style for each different tag.
 
 def _get_duration(path: str) -> float:
     """
-    الحصول على مدة ملف صوتي بالثواني.
-
+    Get audio file duration in seconds.
+    
     Returns:
-        المدة أو 0.0 عند الفشل
+        Duration (positive float) or 0.0 on error
+        -1.0 if ffprobe is not found
     """
     try:
         r = subprocess.run(
@@ -477,13 +672,18 @@ def _get_duration(path: str) -> float:
         )
 
         result = r.stdout.strip()
-        return float(result) if result else 0.0
+        try:
+            return float(result) if result else 0.0
+        except ValueError:
+            return 0.0
 
-    except (
-        ValueError,
-        subprocess.TimeoutExpired,
-        FileNotFoundError,
-    ):
+    except FileNotFoundError:
+        log.error("  ❌ ffprobe not found — install FFmpeg")
+        return -1.0
+    except subprocess.TimeoutExpired:
+        log.warning("  ⚠️  ffprobe timeout")
+        return 0.0
+    except Exception:
         return 0.0
 
 
@@ -492,15 +692,10 @@ def _get_duration(path: str) -> float:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _parse_mime(mime: str) -> dict:
-    """
-    تحليل MIME type لاستخراج معلمات الصوت.
-
-    Default:
-        bits_per_sample = 16
-        rate            = 24000
-    """
-    bps  = 16
-    rate = 24000
+    """Parse audio MIME type for parameters."""
+    bps      = 16
+    rate     = 24000
+    channels = 1
 
     for part in mime.split(";"):
         p = part.strip()
@@ -510,47 +705,40 @@ def _parse_mime(mime: str) -> dict:
                 rate = int(p.split("=", 1)[1])
             except (ValueError, IndexError):
                 pass
-
+        elif p.lower().startswith("channels="):
+            try:
+                channels = int(p.split("=", 1)[1])
+            except (ValueError, IndexError):
+                pass
         elif p.startswith("audio/L"):
             try:
                 bps = int(p.split("L", 1)[1])
             except (ValueError, IndexError):
                 pass
 
-    return {"bits_per_sample": bps, "rate": rate}
+    return {
+        "bits_per_sample": bps,
+        "rate":            rate,
+        "channels":        channels,
+    }
 
 
 def _to_wav(audio_data: bytes, mime_type: str) -> bytes:
-    """
-    تحويل raw audio إلى WAV format.
-
-    WAV Header structure:
-        RIFF header  (12 bytes)
-        fmt  chunk   (24 bytes)
-        data chunk   (8 bytes + data)
-    """
+    """Convert raw PCM audio to WAV format."""
     params      = _parse_mime(mime_type)
     bps         = params["bits_per_sample"]
     rate        = params["rate"]
+    channels    = params["channels"]
     data_size   = len(audio_data)
-    block_align = bps // 8
+    block_align = channels * (bps // 8)
     byte_rate   = rate * block_align
 
     header = struct.pack(
         "<4sI4s4sIHHIIHH4sI",
-        b"RIFF",
-        36 + data_size,
-        b"WAVE",
-        b"fmt ",
-        16,             # fmt chunk size
-        1,              # PCM format
-        1,              # mono
-        rate,
-        byte_rate,
-        block_align,
-        bps,
-        b"data",
-        data_size,
+        b"RIFF", 36 + data_size, b"WAVE",
+        b"fmt ", 16, 1, channels,
+        rate, byte_rate, block_align, bps,
+        b"data", data_size,
     )
 
     return header + audio_data
@@ -560,8 +748,10 @@ def _to_wav(audio_data: bytes, mime_type: str) -> bytes:
 # AUDIO GENERATION
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _build_tts_config(voice_name: str) -> types.GenerateContentConfig:
-    """بناء config لـ Gemini TTS."""
+def _build_tts_config(
+    voice_name: str,
+) -> "types.GenerateContentConfig":
+    """Build Gemini TTS configuration."""
     return types.GenerateContentConfig(
         temperature         = 1.0,
         response_modalities = ["audio"],
@@ -576,60 +766,42 @@ def _build_tts_config(voice_name: str) -> types.GenerateContentConfig:
 
 
 def _extract_parts_from_chunk(chunk) -> list:
-    """
-    استخراج parts من chunk بطريقة متوافقة مع كل إصدارات google-genai.
-
-    يدعم:
-        - google-genai 0.x: chunk.parts
-        - google-genai 1.x: chunk.candidates[0].content.parts
-    """
-    # Pattern 1: Direct parts (older SDK / some responses)
-    if hasattr(chunk, 'parts') and chunk.parts:
+    """Extract parts from chunk (both SDK versions)."""
+    # Pattern 1: Direct parts (older SDK)
+    if hasattr(chunk, "parts") and chunk.parts:
         return list(chunk.parts)
 
     # Pattern 2: Via candidates (newer SDK 1.0.0+)
-    if hasattr(chunk, 'candidates') and chunk.candidates:
+    if hasattr(chunk, "candidates") and chunk.candidates:
         try:
             candidates = chunk.candidates
             if len(candidates) > 0:
                 candidate = candidates[0]
-
-                if hasattr(candidate, 'content') and candidate.content:
+                if hasattr(candidate, "content") and candidate.content:
                     content = candidate.content
-
-                    if hasattr(content, 'parts') and content.parts:
+                    if hasattr(content, "parts") and content.parts:
                         return list(content.parts)
         except (IndexError, AttributeError):
             pass
-
-    # Pattern 3: Try text attribute (fallback)
-    if hasattr(chunk, 'text') and chunk.text:
-        return []
 
     return []
 
 
 def _extract_audio_from_part(part) -> Optional[tuple[bytes, str]]:
-    """
-    استخراج بيانات الصوت من part واحد.
-
-    Returns:
-        (audio_data, mime_type) أو None
-    """
+    """Extract audio data from a single part."""
     try:
-        # Standard inline_data check
-        if not hasattr(part, 'inline_data'):
+        if not hasattr(part, "inline_data"):
             return None
 
         inline_data = part.inline_data
         if inline_data is None:
             return None
 
-        if not hasattr(inline_data, 'data') or not inline_data.data:
+        if not hasattr(inline_data, "data") or not inline_data.data:
             return None
 
         data = inline_data.data
-        mime = getattr(inline_data, 'mime_type', None) or "audio/wav"
+        mime = getattr(inline_data, "mime_type", None) or "audio/wav"
 
         return (data, mime)
 
@@ -638,18 +810,11 @@ def _extract_audio_from_part(part) -> Optional[tuple[bytes, str]]:
 
 
 def _generate_audio_chunks(
-    client:   genai.Client,
-    prompt:   str,
-    config:   types.GenerateContentConfig,
+    client: "genai.Client",
+    prompt: str,
+    config: "types.GenerateContentConfig",
 ) -> list[tuple[bytes, str]]:
-    """
-    توليد الصوت من Gemini.
-
-    متوافق مع google-genai 0.x و 1.x.
-
-    Returns:
-        list of (audio_data, mime_type)
-    """
+    """Generate audio from Gemini."""
     contents = [
         types.Content(
             role  = "user",
@@ -664,13 +829,10 @@ def _generate_audio_chunks(
         contents = contents,
         config   = config,
     ):
-        # استخراج parts بطريقة متوافقة
         parts = _extract_parts_from_chunk(chunk)
-
         if not parts:
             continue
 
-        # استخراج الصوت من كل part
         for part in parts:
             audio = _extract_audio_from_part(part)
             if audio:
@@ -685,19 +847,25 @@ def _save_audio(
     output_path: str,
 ) -> Path:
     """
-    حفظ الصوت في ملف مع تحديد الامتداد الصحيح.
-
-    Returns:
-        Path للملف المحفوظ
+    Save audio to file with correct extension.
+    
+    Uses reliable MIME → extension mapping (no mimetypes.guess_extension).
     """
-    # التحقق من امتداد آمن
-    ext = mimetypes.guess_extension(mime)
+    mime_clean = mime.split(";")[0].strip().lower()
+    ext        = _MIME_TO_EXT.get(mime_clean)
 
-    if not ext or ext not in SAFE_AUDIO_EXTENSIONS:
+    # Raw PCM needs WAV header
+    needs_wav_wrap = (
+        not ext or
+        mime_clean.startswith("audio/l")
+    )
+
+    if needs_wav_wrap:
         ext  = ".wav"
         data = _to_wav(data, mime)
 
-    file_path = Path(f"{output_path}_0{ext}")
+    base      = Path(output_path).with_suffix("")
+    file_path = Path(f"{base}_0{ext}")
     file_path.write_bytes(data)
 
     return file_path
@@ -706,24 +874,24 @@ def _save_audio(
 def _is_truncated(
     duration:    float,
     total_words: int,
+    lang:        str = "ar",
 ) -> bool:
     """
-    التحقق إذا كان الصوت مقطوع.
-
-    معايير: إذا كانت المدة أقل من 50% من المتوقع
-    لكلمات أكثر من 20.
+    Detect if audio is truncated based on language WPM.
+    
+    Returns True if duration is less than 50% of expected.
     """
     if total_words <= 20:
         return False
 
-    # تقدير: 200 كلمة في الدقيقة
-    min_expected = (total_words / 200) * 60
+    wpm          = WPM_BY_LANG.get(lang, 160)
+    min_expected = (total_words / wpm) * 60
     return duration < min_expected * 0.5
 
 
 def _retry_wait_time(attempt: int) -> float:
-    """حساب وقت الانتظار قبل المحاولة التالية."""
-    return min(2 ** attempt, 8)
+    """Calculate wait time before next attempt."""
+    return min(2 ** attempt, 30)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -733,37 +901,43 @@ def _retry_wait_time(attempt: int) -> float:
 def synthesize_speech(
     tagged_sentences: list[dict],
     output_path:      str = "output",
-    voice_key:        str = "algenib",
+    voice_key:        str = "",
     lang:             str = "ar",
     retries:          int = 3,
 ) -> Path:
     """
-    تحويل tagged sentences إلى صوت بـ Gemini TTS.
-
+    Convert tagged sentences to speech via Gemini TTS.
+    
+    ✅ Merges ALL audio chunks (no truncated audio!)
+    ✅ Per-language voice selection
+    ✅ Authentic street accent prompting
+    ✅ Language-aware truncation detection
+    
     Args:
-        tagged_sentences: قائمة الجمل مع tags
-        output_path:      المسار الأساسي (بدون امتداد)
-        voice_key:        مفتاح الصوت من VOICES
+        tagged_sentences: list of dicts with "text" and "final_tag"
+        output_path:      base path (without extension)
+        voice_key:        unused (auto-selected from VOICE_CONFIGS)
         lang:             ar | fr | en
-        retries:          عدد المحاولات الأساسية
-
+        retries:          base retry count (may be increased with more keys)
+    
     Returns:
-        Path لملف الصوت الناتج
-
+        Path to saved audio file
+    
     Raises:
-        ValueError: إذا tagged_sentences فارغ
-        RuntimeError: إذا فشلت كل المحاولات
+        ValueError:    if no tagged sentences
+        RuntimeError:  if TTS fails after all attempts
     """
     if not tagged_sentences:
         raise ValueError("No tagged sentences to synthesize")
 
     _ensure_keys_loaded()
 
-    # إعدادات الصوت
+    # Get voice config for language (per-language)
     config     = VOICE_CONFIGS.get(lang, VOICE_CONFIGS["ar"])
     voice_name = config["voice_name"]
+    voice_key  = config["voice_key"]
 
-    # إحصائيات
+    # Statistics
     total_words = sum(
         len(s.get("text", "").split())
         for s in tagged_sentences
@@ -773,44 +947,51 @@ def synthesize_speech(
         for s in tagged_sentences
     }
 
-    # بناء prompt
+    # Build prompt
     prompt = _build_tagged_prompt(tagged_sentences, lang)
 
-    # عدد المحاولات
-    max_attempts = (
+    # Calculate max attempts
+    max_attempts = max(
+        1,
         max(retries, len(_API_KEYS) * 2)
         if _API_KEYS
         else retries
     )
 
-    # عرض الإعدادات
-    log.info(f"\n  🎙️  TTS Configuration:")
-    log.info(f"     Voice    : {voice_name}")
-    log.info(f"     Lang     : {lang.upper()}")
-    log.info(f"     Words    : {total_words}")
+    # Log configuration
+    log.info("\n  🎙️  TTS Configuration:")
+    log.info("     Voice    : %s (%s)", voice_name, voice_key)
+    log.info("     Lang     : %s", lang.upper())
+    log.info("     Style    : Street/Casual (authentic)")
+    log.info("     Words    : %d", total_words)
     log.info(
-        f"     Tags     : {', '.join(sorted(unique_tags))}"
+        "     Tags     : %s",
+        ", ".join(sorted(unique_tags))
     )
-    log.info(f"     Sentences: {len(tagged_sentences)}")
-    log.info(f"     Keys     : {len(_API_KEYS)} available")
-    log.info(f"     Max tries: {max_attempts}")
+    log.info("     Sentences: %d", len(tagged_sentences))
+    log.info("     Keys     : %d available", len(_API_KEYS))
+    log.info("     Max tries: %d", max_attempts)
 
-    # بناء TTS config
+    # Build TTS config
     tts_config = _build_tts_config(voice_name)
 
-    # محاولات الإنشاء
+    # Generation attempts
     for attempt in range(max_attempts):
-        cur_idx = _get_current_key_index()
+        cur_idx = _key_index
 
         log.info(
-            f"\n  🎙️  TTS attempt "
-            f"[{attempt + 1}/{max_attempts}] | "
-            f"key #{cur_idx + 1}/{len(_API_KEYS) or 1}"
+            "\n  🎙️  TTS attempt [%d/%d] | key #%d/%d",
+            attempt + 1, max_attempts,
+            cur_idx + 1, len(_API_KEYS) or 1,
         )
 
         try:
-            # توليد الصوت
-            client = _get_client()
+            # Get client
+            key = _get_current_key()
+            if not key:
+                raise RuntimeError("No Gemini key available")
+
+            client       = _get_client(key)
             audio_chunks = _generate_audio_chunks(
                 client, prompt, tts_config
             )
@@ -818,51 +999,75 @@ def synthesize_speech(
             if not audio_chunks:
                 raise RuntimeError("No audio data returned")
 
-            # حفظ
-            data, mime = audio_chunks[0]
-            saved = _save_audio(data, mime, output_path)
+            # ✅ Merge ALL audio chunks
+            log.info(
+                "  📦 Merging %d audio chunks...",
+                len(audio_chunks)
+            )
+
+            primary_mime = audio_chunks[0][1]
+            all_data     = b"".join(d for d, _ in audio_chunks)
+
+            log.info(
+                "  📊 Total audio data: %d bytes",
+                len(all_data)
+            )
+
+            # Save merged audio
+            saved    = _save_audio(all_data, primary_mime, output_path)
             duration = _get_duration(str(saved))
 
             log.info(
-                f"  ✅ Audio saved: "
-                f"{saved.name} ({duration:.1f}s)"
+                "  ✅ Audio saved: %s (%.1fs)",
+                saved.name, duration
             )
 
-            # التحقق من المدة
+            # Validate duration
+            if duration == -1.0:
+                # ffprobe not found → accept without validation
+                log.warning(
+                    "  ⚠️  Cannot validate (ffprobe missing) — accepting"
+                )
+                return saved
+
             if duration < MIN_DURATION_S:
                 log.warning(
-                    f"  ⚠️  Too short ({duration:.1f}s) "
-                    f"— retrying"
+                    "  ⚠️  Too short (%.1fs) — retrying", duration
                 )
                 saved.unlink(missing_ok=True)
                 _rotate_key()
                 time.sleep(1)
                 continue
 
-            # التحقق من الـ truncation
-            if _is_truncated(duration, total_words):
-                log.warning("  ⚠️  Likely truncated — retrying")
+            # Truncation check (language-aware)
+            if _is_truncated(duration, total_words, lang):
+                log.warning(
+                    "  ⚠️  Likely truncated (lang=%s) — retrying",
+                    lang
+                )
                 if attempt < max_attempts - 1:
                     saved.unlink(missing_ok=True)
                     _rotate_key()
                     time.sleep(1)
                     continue
+                # On last attempt, accept what we have
 
-            # نجاح
+            # Success!
             return saved
 
         except Exception as e:
             if _is_rate_limit(e):
                 log.warning(
-                    f"  🛑 Rate limit on key #{cur_idx + 1}"
+                    "  🛑 Rate limit on key #%d",
+                    cur_idx + 1
                 )
                 _rotate_key()
                 time.sleep(2)
             else:
                 err_type = type(e).__name__
                 log.warning(
-                    f"  ⚠️  TTS error "
-                    f"[{err_type}]: {str(e)[:120]}"
+                    "  ⚠️  TTS error [%s]: %s",
+                    err_type, str(e)[:120]
                 )
                 _rotate_key()
 
