@@ -1,5 +1,5 @@
 """
-🗄️ SQLite Database for VSG (Video Script Generator)
+🗄️ SQLite Database for VSG (Video Script Generator) v2.0
 
 Features:
   ✅ Used videos tracking (Pexels/Pixabay)
@@ -11,10 +11,14 @@ Features:
   ✅ Auto-next system (tracks platforms independently)
   ✅ Loop support (reset when done)
   ✅ Thread-safe (WAL mode + RLock + unique Savepoints)
-  ✅ Auto-migrations
+  ✅ Auto-migrations (smart error classification)
   ✅ Input validation on all public functions
   ✅ UTC timestamps everywhere
   ✅ mark_render_done — atomic read+write
+  ✅ init_db — thread-safe with _write_lock
+  ✅ get_ready_to_publish — distinguishes "no videos" vs "missing files"
+  ✅ save_pre_generated — Long FB path fix
+  ✅ print_db_summary — crash-safe per query
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+log = logging.getLogger(__name__)
+
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -37,7 +43,7 @@ DB_PATH  = BASE_DIR / "vsg.db"
 
 CONNECTION_TIMEOUT = 30.0
 BUSY_TIMEOUT_MS    = 30_000
-CACHE_SIZE_KB      = -8_000
+CACHE_SIZE_KB      = -8_000  # Negative = KB in SQLite
 
 DAILY_QUOTA: dict[str, int] = {
     "short": 5,
@@ -50,15 +56,13 @@ PLATFORMS = frozenset({"facebook", "youtube"})
 
 MAX_ERROR_LENGTH = 500
 
-log = logging.getLogger(__name__)
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # THREAD-LOCAL STATE
 # ═════════════════════════════════════════════════════════════════════════════
 
 _local      = threading.local()
-_write_lock = threading.RLock()   # ✅ RLock للـ nested calls
+_write_lock = threading.RLock()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -97,7 +101,7 @@ def _validate_video_number(video_number: str) -> str:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TIME HELPERS — UTC دائماً
+# TIME HELPERS — UTC always
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _today_utc_iso() -> str:
@@ -113,11 +117,11 @@ def _now_utc_iso() -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _apply_pragmas(conn: sqlite3.Connection) -> None:
-    """تطبيق PRAGMAs — WAL خارج أي transaction."""
+    """Apply PRAGMAs — WAL outside any transaction."""
     result = conn.execute("PRAGMA journal_mode=WAL").fetchone()
     if result and result[0] != "wal":
-        log.warning(f"  ⚠️  WAL not activated: {result[0]}")
-    conn.execute(f"PRAGMA synchronous=NORMAL")
+        log.warning("  ⚠️  WAL not activated: %s", result[0])
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute(f"PRAGMA cache_size={CACHE_SIZE_KB}")
     conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -156,17 +160,17 @@ def close_thread_conn() -> None:
 @contextmanager
 def write_transaction() -> Iterator[sqlite3.Connection]:
     """
-    Context manager للكتابة الآمنة.
-
-    ✅ RLock — يسمح لنفس الـ thread بالدخول مرات
-    ✅ Savepoint فريد لكل nested call
-    ✅ COMMIT / ROLLBACK تلقائي
+    Context manager for safe writes.
+    
+    RLock allows same thread to enter multiple times.
+    Unique Savepoint per nested call.
+    Auto COMMIT / ROLLBACK.
     """
     with _write_lock:
         conn = _conn()
 
         if conn.in_transaction:
-            # ✅ Savepoint فريد: thread_id + counter
+            # Nested: use Savepoint
             counter = getattr(_local, "_sp_counter", 0) + 1
             _local._sp_counter = counter
             sp = f"sp_{threading.get_ident()}_{counter}"
@@ -181,11 +185,12 @@ def write_transaction() -> Iterator[sqlite3.Connection]:
                     conn.execute(f"RELEASE SAVEPOINT {sp}")
                 except Exception:
                     pass
-                log.error(f"  ❌ DB nested write failed: {exc}")
+                log.error("  ❌ DB nested write failed: %s", exc)
                 raise
             finally:
                 _local._sp_counter = counter - 1
         else:
+            # Top-level: BEGIN IMMEDIATE
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 yield conn
@@ -195,7 +200,7 @@ def write_transaction() -> Iterator[sqlite3.Connection]:
                     conn.execute("ROLLBACK")
                 except Exception:
                     pass
-                log.error(f"  ❌ DB write failed: {exc}")
+                log.error("  ❌ DB write failed: %s", exc)
                 raise
 
 
@@ -317,72 +322,58 @@ _SCHEMA_STATEMENTS: list[str] = [
     """,
 
     # Indexes
-    "CREATE INDEX IF NOT EXISTS idx_used_videos "
-    "ON used_videos(source_id, source)",
-
-    "CREATE INDEX IF NOT EXISTS idx_renders "
-    "ON renders(video_number, lang, content_mode)",
-
-    "CREATE INDEX IF NOT EXISTS idx_renders_status "
-    "ON renders(status)",
-
-    "CREATE INDEX IF NOT EXISTS idx_renders_lang "
-    "ON renders(lang, content_mode, status)",
-
-    "CREATE INDEX IF NOT EXISTS idx_ai_cache "
-    "ON ai_cache(cache_key)",
-
-    "CREATE INDEX IF NOT EXISTS idx_ai_cache_lang "
-    "ON ai_cache(lang, content_mode)",
-
-    "CREATE INDEX IF NOT EXISTS idx_publish "
-    "ON publish_tracker"
-    "(video_number, lang, content_mode, platform)",
-
-    "CREATE INDEX IF NOT EXISTS idx_publish_lang "
-    "ON publish_tracker(lang, content_mode, platform)",
-
-    "CREATE INDEX IF NOT EXISTS idx_publish_date "
-    "ON publish_tracker(lang, content_mode, platform, published_at)",
-
-    "CREATE INDEX IF NOT EXISTS idx_pre_generated "
-    "ON pre_generated(lang, content_mode, published)",
-
-    "CREATE INDEX IF NOT EXISTS idx_pre_gen_schedule "
-    "ON pre_generated(scheduled_at, published)",
+    "CREATE INDEX IF NOT EXISTS idx_used_videos ON used_videos(source_id, source)",
+    "CREATE INDEX IF NOT EXISTS idx_renders ON renders(video_number, lang, content_mode)",
+    "CREATE INDEX IF NOT EXISTS idx_renders_status ON renders(status)",
+    "CREATE INDEX IF NOT EXISTS idx_renders_lang ON renders(lang, content_mode, status)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_cache ON ai_cache(cache_key)",
+    "CREATE INDEX IF NOT EXISTS idx_ai_cache_lang ON ai_cache(lang, content_mode)",
+    "CREATE INDEX IF NOT EXISTS idx_publish ON publish_tracker(video_number, lang, content_mode, platform)",
+    "CREATE INDEX IF NOT EXISTS idx_publish_lang ON publish_tracker(lang, content_mode, platform)",
+    "CREATE INDEX IF NOT EXISTS idx_publish_date ON publish_tracker(lang, content_mode, platform, published_at)",
+    "CREATE INDEX IF NOT EXISTS idx_pre_generated ON pre_generated(lang, content_mode, published)",
+    "CREATE INDEX IF NOT EXISTS idx_pre_gen_schedule ON pre_generated(scheduled_at, published)",
 ]
 
 
 def init_db() -> None:
     """
     تهيئة قاعدة البيانات.
-    ✅ يتحقق من عدم وجود transaction مفتوح قبل BEGIN.
-    ✅ DDL في transaction واحد.
+    
+    Thread-safe with _write_lock.
+    DDL in single transaction.
+    Auto rollback on failure.
     """
-    conn = _conn()
+    with _write_lock:
+        conn = _conn()
 
-    # ✅ أغلق أي transaction مفتوح بالخطأ
-    if conn.in_transaction:
-        log.warning("  ⚠️  init_db: open transaction found — rolling back")
+        # Close any dangling transaction
+        if conn.in_transaction:
+            log.warning(
+                "  ⚠️  init_db: open transaction found — rolling back"
+            )
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+
+        # Schema creation
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute("ROLLBACK")
-        except Exception:
-            pass
+            for stmt in _SCHEMA_STATEMENTS:
+                stmt = stmt.strip()
+                if stmt:
+                    conn.execute(stmt)
+            conn.execute("COMMIT")
+        except Exception as e:
+            log.error("  ❌ Schema creation failed: %s", e)
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
 
-    conn.execute("BEGIN")
-    try:
-        for stmt in _SCHEMA_STATEMENTS:
-            stmt = stmt.strip()
-            if stmt:
-                conn.execute(stmt)
-        conn.execute("COMMIT")
-    except Exception:
-        try:
-            conn.execute("ROLLBACK")
-        except Exception:
-            pass
-        raise
-
+    # Migrations in separate transaction
     with write_transaction() as c:
         _run_migrations(c)
 
@@ -390,7 +381,7 @@ def init_db() -> None:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MIGRATIONS
+# MIGRATIONS (smart error classification)
 # ═════════════════════════════════════════════════════════════════════════════
 
 _SIMPLE_MIGRATIONS: list[str] = [
@@ -410,25 +401,47 @@ _SIMPLE_MIGRATIONS: list[str] = [
 
 
 def _run_migrations(c: sqlite3.Connection) -> None:
-    """
-    تشغيل migrations.
-    ✅ يتجاهل فقط duplicate column errors.
-    ✅ يُسجّل الأخطاء الأخرى.
-    """
+    """Run migrations with smart error classification."""
+    applied = 0
+    skipped = 0
+    failed  = 0
+
     for sql in _SIMPLE_MIGRATIONS:
         try:
             c.execute(sql)
+            applied += 1
         except sqlite3.OperationalError as e:
             msg = str(e).lower()
+
             if "duplicate column" in msg or "already exists" in msg:
-                pass
-            else:
+                # Already applied — normal
+                skipped += 1
+            elif "no such table" in msg:
+                # Table not yet created (will be in schema)
                 log.warning(
-                    f"  ⚠️  Migration: {e} | SQL: {sql[:60]}"
+                    "  ⚠️  Migration skipped (table not yet created): %s",
+                    sql[:60]
+                )
+                skipped += 1
+            else:
+                # Real error
+                failed += 1
+                log.error(
+                    "  ❌ Migration failed: %s | SQL: %s",
+                    e, sql[:60]
                 )
 
-
-# ═════════════════════════════════════════════════════════════════════════════
+    if applied > 0:
+        log.info(
+            "  ✅ Migrations: %d applied, %d skipped, %d failed",
+            applied, skipped, failed
+        )
+    elif failed > 0:
+        log.warning(
+            "  ⚠️  Migrations: 0 applied, %d failed",
+            failed
+        )
+      # ═════════════════════════════════════════════════════════════════════════════
 # CACHE KEY
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -494,14 +507,6 @@ def is_render_done(
     platform:     Optional[str] = None,
     check_file:   bool          = True,
 ) -> bool:
-    """
-    التحقق من اكتمال rendering.
-
-    platform=None       → أي path موجود
-    platform='youtube'  → yt_path
-    platform='facebook' → fb_path
-    check_file=False    → DB فقط بدون disk I/O
-    """
     _validate_lang(lang)
     _validate_mode(content_mode)
     vn = _validate_video_number(video_number)
@@ -592,16 +597,16 @@ def mark_render_done(
     yt_path:      str = "",
 ) -> None:
     """
-    تسجيل اكتمال render.
-    ✅ القراءة والكتابة في نفس الـ transaction — atomic.
-    ✅ لا يمسح path موجود بـ path فارغ.
+    Mark render as done.
+    Atomic read+write in same transaction.
+    Does not overwrite existing paths with empty strings.
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
     vn = _validate_video_number(video_number)
 
     with write_transaction() as c:
-        # ✅ القراءة داخل نفس الـ transaction
+        # Read existing paths
         existing = c.execute(
             """
             SELECT fb_path, yt_path, output_path
@@ -780,7 +785,10 @@ def _get_published_numbers(
     content_mode: str,
     platforms:    tuple[str, ...],
 ) -> set[str]:
-    c    = _conn()
+    """
+    Get video numbers published on ALL specified platforms (AND logic).
+    """
+    c     = _conn()
     sets : list[set[str]] = []
 
     for platform in platforms:
@@ -796,6 +804,7 @@ def _get_published_numbers(
     if not sets:
         return set()
 
+    # Intersection: published on ALL platforms
     result = sets[0]
     for s in sets[1:]:
         result = result & s
@@ -845,8 +854,8 @@ def reset_published_for_lang(
         count = cursor.rowcount
 
     log.info(
-        f"  🔄 Reset {lang.upper()} ({content_mode}) — "
-        f"{count} cleared"
+        "  🔄 Reset %s (%s) — %d cleared",
+        lang.upper(), content_mode, count
     )
     return count
 
@@ -860,10 +869,6 @@ def get_today_published_count(
     content_mode: str = "short",
     platform:     str = "youtube",
 ) -> int:
-    """
-    كم فيديو نُشر اليوم.
-    ✅ UTC دائماً — substr(published_at, 1, 10) يعمل مع كلا الصيغتين.
-    """
     _validate_lang(lang)
     _validate_mode(content_mode)
     _validate_platform(platform)
@@ -947,8 +952,9 @@ def get_last_publish_time(
     platform:     str = "youtube",
 ) -> Optional[datetime]:
     """
-    آخر وقت نشر.
-    يُستخدم في scheduler لمنع النشر المزدوج.
+    Last publish time.
+    Handles both UTC ISO formats.
+    Returns aware datetime (UTC).
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
@@ -969,7 +975,7 @@ def get_last_publish_time(
 
     try:
         ts = row["published_at"]
-        # يدعم: "2024-01-15T10:30:00Z" و "2024-01-15 10:30:00"
+        # Handle: "2024-01-15T10:30:00Z" and "2024-01-15 10:30:00"
         ts = ts.replace("Z", "+00:00").replace(" ", "T")
         dt = datetime.fromisoformat(ts)
         if dt.tzinfo is None:
@@ -994,9 +1000,32 @@ def save_pre_generated(
     scheduled_at: Optional[str] = None,
     title:        str           = "",
 ) -> None:
+    """
+    Save pre-generated video.
+    
+    Long FB path fix:
+    - Short: fb_path fallback to output_path (both portrait)
+    - Long: fb_path must be separate (no fallback to landscape)
+    """
     _validate_lang(lang)
     _validate_mode(content_mode)
     vn = _validate_video_number(video_number)
+
+    # Path logic
+    if content_mode == "long":
+        # Long: separate paths (YT=landscape, FB=portrait)
+        final_yt_path = yt_path or output_path
+        final_fb_path = fb_path  # NO fallback to landscape!
+
+        if not final_fb_path:
+            log.debug(
+                "  ℹ️  Long #%s: no fb_path provided",
+                vn
+            )
+    else:
+        # Short: same portrait for both
+        final_yt_path = yt_path or output_path
+        final_fb_path = fb_path or output_path
 
     with write_transaction() as c:
         c.execute(
@@ -1020,8 +1049,8 @@ def save_pre_generated(
             (
                 vn, lang, content_mode, str(title),
                 output_path,
-                fb_path or output_path,
-                yt_path or output_path,
+                final_fb_path,
+                final_yt_path,
                 float(duration_s),
                 scheduled_at,
             ),
@@ -1035,9 +1064,9 @@ def get_ready_to_publish(
     limit:        int = 1,
 ) -> list[dict]:
     """
-    فيديوهات جاهزة للنشر.
-    ✅ يُرجع title.
-    ✅ يتحقق من وجود الملف.
+    Videos ready to publish.
+    
+    Distinguishes "no videos in DB" from "files missing".
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
@@ -1073,7 +1102,17 @@ def get_ready_to_publish(
         (lang, content_mode, platform, max(1, limit)),
     ).fetchall()
 
-    result: list[dict] = []
+    # No rows in DB
+    if not rows:
+        log.debug(
+            "  📭 No pre-generated videos for %s/%s/%s",
+            lang, content_mode, platform
+        )
+        return []
+
+    result:        list[dict] = []
+    missing_files: list[str]  = []
+
     for r in rows:
         path = (
             r["fb_path"] if platform == "facebook"
@@ -1081,10 +1120,7 @@ def get_ready_to_publish(
         ) or r["output_path"]
 
         if not path or not Path(path).exists():
-            log.warning(
-                f"  ⚠️  Pre-generated missing: "
-                f"#{r['video_number']} [{lang}/{content_mode}]"
-            )
+            missing_files.append(str(r["video_number"]))
             continue
 
         result.append({
@@ -1099,6 +1135,22 @@ def get_ready_to_publish(
             "scheduled_at": r["scheduled_at"],
             "path":         path,
         })
+
+    # Warn about missing files
+    if missing_files:
+        log.error(
+            "  ❌ %d pre-generated videos have MISSING FILES "
+            "for %s/%s/%s: %s",
+            len(missing_files),
+            lang, content_mode, platform,
+            ", ".join(f"#{n}" for n in missing_files[:5])
+        )
+
+        if not result:
+            log.error(
+                "  ❌ ALL ready videos are missing files! "
+                "Check output directory."
+            )
 
     return result
 
@@ -1153,7 +1205,7 @@ def get_pre_generated_count(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# PENDING PUBLISH (للتوافق الخلفي)
+# PENDING PUBLISH (backward compat)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_pending_publish(
@@ -1351,10 +1403,6 @@ def save_ai_cache(
     enriched:     dict,
     content_mode: str = "short",
 ) -> None:
-    """
-    حفظ AI cache.
-    ✅ يتحقق من صحة enriched.
-    """
     _validate_lang(lang)
     _validate_mode(content_mode)
 
@@ -1433,29 +1481,31 @@ def show_ai_cache(cache_key: Optional[str] = None) -> None:
     if cache_key:
         cache = get_ai_cache(cache_key)
         if not cache:
-            log.info(f"  ❌ No cache: {cache_key}")
+            log.info("  ❌ No cache: %s", cache_key)
             return
         sep = "═" * 60
-        log.info(f"\n  {sep}")
-        log.info(f"  📦 {cache_key}")
-        log.info(f"  {sep}")
+        log.info("\n  %s", sep)
+        log.info("  📦 %s", cache_key)
+        log.info("  %s", sep)
         analysis = cache.get("analysis") or {}
         if analysis:
             log.info(
-                f"  📊 {analysis.get('content_type')} | "
-                f"{analysis.get('primary_emotion')}"
+                "  📊 %s | %s",
+                analysis.get("content_type"),
+                analysis.get("primary_emotion")
             )
         hook = cache.get("hook_keyword", "")
         if hook:
-            log.info(f"  🔥 Hook: '{hook}'")
+            log.info("  🔥 Hook: '%s'", hook)
         desc = cache.get("street_description", "")
         if desc:
-            log.info(f"  📝 {len(desc)} chars")
+            log.info("  📝 %d chars", len(desc))
         log.info(
-            f"  🌐 {cache.get('lang','ar').upper()} | "
-            f"📺 {cache.get('content_mode','short').upper()}"
+            "  🌐 %s | 📺 %s",
+            cache.get("lang", "ar").upper(),
+            cache.get("content_mode", "short").upper()
         )
-        log.info(f"  {sep}\n")
+        log.info("  %s\n", sep)
         return
 
     rows = _conn().execute(
@@ -1471,71 +1521,100 @@ def show_ai_cache(cache_key: Optional[str] = None) -> None:
         return
 
     sep = "═" * 80
-    log.info(f"\n  {sep}")
-    log.info(f"  📦 AI Cache ({len(rows)} entries)")
-    log.info(f"  {sep}")
+    log.info("\n  %s", sep)
+    log.info("  📦 AI Cache (%d entries)", len(rows))
+    log.info("  %s", sep)
     for r in rows:
         log.info(
-            f"  {str(r['cache_key'])[:18]:<18} "
-            f"{str(r['lang'] or 'ar').upper():<4} "
-            f"{str(r['content_mode'] or 'short')[:5]:<6} "
-            f"{(r['title'] or '')[:28]:<28} "
-            f"{(r['created_at'] or '')[:19]}"
+            "  %-18s %-4s %-6s %-28s %s",
+            str(r["cache_key"])[:18],
+            str(r["lang"] or "ar").upper(),
+            str(r["content_mode"] or "short")[:5],
+            (r["title"] or "")[:28],
+            (r["created_at"] or "")[:19]
         )
-    log.info(f"  {sep}\n")
+    log.info("  %s\n", sep)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SUMMARY
+# SUMMARY (crash-safe per query)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def print_db_summary() -> None:
-    c = _conn()
+    """Print DB summary (crash-safe per query)."""
+    try:
+        c = _conn()
+    except Exception as e:
+        log.warning("  ⚠️  Cannot connect to DB: %s", e)
+        return
 
-    used = get_used_count()
+    def _safe_count(query: str, default: int = 0) -> int:
+        try:
+            row = c.execute(query).fetchone()
+            return int(row[0]) if row else default
+        except Exception as e:
+            log.debug("  Query error: %s", e)
+            return default
 
-    done_short = c.execute(
+    try:
+        used = get_used_count()
+    except Exception:
+        used = 0
+
+    done_short = _safe_count(
         "SELECT COUNT(*) FROM renders "
         "WHERE status='done' AND content_mode='short'"
-    ).fetchone()[0]
-
-    done_long = c.execute(
-        "SELECT COUNT(*) FROM renders "
-        "WHERE status='done' AND content_mode='long'"
-    ).fetchone()[0]
-
-    failed = c.execute(
-        "SELECT COUNT(*) FROM renders WHERE status='failed'"
-    ).fetchone()[0]
-
-    cached = c.execute(
-        "SELECT COUNT(*) FROM ai_cache"
-    ).fetchone()[0]
-
-    pre_ready = c.execute(
-        "SELECT COUNT(*) FROM pre_generated WHERE published=0"
-    ).fetchone()[0]
-
-    log.info(
-        f"  📊 DB: {used} videos used | "
-        f"Short: {done_short} ✅ | Long: {done_long} ✅ | "
-        f"{failed} failed ❌ | "
-        f"AI: {cached} cached | Ready: {pre_ready} 🎬"
     )
 
-    today = _today_utc_iso()
-    for lang in sorted(LANGS):
-        for mode in sorted(MODES):
-            pub_yt = get_today_published_count(lang, mode, "youtube")
-            pub_fb = get_today_published_count(lang, mode, "facebook")
-            gen    = get_today_generated_count(lang, mode)
-            quota  = get_daily_quota(mode)
+    done_long = _safe_count(
+        "SELECT COUNT(*) FROM renders "
+        "WHERE status='done' AND content_mode='long'"
+    )
 
-            if pub_yt > 0 or pub_fb > 0 or gen > 0:
-                log.info(
-                    f"  📅 {today} | "
-                    f"{lang.upper()} {mode:<5} | "
-                    f"Gen: {gen}/{quota} | "
-                    f"YT: {pub_yt}/{quota} | "
-                    f"FB: {pub_fb}/{quota}"
-                )
+    failed = _safe_count(
+        "SELECT COUNT(*) FROM renders WHERE status='failed'"
+    )
+
+    cached = _safe_count(
+        "SELECT COUNT(*) FROM ai_cache"
+    )
+
+    pre_ready = _safe_count(
+        "SELECT COUNT(*) FROM pre_generated WHERE published=0"
+    )
+
+    log.info(
+        "  📊 DB: %d videos used | Short: %d ✅ | Long: %d ✅ | "
+        "%d failed ❌ | AI: %d cached | Ready: %d 🎬",
+        used, done_short, done_long, failed, cached, pre_ready
+    )
+
+    # Today's stats per language/mode
+    try:
+        today = _today_utc_iso()
+        for lang in sorted(LANGS):
+            for mode in sorted(MODES):
+                try:
+                    pub_yt = get_today_published_count(lang, mode, "youtube")
+                    pub_fb = get_today_published_count(lang, mode, "facebook")
+                    gen    = get_today_generated_count(lang, mode)
+                    quota  = get_daily_quota(mode)
+
+                    if pub_yt > 0 or pub_fb > 0 or gen > 0:
+                        log.info(
+                            "  📅 %s | %s %-5s | Gen: %d/%d | "
+                            "YT: %d/%d | FB: %d/%d",
+                            today,
+                            lang.upper(),
+                            mode,
+                            gen, quota,
+                            pub_yt, quota,
+                            pub_fb, quota
+                        )
+                except Exception as e:
+                    log.debug(
+                        "  Stats error for %s/%s: %s",
+                        lang, mode, e
+                    )
+    except Exception as e:
+        log.debug("  Today summary error: %s", e)
