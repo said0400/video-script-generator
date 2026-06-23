@@ -1,12 +1,15 @@
 """
-📄 SRT Subtitle Generator
+📄 SRT Subtitle Generator v2.0 — Final Production Edition
 
 Features:
-  ✅ Sentence-level SRT (for upload)
+  ✅ Sentence-level SRT (for upload as captions)
   ✅ Word-level SRT (for karaoke effects)
   ✅ Absolute paths
   ✅ Min duration enforcement
   ✅ UTF-8 encoding
+  ✅ round() instead of int() for timestamp precision
+  ✅ Auto-create output directory
+  ✅ %s logging (no f-string)
 """
 
 from __future__ import annotations
@@ -15,6 +18,8 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
@@ -32,13 +37,6 @@ DEFAULT_WORD_DURATION     = 0.4
 MS_PER_SECOND = 1000
 MS_PER_MINUTE = 60_000
 MS_PER_HOUR   = 3_600_000
-
-# Logging
-logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(message)s",
-)
-log = logging.getLogger(__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -74,14 +72,18 @@ def _format_timestamp(seconds: float) -> str:
 
     Format: HH:MM:SS,mmm
 
+    Uses round() instead of int() for floating-point precision.
+
     Examples:
         >>> _format_timestamp(3.5)
         "00:00:03,500"
         >>> _format_timestamp(3661.25)
         "01:01:01,250"
+        >>> _format_timestamp(3.1)
+        "00:00:03,100"
     """
     safe_seconds = max(0.0, seconds)
-    total_ms     = int(safe_seconds * MS_PER_SECOND)
+    total_ms     = round(safe_seconds * MS_PER_SECOND)
 
     hours        = total_ms // MS_PER_HOUR
     minutes      = (total_ms % MS_PER_HOUR) // MS_PER_MINUTE
@@ -135,9 +137,12 @@ def _write_srt_file(
     if not entries:
         return None
 
-    path  = Path(output_path).resolve()
-    lines = []
+    path = Path(output_path).resolve()
 
+    # تأكد من وجود المجلد
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = []
     for entry in entries:
         lines.extend(entry.to_srt_block())
 
@@ -159,7 +164,7 @@ def _extract_sentence_entries(
     """استخراج subtitle entries من aligned (مستوى الجملة)."""
     entries: list[SubtitleEntry] = []
 
-    for idx, item in enumerate(aligned, start=1):
+    for item in aligned:
         sentence = item.get("sentence", "").strip()
         if not sentence:
             continue
@@ -211,8 +216,8 @@ def generate_srt(
 
     if path:
         log.info(
-            f"  📄 SRT ({len(entries)} subtitles) → "
-            f"{path.name}"
+            "  📄 SRT (%d subtitles) → %s",
+            len(entries), path.name
         )
 
     return path
@@ -283,8 +288,8 @@ def generate_word_srt(
 
     if path:
         log.info(
-            f"  📄 Word SRT ({len(entries)} words) → "
-            f"{path.name}"
+            "  📄 Word SRT (%d words) → %s",
+            len(entries), path.name
         )
 
     return path
