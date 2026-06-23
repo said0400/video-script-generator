@@ -1,11 +1,18 @@
 """
-🔑 Token Manager — Auto Token Validation & Refresh
+🔑 Token Manager v2.0 — Auto Token Validation & Refresh
 
 Features:
   ✅ YouTube token validation + auto refresh
-  ✅ Facebook token validation + warning before expiry
+  ✅ Facebook token validation per-language
+  ✅ Facebook debug_token uses APP_ID|APP_SECRET (correct)
   ✅ Facebook token extension (Short → Long-lived)
   ✅ 3 languages support (AR, FR, EN)
+  ✅ Negative days_left → token expired (valid=False)
+  ✅ Better JSON error handling
+  ✅ Configurable Graph API version
+  ✅ WARNING_DAYS_FB = 14 (safer than 7)
+  ✅ Warnings logged clearly in check_all_tokens
+  ✅ Per-language Facebook credentials
   ✅ Notifications via WhatsApp (Green-API)
 """
 
@@ -20,27 +27,28 @@ from typing import Optional
 
 import requests
 
+log = logging.getLogger(__name__)
+
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
 # ═════════════════════════════════════════════════════════════════════════════
 
 # API URLs
 YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GRAPH_API         = "https://graph.facebook.com/v19.0"
+
+# Configurable Graph API version
+GRAPH_API_VERSION = os.environ.get("FB_API_VERSION", "v21.0")
+GRAPH_API         = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
 
 # Languages
-LANGS = ["ar", "fr", "en"]
+LANGS = ("ar", "fr", "en")
 
 # Warnings
-WARNING_DAYS_FB = 7   # تحذير قبل 7 أيام من انتهاء FB token
-DEFAULT_TIMEOUT = 15  # ثانية
+WARNING_DAYS_FB = 14   # تحذير قبل 14 يوماً من انتهاء FB token
 
-# Logging
-logging.basicConfig(
-    level  = logging.INFO,
-    format = "%(message)s",
-)
-log = logging.getLogger(__name__)
+# Timeouts
+TOKEN_TIMEOUT = 30     # لعمليات التجديد الثقيلة
+CHECK_TIMEOUT = 15     # للفحص السريع
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -50,10 +58,10 @@ log = logging.getLogger(__name__)
 @dataclass
 class YouTubeTokenResult:
     """نتيجة فحص YouTube token."""
-    valid:      bool   = False
-    lang:       str    = ""
-    expires_in: int    = 0
-    error:      str    = ""
+    valid:      bool = False
+    lang:       str  = ""
+    expires_in: int  = 0
+    error:      str  = ""
 
     def to_dict(self) -> dict:
         return {
@@ -67,12 +75,12 @@ class YouTubeTokenResult:
 @dataclass
 class FacebookTokenResult:
     """نتيجة فحص Facebook token."""
-    valid:      bool   = False
-    lang:       str    = ""
-    expires_at: str    = ""
-    days_left:  int    = 0
-    is_warning: bool   = False
-    error:      str    = ""
+    valid:      bool = False
+    lang:       str  = ""
+    expires_at: str  = ""
+    days_left:  int  = 0
+    is_warning: bool = False
+    error:      str  = ""
 
     def to_dict(self) -> dict:
         return {
@@ -126,6 +134,24 @@ def _safe_str(value, max_len: int = 200) -> str:
     return s[:max_len] if len(s) > max_len else s
 
 
+def _safe_json_parse(
+    response: requests.Response,
+) -> tuple[Optional[dict], Optional[str]]:
+    """
+    Parse JSON response آمن.
+    
+    Returns:
+        (data, error_message)
+    """
+    try:
+        data = response.json()
+        return data, None
+    except ValueError:
+        return None, (
+            f"HTTP {response.status_code}: Non-JSON response"
+        )
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # YOUTUBE TOKEN MANAGER
 # ═════════════════════════════════════════════════════════════════════════════
@@ -139,7 +165,7 @@ def _get_yt_creds(lang: str) -> tuple[str, str, str]:
     """
     lang_upper = lang.upper()
 
-    client_id     = _get_env(
+    client_id = _get_env(
         f"YOUTUBE_CLIENT_ID_{lang_upper}",
         "YOUTUBE_CLIENT_ID",
     )
@@ -175,15 +201,20 @@ def _request_youtube_token(
                 "refresh_token": refresh_token,
                 "grant_type":    "refresh_token",
             },
-            timeout = 30,
+            timeout = TOKEN_TIMEOUT,
         )
 
-        data = r.json()
+        # Safe JSON parse
+        data, parse_error = _safe_json_parse(r)
+        if parse_error:
+            return None, parse_error
 
         if r.status_code != 200:
-            error = data.get("error", "unknown")
-            desc  = data.get("error_description", "")
-            return None, f"{error}: {desc}"
+            error = data.get("error", "unknown") if data else "unknown"
+            desc  = data.get("error_description", "") if data else ""
+            return None, (
+                f"HTTP {r.status_code} — {error}: {desc}"
+            )
 
         return data, None
 
@@ -240,8 +271,8 @@ def check_youtube_token(lang: str) -> dict:
     result.expires_in = expires_in
 
     log.info(
-        f"  ✅ YouTube ({lang.upper()}): "
-        f"token valid (expires in {expires_in}s)"
+        "  ✅ YouTube (%s): token valid (expires in %ds)",
+        lang.upper(), expires_in
     )
 
     return result.to_dict()
@@ -250,9 +281,6 @@ def check_youtube_token(lang: str) -> dict:
 def refresh_youtube_token(lang: str) -> dict:
     """
     يجدد YouTube access_token.
-
-    ملاحظة: refresh_token نفسه لا ينتهي عادةً،
-    لكن هذا يتحقق من صلاحيته ويجدد الـ access_token.
 
     Returns:
         dict مع: success, access_token, expires_in, error
@@ -285,66 +313,126 @@ def refresh_youtube_token(lang: str) -> dict:
         return result
 
     access_token = data.get("access_token", "")
-    expires_in   = int(data.get("expires_in", 3600))
+    expires_in   = int(data.get("expires_in", 0))
 
     if not access_token:
         result["error"] = "Empty access_token"
         return result
+
+    if expires_in == 0:
+        log.warning(
+            "  ⚠️  YouTube (%s): expires_in not returned",
+            lang.upper()
+        )
 
     result["success"]      = True
     result["access_token"] = access_token
     result["expires_in"]   = expires_in
 
     log.info(
-        f"  ✅ YouTube ({lang.upper()}): "
-        f"token refreshed (valid for {expires_in}s)"
+        "  ✅ YouTube (%s): token refreshed (valid for %ds)",
+        lang.upper(), expires_in
     )
 
     return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# FACEBOOK TOKEN MANAGER
+# FACEBOOK TOKEN MANAGER (Per-language)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def _get_fb_creds() -> tuple[str, str]:
+def _get_fb_creds(lang: str = "") -> tuple[str, str]:
     """
-    يقرأ Facebook credentials من البيئة.
+    يقرأ Facebook credentials per-language من البيئة.
 
-    Note: Facebook credentials تأتي من workflow حسب اللغة.
+    Supports:
+        FB_PAGE_ID_AR, FB_PAGE_TOKEN_AR
+        FB_PAGE_ID_FR, FB_PAGE_TOKEN_FR
+        FB_PAGE_ID_EN, FB_PAGE_TOKEN_EN
+    Fallback: FB_PAGE_ID / FB_PAGE_TOKEN
 
     Returns:
         (page_id, token)
     """
-    page_id = os.environ.get("FB_PAGE_ID",    "").strip()
-    token   = os.environ.get("FB_PAGE_TOKEN", "").strip()
+    lu = lang.upper().strip() if lang else ""
+
+    if lu and lu in ("AR", "FR", "EN"):
+        page_id = (
+            os.environ.get(f"FB_PAGE_ID_{lu}", "").strip()
+            or os.environ.get("FB_PAGE_ID", "").strip()
+        )
+        token = (
+            os.environ.get(f"FB_PAGE_TOKEN_{lu}", "").strip()
+            or os.environ.get("FB_PAGE_TOKEN", "").strip()
+        )
+    else:
+        page_id = os.environ.get("FB_PAGE_ID", "").strip()
+        token   = os.environ.get("FB_PAGE_TOKEN", "").strip()
+
     return page_id, token
 
 
-def _debug_facebook_token(token: str) -> tuple[Optional[dict], Optional[str]]:
+def _get_fb_app_credentials() -> tuple[str, str]:
+    """
+    يقرأ Facebook App credentials.
+
+    Returns:
+        (app_id, app_secret)
+    """
+    app_id     = os.environ.get("FB_APP_ID", "").strip()
+    app_secret = os.environ.get("FB_APP_SECRET", "").strip()
+    return app_id, app_secret
+
+
+def _debug_facebook_token(
+    token: str,
+) -> tuple[Optional[dict], Optional[str]]:
     """
     استدعاء Facebook debug_token API.
+
+    Uses APP_ID|APP_SECRET as access_token (correct method).
+    Falls back to same token if App credentials not available.
 
     Returns:
         (data, error)
     """
+    # Build correct app_token
+    app_id, app_secret = _get_fb_app_credentials()
+
+    if app_id and app_secret:
+        # Correct: APP_ID|APP_SECRET
+        app_token = f"{app_id}|{app_secret}"
+    else:
+        # Fallback: use same token (less accurate)
+        log.warning(
+            "  ⚠️  FB_APP_ID/FB_APP_SECRET missing — "
+            "debug_token may be inaccurate"
+        )
+        app_token = token
+
     try:
         r = requests.get(
             f"{GRAPH_API}/debug_token",
             params = {
                 "input_token":  token,
-                "access_token": token,
+                "access_token": app_token,
             },
-            timeout = DEFAULT_TIMEOUT,
+            timeout = CHECK_TIMEOUT,
         )
 
         if r.status_code != 200:
             return None, f"HTTP {r.status_code}"
 
-        data = r.json().get("data", {})
+        # Safe JSON parse
+        json_data, parse_error = _safe_json_parse(r)
+        if parse_error:
+            return None, parse_error
 
-        if not data:
-            return None, "Invalid token response"
+        data = json_data.get("data") if json_data else None
+
+        # Validate data type
+        if not data or not isinstance(data, dict):
+            return None, "Invalid token response structure"
 
         return data, None
 
@@ -358,9 +446,9 @@ def _debug_facebook_token(token: str) -> tuple[Optional[dict], Optional[str]]:
         return None, _safe_str(e)
 
 
-def check_facebook_token(lang: str) -> dict:
+def check_facebook_token(lang: str = "") -> dict:
     """
-    يتحقق من صلاحية Facebook token ومدة صلاحيته.
+    يتحقق من صلاحية Facebook token per-language.
 
     Args:
         lang: ar | fr | en
@@ -370,7 +458,8 @@ def check_facebook_token(lang: str) -> dict:
     """
     result = FacebookTokenResult(lang=lang)
 
-    page_id, token = _get_fb_creds()
+    # Per-language credentials
+    page_id, token = _get_fb_creds(lang)
 
     if not page_id or not token:
         result.error = "Missing FB_PAGE_ID or FB_PAGE_TOKEN"
@@ -391,8 +480,13 @@ def check_facebook_token(lang: str) -> dict:
     is_valid = data.get("is_valid", False)
 
     if not is_valid:
-        error_info  = data.get("error", {})
-        result.error = error_info.get("message", "Token is invalid")
+        error_info = data.get("error", {})
+        if isinstance(error_info, dict):
+            result.error = error_info.get(
+                "message", "Token is invalid"
+            )
+        else:
+            result.error = "Token is invalid"
         return result.to_dict()
 
     # حساب الانتهاء
@@ -406,8 +500,8 @@ def check_facebook_token(lang: str) -> dict:
         result.is_warning = False
 
         log.info(
-            f"  ✅ Facebook ({lang.upper()}): "
-            f"token valid (permanent)"
+            "  ✅ Facebook (%s): token valid (permanent)",
+            lang.upper() if lang else "generic"
         )
         return result.to_dict()
 
@@ -416,6 +510,22 @@ def check_facebook_token(lang: str) -> dict:
         exp_date  = datetime.fromtimestamp(expires_at)
         now       = datetime.now()
         days_left = (exp_date - now).days
+
+        # Token expired → valid=False
+        if days_left < 0:
+            result.valid      = False
+            result.days_left  = days_left
+            result.expires_at = exp_date.strftime("%Y-%m-%d")
+            result.error      = (
+                f"Token expired {abs(days_left)} days ago "
+                f"({result.expires_at})"
+            )
+            log.error(
+                "  ❌ Facebook (%s): token expired %d days ago",
+                lang.upper() if lang else "generic",
+                abs(days_left)
+            )
+            return result.to_dict()
 
         result.valid      = True
         result.expires_at = exp_date.strftime("%Y-%m-%d")
@@ -427,25 +537,28 @@ def check_facebook_token(lang: str) -> dict:
         return result.to_dict()
 
     # الطباعة
+    label = lang.upper() if lang else "generic"
     if result.is_warning:
         log.warning(
-            f"  ⚠️  Facebook ({lang.upper()}): "
-            f"expires in {days_left} days "
-            f"({result.expires_at})"
+            "  ⚠️  Facebook (%s): expires in %d days (%s)",
+            label, days_left, result.expires_at
         )
     else:
         log.info(
-            f"  ✅ Facebook ({lang.upper()}): "
-            f"valid ({days_left} days left)"
+            "  ✅ Facebook (%s): valid (%d days left)",
+            label, days_left
         )
 
     return result.to_dict()
 
 
-def extend_facebook_token(lang: str) -> dict:
+def extend_facebook_token(lang: str = "") -> dict:
     """
     تمديد Facebook token (Short → Long-lived).
     يحتاج FB_APP_ID + FB_APP_SECRET.
+
+    Args:
+        lang: ar | fr | en (اختياري)
 
     Returns:
         dict مع: success, token, expires_in, error
@@ -457,9 +570,8 @@ def extend_facebook_token(lang: str) -> dict:
         "error":      "",
     }
 
-    app_id     = os.environ.get("FB_APP_ID",     "").strip()
-    app_secret = os.environ.get("FB_APP_SECRET", "").strip()
-    _, token   = _get_fb_creds()
+    app_id, app_secret = _get_fb_app_credentials()
+    _, token = _get_fb_creds(lang)  # Per-language
 
     if not all([app_id, app_secret, token]):
         result["error"] = (
@@ -476,15 +588,27 @@ def extend_facebook_token(lang: str) -> dict:
                 "client_secret":     app_secret,
                 "fb_exchange_token": token,
             },
-            timeout = 30,
+            timeout = TOKEN_TIMEOUT,
         )
 
-        data = r.json()
+        # Safe JSON parse
+        data, parse_error = _safe_json_parse(r)
+        if parse_error:
+            result["error"] = parse_error
+            return result
+
+        if not data:
+            result["error"] = "Empty response"
+            return result
 
         if "error" in data:
-            result["error"] = data["error"].get(
-                "message", "Unknown error"
-            )
+            error_info = data["error"]
+            if isinstance(error_info, dict):
+                result["error"] = error_info.get(
+                    "message", "Unknown error"
+                )
+            else:
+                result["error"] = str(error_info)
             return result
 
         new_token  = data.get("access_token", "")
@@ -498,10 +622,17 @@ def extend_facebook_token(lang: str) -> dict:
         result["token"]      = new_token
         result["expires_in"] = expires_in
 
-        days = expires_in // 86400
+        days  = expires_in // 86400
+        label = lang.upper() if lang else "generic"
         log.info(
-            f"  ✅ Facebook ({lang.upper()}): "
-            f"token extended ({days} days)"
+            "  ✅ Facebook (%s): token extended (%d days)",
+            label, days
+        )
+
+        log.info(
+            "  ⚠️  Remember to update FB_PAGE_TOKEN_%s "
+            "in environment!",
+            label
         )
 
         return result
@@ -523,11 +654,14 @@ def check_all_tokens() -> dict:
     """
     يتحقق من جميع tokens للـ 3 لغات.
 
+    Per-language Facebook check.
+    Warnings logged clearly.
+
     Returns:
         dict مع: youtube, facebook, warnings, errors
     """
     log.info("\n" + "═" * 55)
-    log.info("  🔑 Token Health Check")
+    log.info("  🔑 Token Health Check v2.0")
     log.info("═" * 55)
 
     result = CheckAllResult()
@@ -545,12 +679,22 @@ def check_all_tokens() -> dict:
                 f"{token_result['error']}"
             )
             result.errors.append(msg)
-            log.error(f"  ❌ {msg}")
+            log.error("  ❌ %s", msg)
 
-    # ── Facebook ─────────────────────────────────────────────
-    log.info("\n  📘 Facebook Tokens:")
+    # ── Facebook (Per-language) ──────────────────────────────
+    log.info("\n  📘 Facebook Tokens (per-language):")
 
     for lang in LANGS:
+        # Check if credentials exist for this language
+        page_id, token = _get_fb_creds(lang)
+
+        if not page_id or not token:
+            log.info(
+                "  ℹ️  Facebook (%s): not configured — skipping",
+                lang.upper()
+            )
+            continue
+
         token_result = check_facebook_token(lang)
         result.facebook[lang] = token_result
 
@@ -560,7 +704,7 @@ def check_all_tokens() -> dict:
                 f"{token_result['error']}"
             )
             result.errors.append(msg)
-            log.error(f"  ❌ {msg}")
+            log.error("  ❌ %s", msg)
 
         elif token_result.get("is_warning"):
             msg = (
@@ -569,17 +713,22 @@ def check_all_tokens() -> dict:
                 f"({token_result['expires_at']})"
             )
             result.warnings.append(msg)
+            # Log warning explicitly
+            log.warning("  ⚠️  %s", msg)
 
     # ── Summary ──────────────────────────────────────────────
     log.info("\n" + "─" * 55)
     log.info(
-        f"  ✅ Valid   : {result.count_valid()} tokens"
+        "  ✅ Valid   : %d tokens",
+        result.count_valid()
     )
     log.info(
-        f"  ⚠️  Warnings: {len(result.warnings)}"
+        "  ⚠️  Warnings: %d",
+        len(result.warnings)
     )
     log.info(
-        f"  ❌ Errors  : {len(result.errors)}"
+        "  ❌ Errors  : %d",
+        len(result.errors)
     )
     log.info("═" * 55 + "\n")
 
@@ -612,8 +761,8 @@ def refresh_all_youtube_tokens() -> dict:
 
         if not r["success"]:
             log.error(
-                f"  ❌ YouTube ({lang.upper()}) "
-                f"refresh failed: {r['error']}"
+                "  ❌ YouTube (%s) refresh failed: %s",
+                lang.upper(), r['error']
             )
 
     success_count = sum(
@@ -621,8 +770,8 @@ def refresh_all_youtube_tokens() -> dict:
     )
 
     log.info(
-        f"  ✅ Refreshed {success_count}/{len(LANGS)} "
-        f"YouTube tokens"
+        "  ✅ Refreshed %d/%d YouTube tokens",
+        success_count, len(LANGS)
     )
 
     return results
@@ -640,15 +789,14 @@ def _print_warnings_and_errors(results: dict) -> None:
     if warnings:
         log.warning("\n  ⚠️  WARNINGS:")
         for w in warnings:
-            log.warning(f"     - {w}")
+            log.warning("     - %s", w)
 
     if errors:
         log.error("\n  ❌ ERRORS:")
         for e in errors:
-            log.error(f"     - {e}")
+            log.error("     - %s", e)
         log.error(
-            "\n  ❌ Some tokens are invalid. "
-            "Please renew them."
+            "\n  ❌ Some tokens are invalid. Please renew them."
         )
 
 
@@ -660,6 +808,13 @@ def main() -> None:
         0: كل التوكنات صالحة
         1: يوجد أخطاء
     """
+    # Logging أول شيء (entry point)
+    logging.basicConfig(
+        level   = logging.INFO,
+        format  = "%(asctime)s | %(levelname)-8s | %(message)s",
+        datefmt = "%H:%M:%S",
+    )
+
     results = check_all_tokens()
 
     _print_warnings_and_errors(results)
