@@ -1,29 +1,25 @@
 """
-🎚️ Professional Background Music & SFX Mixing System (2026)
+🎚️ Professional Background Music & SFX Mixing System v2.0
 
 Features:
   ✅ Auto EQ per language (AR/FR/EN)
-  ✅ Auto ducking on voice
+  ✅ Auto ducking on voice (smart volume points)
   ✅ Professional compressor
   ✅ Smart SFX (keyword-based)
   ✅ Hook SFX (opening attention grabber)
   ✅ Big Transitions SFX (between sections)
   ✅ Small Transitions SFX (between sentences)
   ✅ Particles SFX (magical moments)
-  ✅ TV Static SFX (modern effect)
+  ✅ TV Static SFX (modern effect with seed)
   ✅ Music Ducking on transitions
-  ✅ Tag-aware SFX selection
+  ✅ Tag-aware SFX selection (22 tags)
   ✅ Section detection (Hook/Content/CTA)
-
-Pipeline:
-  1. Compressor
-  2. EQ (per language)
-  3. Music mix with smart ducking
-  4. Hook SFX (opening)
-  5. Big Transitions SFX (between sections)
-  6. Small Transitions SFX (between sentences)
-  7. Particles + TV Static
-  8. Smart SFX (keyword-based)
+  ✅ Audio limiter (prevents clipping)
+  ✅ Smart ducking deduplication
+  ✅ MAX_DUCKING_POINTS limit
+  ✅ Cross-platform file cleanup
+  ✅ FALLBACK_DURATION = 300s (Long support)
+  ✅ Generic SFX track builder
 """
 
 from __future__ import annotations
@@ -41,6 +37,8 @@ from typing import Optional, Union
 
 from sync import get_audio_duration
 
+log = logging.getLogger(__name__)
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 📁 PATHS & DIRECTORIES
 # ═════════════════════════════════════════════════════════════════════════════
@@ -55,22 +53,20 @@ MUSIC_POOLS: dict[str, Path] = {
     "cinematic":  MUSIC_DIR / "cinematic",
 }
 
-# Old SFX pools (existing - kept for compatibility)
+# Old SFX pools
 SFX_POOLS: dict[str, Path] = {
     "swoosh": SFX_DIR / "swoosh",
     "whoosh": SFX_DIR / "whoosh",
 }
 
-# Existing special SFX dirs
-SMART_SFX_DIR      = SFX_DIR / "smart"
-TRANSITION_SFX_DIR = SFX_DIR / "transitions"
-
-# 🆕 NEW SFX DIRECTORIES
-OPENING_SFX_DIR      = SFX_DIR / "opening"
-BIG_TRANS_SFX_DIR    = SFX_DIR / "big_transitions"
-SMALL_TRANS_SFX_DIR  = SFX_DIR / "small_transitions"
-PARTICLES_SFX_DIR    = SFX_DIR / "particles"
-TV_STATIC_SFX_DIR    = SFX_DIR / "tv_static"
+# Special SFX dirs
+SMART_SFX_DIR       = SFX_DIR / "smart"
+TRANSITION_SFX_DIR  = SFX_DIR / "transitions"
+OPENING_SFX_DIR     = SFX_DIR / "opening"
+BIG_TRANS_SFX_DIR   = SFX_DIR / "big_transitions"
+SMALL_TRANS_SFX_DIR = SFX_DIR / "small_transitions"
+PARTICLES_SFX_DIR   = SFX_DIR / "particles"
+TV_STATIC_SFX_DIR   = SFX_DIR / "tv_static"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -81,33 +77,30 @@ TV_STATIC_SFX_DIR    = SFX_DIR / "tv_static"
 AUDIO_EXTENSIONS = ("*.wav", "*.mp3", "*.WAV", "*.MP3")
 
 # Timeouts
-FFMPEG_TIMEOUT = 300  # 5 دقائق
+FFMPEG_TIMEOUT = 300  # 5 minutes
 
 # Default volumes
 DEFAULT_MUSIC_VOLUME    = 0.12
 DEFAULT_SFX_VOLUME      = 0.35
 DEFAULT_SMART_SFX_VOL   = 0.40
-
-# 🆕 New volumes
-DEFAULT_OPENING_VOL     = 0.65   # Hook قوي
-DEFAULT_BIG_TRANS_VOL   = 0.70   # انتقالات كبيرة
-DEFAULT_SMALL_TRANS_VOL = 0.30   # طرطقة أصابع (خفيف)
-DEFAULT_PARTICLE_VOL    = 0.25   # جزيئات (خفيف جداً)
-DEFAULT_TV_STATIC_VOL   = 0.40   # تشويش تلفاز
+DEFAULT_OPENING_VOL     = 0.65
+DEFAULT_BIG_TRANS_VOL   = 0.70
+DEFAULT_SMALL_TRANS_VOL = 0.30
+DEFAULT_PARTICLE_VOL    = 0.25
+DEFAULT_TV_STATIC_VOL   = 0.40
 
 # Music ducking
-MUSIC_DUCK_BIG_TRANS    = 0.05   # تخفيض قوي عند الانتقالات الكبيرة
-MUSIC_DUCK_VOICE        = 0.06   # تخفيض على الصوت العادي
+MUSIC_DUCK_BIG_TRANS = 0.05
+MUSIC_DUCK_VOICE     = 0.06
 
 # Fade settings
-DEFAULT_FADE_IN         = 1.0
-DEFAULT_FADE_OUT        = 2.0
-DEFAULT_DUCK_FADE       = 0.3
-FALLBACK_DURATION       = 60.0
+DEFAULT_FADE_IN    = 1.0
+DEFAULT_FADE_OUT   = 2.0
+DEFAULT_DUCK_FADE  = 0.3
+FALLBACK_DURATION  = 300.0  # 5 minutes (for Long videos)
 
-# Logging
-logging.basicConfig(level=logging.INFO, format="%(message)s")
-log = logging.getLogger(__name__)
+# Limits
+MAX_DUCKING_POINTS = 200
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -151,17 +144,14 @@ COMPRESSOR_FILTER = (
 # 🎯 SECTION DETECTION (Hook / Content / CTA)
 # ═════════════════════════════════════════════════════════════════════════════
 
-# الـ Tags التي تشير لـ CTA (دعوة للتفاعل في النهاية)
-CTA_TAGS = {"confident", "inspiration", "powerful"}
-
-# الـ Tags التي تشير للـ Hook (جذب الانتباه في البداية)
-HOOK_TAGS = {"intrigue", "shock", "urgency", "curiosity"}
+CTA_TAGS  = {"confident", "inspiration", "powerful", "cta"}
+HOOK_TAGS = {"intrigue", "shock", "urgency", "curiosity", "hook"}
 
 
 @dataclass
 class VideoSection:
     """قسم من الفيديو (Hook/Content/CTA)."""
-    section_type: str       # "hook" | "content" | "cta"
+    section_type: str
     start_time:   float
     end_time:     float
     sentence_idx: int
@@ -170,16 +160,9 @@ class VideoSection:
 
 def detect_video_sections(
     aligned: list[dict],
-    tagged:  Optional[list[dict]],
+    tagged:  Optional[list[dict]] = None,
 ) -> list[VideoSection]:
-    """
-    كشف الفقرات الرئيسية في الفيديو.
-
-    الفقرات:
-        - Hook: الجملة الأولى دائماً
-        - Content: الجمل الوسطى
-        - CTA: الجملة الأخيرة (أو آخر 1-2 جمل)
-    """
+    """كشف الفقرات الرئيسية في الفيديو."""
     if not aligned:
         return []
 
@@ -202,17 +185,17 @@ def detect_video_sections(
             section_type = "hook"
         elif i == total - 1:
             section_type = "cta"
-        elif i == total - 2 and tag in CTA_TAGS:
+        elif i == total - 2 and tag in CTA_TAGS and total > 4:
             section_type = "cta"
         else:
             section_type = "content"
 
         sections.append(VideoSection(
-            section_type=section_type,
-            start_time=start,
-            end_time=end,
-            sentence_idx=i,
-            tag=tag,
+            section_type = section_type,
+            start_time   = start,
+            end_time     = end,
+            sentence_idx = i,
+            tag          = tag,
         ))
 
     return sections
@@ -221,74 +204,65 @@ def detect_video_sections(
 def get_section_transitions(
     sections: list[VideoSection],
 ) -> list[dict]:
-    """
-    جلب نقاط الانتقال بين الفقرات.
-
-    Returns:
-        list of {time, from_section, to_section, tag}
-    """
+    """جلب نقاط الانتقال بين الفقرات."""
     if len(sections) < 2:
         return []
 
     transitions = []
 
     for i in range(len(sections) - 1):
-        current = sections[i]
+        current  = sections[i]
         next_sec = sections[i + 1]
 
-        # انتقال كبير إذا تغير نوع الفقرة
-        if current.section_type != next_sec.section_type:
-            transitions.append({
-                "time":         current.end_time,
-                "from_section": current.section_type,
-                "to_section":   next_sec.section_type,
-                "tag":          next_sec.tag,
-                "is_big":       True,
-            })
-        else:
-            # انتقال صغير بين جمل نفس الفقرة
-            transitions.append({
-                "time":         current.end_time,
-                "from_section": current.section_type,
-                "to_section":   next_sec.section_type,
-                "tag":          next_sec.tag,
-                "is_big":       False,
-            })
+        transitions.append({
+            "time":         current.end_time,
+            "from_section": current.section_type,
+            "to_section":   next_sec.section_type,
+            "tag":          next_sec.tag,
+            "is_big":       (
+                current.section_type
+                != next_sec.section_type
+            ),
+        })
 
     return transitions
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🎼 TAG-BASED SFX VOLUME (per tag)
+# 🎼 TAG-BASED SFX VOLUME (per tag — 22 tags)
 # ═════════════════════════════════════════════════════════════════════════════
 
 TAG_SFX_VOLUME: dict[str, float] = {
-    "shock":       0.85,
-    "climax":      0.85,
-    "revelation":  0.75,
-    "urgency":     0.70,
-    "tension":     0.70,
-    "dramatic":    0.70,
-    "intrigue":    0.65,
-    "powerful":    0.65,
-    "confident":   0.60,
-    "inspiration": 0.65,
-    "information": 0.45,
-    "emotional":   0.55,
-    "desire":      0.55,
-    "wisdom":      0.40,
-    "calm":        0.35,
-    "whisper":     0.40,
-    "pause":       0.30,
-    "curiosity":   0.55,
+    "shock":        0.85,
+    "climax":       0.85,
+    "revelation":   0.75,
+    "urgency":      0.70,
+    "tension":      0.70,
+    "dramatic":     0.70,
+    "intrigue":     0.65,
+    "powerful":     0.65,
+    "confident":    0.60,
+    "inspiration":  0.65,
+    "information":  0.45,
+    "emotional":    0.55,
+    "desire":       0.55,
+    "wisdom":       0.40,
+    "calm":         0.35,
+    "whisper":      0.40,
+    "pause":        0.30,
+    "curiosity":    0.55,
     "storytelling": 0.50,
+    # New tags
+    "hook":         0.85,
+    "direct":       0.60,
+    "cta":          0.65,
 }
 
 DEFAULT_TAG_SFX_VOLUME = 0.50
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🔍 SMART SFX KEYWORDS (existing - kept)
+# 🔍 SMART SFX KEYWORDS
 # ═════════════════════════════════════════════════════════════════════════════
 
 SFX_KEYWORDS: dict[str, list[str]] = {
@@ -318,8 +292,10 @@ SFX_KEYWORDS: dict[str, list[str]] = {
         "triste", "douleur", "larmes",
     ],
     "coins": [
-        "مال", "فلوس", "ثروة", "ربح", "غنى", "دولار", "ذهب",
-        "money", "cash", "wealth", "profit", "rich", "gold",
+        "مال", "فلوس", "ثروة", "ربح", "غنى",
+        "دولار", "ذهب",
+        "money", "cash", "wealth", "profit",
+        "rich", "gold",
         "argent", "richesse", "or",
     ],
     "success_bell": [
@@ -329,7 +305,8 @@ SFX_KEYWORDS: dict[str, list[str]] = {
     ],
     "celebration": [
         "احتفال", "فرح", "بهجة", "مبروك",
-        "celebrate", "joy", "happy", "congratulations",
+        "celebrate", "joy", "happy",
+        "congratulations",
         "célébration", "joie", "bonheur",
     ],
     "warning_beep": [
@@ -383,23 +360,6 @@ class SmartSFXDetection:
     time:     float
 
 
-@dataclass
-class SentenceTransition:
-    """مؤثر انتقال بين جملتين."""
-    time:   float
-    tag:    str
-    volume: float
-
-
-@dataclass
-class SFXEvent:
-    """حدث SFX على timeline."""
-    time:     float
-    sfx_path: Path
-    volume:   float
-    label:    str
-
-
 # ═════════════════════════════════════════════════════════════════════════════
 # 🛠️ HELPER FUNCTIONS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -409,13 +369,17 @@ def _make_temp_path(
     suffix: str = ".wav",
 ) -> str:
     """إنشاء مسار مؤقت آمن."""
-    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    fd, path = tempfile.mkstemp(
+        prefix=prefix, suffix=suffix
+    )
     os.close(fd)
     return path
 
 
-def _safe_unlink(path: Optional[Union[str, Path]]) -> None:
-    """حذف ملف بأمان."""
+def _safe_unlink(
+    path: Optional[Union[str, Path]],
+) -> None:
+    """حذف ملف بأمان (cross-platform)."""
     if path is None:
         return
     try:
@@ -445,18 +409,13 @@ def _run_ffmpeg(
     args:    list[str],
     timeout: int = FFMPEG_TIMEOUT,
 ) -> tuple[bool, str]:
-    """
-    تشغيل ffmpeg بأمان.
-
-    Returns:
-        (success, stderr)
-    """
+    """تشغيل ffmpeg بأمان."""
     try:
         r = subprocess.run(
             args,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+            capture_output = True,
+            text           = True,
+            timeout        = timeout,
         )
         return r.returncode == 0, r.stderr
     except subprocess.TimeoutExpired:
@@ -484,7 +443,9 @@ def _collect_all_music() -> list[Path]:
 
     for pool_dir in MUSIC_POOLS.values():
         if pool_dir.exists():
-            all_files.extend(_get_audio_files(pool_dir))
+            all_files.extend(
+                _get_audio_files(pool_dir)
+            )
 
     if not all_files and MUSIC_DIR.exists():
         for ext in AUDIO_EXTENSIONS:
@@ -501,13 +462,16 @@ def get_music_file(
     all_files = _collect_all_music()
 
     if not all_files:
-        log.warning(f"  ⚠️  No music files found in {MUSIC_DIR}")
+        log.warning(
+            "  ⚠️  No music files found in %s",
+            MUSIC_DIR
+        )
         return None
 
     rng  = random.Random(seed)
     pick = rng.choice(all_files)
 
-    log.info(f"  🎵 Music: {pick.name}")
+    log.info("  🎵 Music: %s", pick.name)
     return pick
 
 
@@ -527,7 +491,9 @@ def get_sfx_file(
     return random.Random(seed).choice(files)
 
 
-def _find_smart_sfx_file(sfx_name: str) -> Optional[Path]:
+def _find_smart_sfx_file(
+    sfx_name: str,
+) -> Optional[Path]:
     """البحث عن ملف Smart SFX بالاسم."""
     for ext in (".wav", ".mp3", ".WAV", ".MP3"):
         candidate = SMART_SFX_DIR / f"{sfx_name}{ext}"
@@ -545,26 +511,27 @@ def _find_smart_sfx_file(sfx_name: str) -> Optional[Path]:
 # 🪝 OPENING SFX (Hook Sound)
 # ═════════════════════════════════════════════════════════════════════════════
 
-def get_opening_sfx(seed: Optional[int] = None) -> Optional[Path]:
-    """
-    🪝 جلب صوت بداية الفيديو (يجذب الانتباه فوراً).
-
-    Returns:
-        Path لملف عشوائي من sfx/opening/
-    """
+def get_opening_sfx(
+    seed: Optional[int] = None,
+) -> Optional[Path]:
+    """🪝 جلب صوت بداية الفيديو."""
     if not OPENING_SFX_DIR.exists():
-        log.warning(f"  ⚠️  Opening SFX dir not found: {OPENING_SFX_DIR}")
+        log.warning(
+            "  ⚠️  Opening SFX dir not found"
+        )
         return None
 
     files = _get_audio_files(OPENING_SFX_DIR)
     if not files:
-        log.warning("  ⚠️  No opening SFX files found")
+        log.warning(
+            "  ⚠️  No opening SFX files found"
+        )
         return None
 
     rng  = random.Random(seed)
     pick = rng.choice(files)
 
-    log.info(f"  🪝 Opening SFX: {pick.name}")
+    log.info("  🪝 Opening SFX: %s", pick.name)
     return pick
 
 
@@ -575,15 +542,7 @@ def get_opening_sfx(seed: Optional[int] = None) -> Optional[Path]:
 def get_big_transition_sfx(
     transition_idx: int = 0,
 ) -> Optional[Path]:
-    """
-    💥 جلب صوت انتقال كبير (بين الفقرات).
-
-    Args:
-        transition_idx: رقم الانتقال (للتنويع)
-
-    Returns:
-        Path لملف من sfx/big_transitions/
-    """
+    """💥 جلب صوت انتقال كبير."""
     if not BIG_TRANS_SFX_DIR.exists():
         return None
 
@@ -591,26 +550,17 @@ def get_big_transition_sfx(
     if not files:
         return None
 
-    # تنويع: استخدم index لاختيار ملف مختلف كل مرة
     return files[transition_idx % len(files)]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 👆 SMALL TRANSITIONS SFX (Finger Snaps)
+# 👆 SMALL TRANSITIONS SFX
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_small_transition_sfx(
     transition_idx: int = 0,
 ) -> Optional[Path]:
-    """
-    👆 جلب صوت انتقال صغير (بين الجمل).
-
-    Args:
-        transition_idx: رقم الانتقال (للتنويع)
-
-    Returns:
-        Path لملف من sfx/small_transitions/
-    """
+    """👆 جلب صوت انتقال صغير."""
     if not SMALL_TRANS_SFX_DIR.exists():
         return None
 
@@ -625,8 +575,10 @@ def get_small_transition_sfx(
 # ✨ PARTICLES SFX
 # ═════════════════════════════════════════════════════════════════════════════
 
-def get_particle_sfx(idx: int = 0) -> Optional[Path]:
-    """✨ جلب صوت جزيئة من sfx/particles/"""
+def get_particle_sfx(
+    idx: int = 0,
+) -> Optional[Path]:
+    """✨ جلب صوت جزيئة."""
     if not PARTICLES_SFX_DIR.exists():
         return None
 
@@ -641,8 +593,10 @@ def get_particle_sfx(idx: int = 0) -> Optional[Path]:
 # 📺 TV STATIC SFX
 # ═════════════════════════════════════════════════════════════════════════════
 
-def get_tv_static_sfx(idx: int = 0) -> Optional[Path]:
-    """📺 جلب صوت تشويش تلفاز من sfx/tv_static/"""
+def get_tv_static_sfx(
+    idx: int = 0,
+) -> Optional[Path]:
+    """📺 جلب صوت تشويش تلفاز."""
     if not TV_STATIC_SFX_DIR.exists():
         return None
 
@@ -654,18 +608,13 @@ def get_tv_static_sfx(idx: int = 0) -> Optional[Path]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🔍 SMART SFX DETECTION (existing - kept)
+# 🔍 SMART SFX DETECTION
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _detect_sfx_for_sentence(
     sentence: str,
 ) -> Optional[dict]:
-    """
-    كشف SFX مناسب لجملة واحدة.
-
-    Returns:
-        dict مع sfx info أو None
-    """
+    """كشف SFX مناسب لجملة واحدة."""
     normalized = _normalize_text(sentence)
 
     for sfx_name, keywords in SFX_KEYWORDS.items():
@@ -708,7 +657,7 @@ def _apply_filter(
     if not Path(audio_path).exists():
         return audio_path
 
-    log.info(f"  🎛️  Applying {label}...")
+    log.info("  🎛️  Applying %s...", label)
 
     success, _ = _run_ffmpeg([
         "ffmpeg", "-y",
@@ -719,14 +668,20 @@ def _apply_filter(
     ])
 
     if not success:
-        log.warning(f"  ⚠️  {label} failed — using original")
+        log.warning(
+            "  ⚠️  %s failed — using original",
+            label
+        )
         return audio_path
 
-    log.info(f"  ✅ {label} applied")
+    log.info("  ✅ %s applied", label)
     return output_path
 
 
-def apply_compressor(audio_path: str, output_path: str) -> str:
+def apply_compressor(
+    audio_path:  str,
+    output_path: str,
+) -> str:
     """تطبيق compressor على الصوت."""
     return _apply_filter(
         audio_path, output_path,
@@ -748,7 +703,7 @@ def apply_eq(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🦆 SMART MUSIC DUCKING
+# 🦆 SMART MUSIC DUCKING (with deduplication + limit)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _build_ducking_points(
@@ -760,16 +715,10 @@ def _build_ducking_points(
     big_transitions:   Optional[list[dict]] = None,
     big_duck_volume:   float                = MUSIC_DUCK_BIG_TRANS,
 ) -> list[str]:
-    """
-    🦆 بناء نقاط حجم الموسيقى للـ ducking الذكي.
-
-    Features:
-        - تخفيض عادي على الصوت
-        - تخفيض قوي عند الانتقالات الكبيرة
-    """
+    """🦆 بناء نقاط حجم الموسيقى."""
     points: list[str] = [f"0/{music_volume}"]
 
-    # 1. Ducking على الصوت (عادي)
+    # Ducking على الصوت (عادي)
     for seg in aligned:
         start = float(seg.get("start", 0))
         end   = float(seg.get("end", start + 1))
@@ -777,39 +726,86 @@ def _build_ducking_points(
         duck_start = max(0.0, start - fade_time)
         duck_end   = min(voice_dur, end + fade_time)
 
-        points.append(f"{duck_start:.3f}/{music_volume}")
-        points.append(f"{start:.3f}/{duck_volume}")
-        points.append(f"{end:.3f}/{duck_volume}")
-        points.append(f"{duck_end:.3f}/{music_volume}")
+        points.append(
+            f"{duck_start:.3f}/{music_volume}"
+        )
+        points.append(
+            f"{start:.3f}/{duck_volume}"
+        )
+        points.append(
+            f"{end:.3f}/{duck_volume}"
+        )
+        points.append(
+            f"{duck_end:.3f}/{music_volume}"
+        )
 
-    # 2. 🆕 Ducking قوي عند الانتقالات الكبيرة
+    # Ducking قوي عند الانتقالات الكبيرة
     if big_transitions:
-        BIG_TRANS_DUCK_DURATION = 0.6  # مدة التخفيض
+        BIG_TRANS_DUCK_DURATION = 0.6
 
         for trans in big_transitions:
-            t_time = trans["time"]
+            t_time     = trans["time"]
             duck_start = max(0.0, t_time - 0.1)
-            duck_end   = min(voice_dur, t_time + BIG_TRANS_DUCK_DURATION)
+            duck_end   = min(
+                voice_dur,
+                t_time + BIG_TRANS_DUCK_DURATION,
+            )
 
-            points.append(f"{duck_start:.3f}/{music_volume}")
-            points.append(f"{t_time:.3f}/{big_duck_volume}")
-            points.append(f"{duck_end:.3f}/{big_duck_volume}")
-            recovery_end = min(voice_dur, duck_end + 0.3)
-            points.append(f"{recovery_end:.3f}/{music_volume}")
+            points.append(
+                f"{duck_start:.3f}/{music_volume}"
+            )
+            points.append(
+                f"{t_time:.3f}/{big_duck_volume}"
+            )
+            points.append(
+                f"{duck_end:.3f}/{big_duck_volume}"
+            )
+            recovery_end = min(
+                voice_dur, duck_end + 0.3
+            )
+            points.append(
+                f"{recovery_end:.3f}/{music_volume}"
+            )
 
-    points.append(f"{voice_dur:.3f}/{music_volume}")
+    points.append(
+        f"{voice_dur:.3f}/{music_volume}"
+    )
 
-    # إزالة المكررات + ترتيب
-    seen:  set[str]  = set()
-    clean: list[str] = []
-
+    # Smart deduplication: keep lowest volume per timestamp
+    time_to_vol: dict[str, float] = {}
     for point in points:
-        t = point.split("/")[0]
-        if t not in seen:
-            seen.add(t)
-            clean.append(point)
+        try:
+            t, v = point.split("/")
+            t_key   = f"{float(t):.3f}"
+            v_float = float(v)
+            if t_key not in time_to_vol:
+                time_to_vol[t_key] = v_float
+            else:
+                # Keep strongest ducking (lowest volume)
+                time_to_vol[t_key] = min(
+                    time_to_vol[t_key], v_float
+                )
+        except (ValueError, IndexError):
+            continue
 
-    clean.sort(key=lambda x: float(x.split("/")[0]))
+    clean = [
+        f"{t}/{v}"
+        for t, v in sorted(
+            time_to_vol.items(),
+            key=lambda x: float(x[0])
+        )
+    ]
+
+    # Simplify if too many points
+    if len(clean) > MAX_DUCKING_POINTS:
+        log.warning(
+            "  ⚠️  Ducking points too many (%d) "
+            "— simplifying",
+            len(clean)
+        )
+        step  = max(1, len(clean) // MAX_DUCKING_POINTS)
+        clean = clean[::step]
+
     return clean
 
 
@@ -832,11 +828,17 @@ def _build_ducking_filter(
             big_transitions=big_transitions,
         )
         points_str = "|".join(points)
-        return f"volume='{points_str}':eval=frame"
+        return (
+            f"volume='{points_str}':eval=frame"
+        )
 
     except Exception as e:
-        log.warning(f"  ⚠️  Ducking filter error: {e}")
+        log.warning(
+            "  ⚠️  Ducking filter error: %s", e
+        )
         return f"volume={music_volume}"
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 🎚️ AUDIO MIXING
 # ═════════════════════════════════════════════════════════════════════════════
@@ -852,7 +854,8 @@ def _build_music_filter(
     return (
         f"{duck_filter},"
         f"afade=t=in:st=0:d={fade_in:.3f},"
-        f"afade=t=out:st={fade_out_st:.3f}:d={fade_out:.3f},"
+        f"afade=t=out:st={fade_out_st:.3f}"
+        f":d={fade_out:.3f},"
         f"atrim=0:{voice_dur:.3f}"
     )
 
@@ -874,7 +877,8 @@ def _mix_with_filter(
     success, _ = _run_ffmpeg([
         "ffmpeg", "-y",
         "-i", voice_path,
-        "-stream_loop", "-1", "-i", music_path,
+        "-stream_loop", "-1",
+        "-i", music_path,
         "-filter_complex", filter_complex,
         "-map", "[out]",
         "-c:a", "aac", "-b:a", "192k",
@@ -896,21 +900,19 @@ def mix_audio(
     aligned:         Optional[list[dict]] = None,
     big_transitions: Optional[list[dict]] = None,
 ) -> Path:
-    """
-    Mix صوت مع موسيقى مع ducking ذكي.
-
-    ✅ مع دعم music ducking قوي عند الانتقالات الكبيرة
-    """
+    """Mix صوت مع موسيقى مع ducking ذكي."""
     voice_dur   = _safe_duration(voice_path)
     fade_out_st = max(0.0, voice_dur - fade_out)
 
     log.info(
-        f"  🎚️  Mixing: voice={voice_dur:.2f}s "
-        f"music_vol={music_volume * 100:.0f}% "
-        f"lang={lang.upper()}"
+        "  🎚️  Mixing: voice=%.2fs "
+        "music_vol=%.0f%% lang=%s",
+        voice_dur,
+        music_volume * 100,
+        lang.upper()
     )
 
-    # 🦆 Smart Ducking (مع big transitions)
+    # 🦆 Smart Ducking
     duck_filter = _build_ducking_filter(
         aligned          = aligned or [],
         voice_dur        = voice_dur,
@@ -919,7 +921,7 @@ def mix_audio(
         big_transitions  = big_transitions,
     )
 
-    # المحاولة الأولى: مع ducking
+    # Attempt 1: with ducking
     music_filter = _build_music_filter(
         duck_filter, fade_in, fade_out_st,
         fade_out, voice_dur,
@@ -930,22 +932,31 @@ def mix_audio(
         music_filter, voice_dur,
     ):
         if aligned:
-            log.info(f"  🦆 Ducking: {len(aligned)} sentences")
+            log.info(
+                "  🦆 Ducking: %d sentences",
+                len(aligned)
+            )
         if big_transitions:
             log.info(
-                f"  💥 Big trans ducking: "
-                f"{len(big_transitions)} points"
+                "  💥 Big trans ducking: %d points",
+                len(big_transitions)
             )
-        log.info(f"  ✅ Mixed → {Path(output_path).name}")
+        log.info(
+            "  ✅ Mixed → %s",
+            Path(output_path).name
+        )
         return Path(output_path)
 
-    # Fallback: mix بسيط بدون ducking
-    log.warning("  ⚠️  Audio mix failed — trying simple mix...")
+    # Attempt 2: simple mix (no ducking)
+    log.warning(
+        "  ⚠️  Audio mix failed — trying simple mix..."
+    )
 
     simple_filter = (
         f"volume={music_volume},"
         f"afade=t=in:st=0:d={fade_in:.3f},"
-        f"afade=t=out:st={fade_out_st:.3f}:d={fade_out:.3f},"
+        f"afade=t=out:st={fade_out_st:.3f}"
+        f":d={fade_out:.3f},"
         f"atrim=0:{voice_dur:.3f}"
     )
 
@@ -953,443 +964,68 @@ def mix_audio(
         voice_path, music_path, output_path,
         simple_filter, voice_dur,
     ):
-        log.info(f"  ✅ Mixed (simple) → {Path(output_path).name}")
+        log.info(
+            "  ✅ Mixed (simple) → %s",
+            Path(output_path).name
+        )
         return Path(output_path)
 
-    log.warning("  ⚠️  Simple mix also failed — voice only")
+    log.warning(
+        "  ⚠️  Simple mix also failed — voice only"
+    )
     return Path(voice_path)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🪝 HOOK SFX BUILDER (Opening)
+# 🎬 GENERIC SFX TRACK BUILDER
 # ═════════════════════════════════════════════════════════════════════════════
 
-def build_hook_sfx_track(
-    total_duration: float,
-    output_path:    str,
-    seed:           Optional[int] = None,
-) -> Optional[Path]:
-    """
-    🪝 بناء مسار Hook SFX (بداية الفيديو).
-
-    يضع صوت قوي في أول 0.5 ثانية من الفيديو.
-    """
-    hook_sfx = get_opening_sfx(seed=seed)
-    if not hook_sfx:
-        return None
-
-    log.info(f"  🪝 Building Hook SFX track...")
-
-    success, _ = _run_ffmpeg([
-        "ffmpeg", "-y",
-        "-i", str(hook_sfx),
-        "-af",
-        f"volume={DEFAULT_OPENING_VOL},"
-        f"adelay=0|0,"
-        f"apad=pad_dur={total_duration}",
-        "-t", str(total_duration),
-        "-c:a", "pcm_s16le",
-        output_path,
-    ])
-
-    if not success:
-        log.warning("  ⚠️  Hook SFX track failed")
-        return None
-
-    log.info(f"  ✅ Hook SFX built: {hook_sfx.name}")
-    return Path(output_path)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 💥 BIG TRANSITIONS SFX BUILDER
-# ═════════════════════════════════════════════════════════════════════════════
-
-def build_big_transitions_sfx_track(
-    transitions:    list[dict],
-    total_duration: float,
-    output_path:    str,
-) -> Optional[Path]:
-    """
-    💥 بناء مسار Big Transitions SFX.
-
-    يضع أصوات قوية في نقاط الانتقال بين الفقرات.
-    """
-    # فلترة الانتقالات الكبيرة فقط
-    big_trans = [t for t in transitions if t.get("is_big")]
-
-    if not big_trans:
-        return None
-
-    if not BIG_TRANS_SFX_DIR.exists():
-        log.warning(f"  ⚠️  Big transitions dir not found")
-        return None
-
-    log.info(
-        f"  💥 Building Big Transitions SFX: "
-        f"{len(big_trans)} transitions"
-    )
-
-    inputs: list[str] = []
-    delays: list[str] = []
-
-    for i, trans in enumerate(big_trans):
-        sfx_file = get_big_transition_sfx(transition_idx=i)
-        if not sfx_file:
-            continue
-
-        inputs += ["-i", str(sfx_file)]
-        delay_ms = int(trans["time"] * 1000)
-
-        delays.append(
-            f"[{i}:a]"
-            f"volume={DEFAULT_BIG_TRANS_VOL:.3f},"
-            f"adelay={delay_ms}|{delay_ms}"
-            f"[bt{i}]"
-        )
-
-        log.info(
-            f"     [{trans['time']:.2f}s] "
-            f"{trans['from_section']} → {trans['to_section']} "
-            f"({sfx_file.name})"
-        )
-
-    if not delays:
-        return None
-
-    mix_inputs = "".join(f"[bt{i}]" for i in range(len(delays)))
-    filter_str = (
-        ";".join(delays) +
-        f";{mix_inputs}amix="
-        f"inputs={len(delays)}:normalize=0[out]"
-    )
-
-    success, _ = _run_ffmpeg([
-        "ffmpeg", "-y",
-        *inputs,
-        "-filter_complex", filter_str,
-        "-map", "[out]",
-        "-t", str(total_duration),
-        "-c:a", "pcm_s16le",
-        output_path,
-    ])
-
-    if not success:
-        log.warning("  ⚠️  Big Transitions SFX failed")
-        return None
-
-    log.info("  ✅ Big Transitions SFX built")
-    return Path(output_path)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 👆 SMALL TRANSITIONS SFX BUILDER (Finger Snaps)
-# ═════════════════════════════════════════════════════════════════════════════
-
-def build_small_transitions_sfx_track(
-    transitions:    list[dict],
-    total_duration: float,
-    output_path:    str,
-) -> Optional[Path]:
-    """
-    👆 بناء مسار Small Transitions SFX (طرطقة أصابع).
-
-    يضع أصوات خفيفة بين الجمل في نفس الفقرة.
-    """
-    # فلترة الانتقالات الصغيرة فقط
-    small_trans = [t for t in transitions if not t.get("is_big")]
-
-    if not small_trans:
-        return None
-
-    if not SMALL_TRANS_SFX_DIR.exists():
-        log.warning(f"  ⚠️  Small transitions dir not found")
-        return None
-
-    log.info(
-        f"  👆 Building Small Transitions SFX: "
-        f"{len(small_trans)} snaps"
-    )
-
-    inputs: list[str] = []
-    delays: list[str] = []
-
-    for i, trans in enumerate(small_trans):
-        sfx_file = get_small_transition_sfx(transition_idx=i)
-        if not sfx_file:
-            continue
-
-        inputs += ["-i", str(sfx_file)]
-        delay_ms = int(trans["time"] * 1000)
-
-        delays.append(
-            f"[{i}:a]"
-            f"volume={DEFAULT_SMALL_TRANS_VOL:.3f},"
-            f"adelay={delay_ms}|{delay_ms}"
-            f"[st{i}]"
-        )
-
-    if not delays:
-        return None
-
-    mix_inputs = "".join(f"[st{i}]" for i in range(len(delays)))
-    filter_str = (
-        ";".join(delays) +
-        f";{mix_inputs}amix="
-        f"inputs={len(delays)}:normalize=0[out]"
-    )
-
-    success, _ = _run_ffmpeg([
-        "ffmpeg", "-y",
-        *inputs,
-        "-filter_complex", filter_str,
-        "-map", "[out]",
-        "-t", str(total_duration),
-        "-c:a", "pcm_s16le",
-        output_path,
-    ])
-
-    if not success:
-        log.warning("  ⚠️  Small Transitions SFX failed")
-        return None
-
-    log.info("  ✅ Small Transitions SFX built")
-    return Path(output_path)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# ✨ PARTICLES SFX BUILDER
-# ═════════════════════════════════════════════════════════════════════════════
-
-def build_particles_sfx_track(
-    aligned:        list[dict],
-    tagged:         Optional[list[dict]],
-    total_duration: float,
-    output_path:    str,
-) -> Optional[Path]:
-    """
-    ✨ بناء مسار Particles SFX.
-
-    يضع جزيئات صوتية على الكلمات السحرية (shock, revelation, climax).
-    """
-    if not aligned or not PARTICLES_SFX_DIR.exists():
-        return None
-
-    # كشف اللحظات المغناطيسية
-    magic_tags = {"shock", "revelation", "climax", "inspiration"}
-    magic_moments = []
-
-    for i, seg in enumerate(aligned):
-        tag = "information"
-        if tagged and i < len(tagged):
-            tag = tagged[i].get("final_tag") or "information"
-        elif "tag" in seg:
-            tag = seg.get("tag", "information")
-
-        if tag in magic_tags:
-            magic_moments.append({
-                "time": float(seg.get("start", 0)),
-                "tag":  tag,
-            })
-
-    if not magic_moments:
-        return None
-
-    log.info(
-        f"  ✨ Building Particles SFX: "
-        f"{len(magic_moments)} magic moments"
-    )
-
-    inputs: list[str] = []
-    delays: list[str] = []
-
-    for i, moment in enumerate(magic_moments):
-        sfx_file = get_particle_sfx(idx=i)
-        if not sfx_file:
-            continue
-
-        inputs += ["-i", str(sfx_file)]
-        delay_ms = int(moment["time"] * 1000)
-
-        delays.append(
-            f"[{i}:a]"
-            f"volume={DEFAULT_PARTICLE_VOL:.3f},"
-            f"adelay={delay_ms}|{delay_ms}"
-            f"[p{i}]"
-        )
-
-    if not delays:
-        return None
-
-    mix_inputs = "".join(f"[p{i}]" for i in range(len(delays)))
-    filter_str = (
-        ";".join(delays) +
-        f";{mix_inputs}amix="
-        f"inputs={len(delays)}:normalize=0[out]"
-    )
-
-    success, _ = _run_ffmpeg([
-        "ffmpeg", "-y",
-        *inputs,
-        "-filter_complex", filter_str,
-        "-map", "[out]",
-        "-t", str(total_duration),
-        "-c:a", "pcm_s16le",
-        output_path,
-    ])
-
-    if not success:
-        log.warning("  ⚠️  Particles SFX failed")
-        return None
-
-    log.info("  ✅ Particles SFX built")
-    return Path(output_path)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 📺 TV STATIC SFX BUILDER
-# ═════════════════════════════════════════════════════════════════════════════
-
-def build_tv_static_sfx_track(
-    big_transitions: list[dict],
-    total_duration:  float,
-    output_path:     str,
-) -> Optional[Path]:
-    """
-    📺 بناء مسار TV Static SFX.
-
-    يضع تشويش تلفاز قصير في بعض الانتقالات الكبيرة (عشوائي).
-    """
-    if not TV_STATIC_SFX_DIR.exists():
-        return None
-
-    big_trans = [t for t in big_transitions if t.get("is_big")]
-    if not big_trans:
-        return None
-
-    # نختار 50% فقط من الانتقالات الكبيرة (عشوائي)
-    rng = random.Random()
-    selected = [t for t in big_trans if rng.random() > 0.5]
-
-    if not selected:
-        return None
-
-    log.info(
-        f"  📺 Building TV Static SFX: "
-        f"{len(selected)} static effects"
-    )
-
-    inputs: list[str] = []
-    delays: list[str] = []
-
-    for i, trans in enumerate(selected):
-        sfx_file = get_tv_static_sfx(idx=i)
-        if not sfx_file:
-            continue
-
-        inputs += ["-i", str(sfx_file)]
-        # توقيت قبل الانتقال بقليل
-        time_offset = max(0, trans["time"] - 0.1)
-        delay_ms = int(time_offset * 1000)
-
-        delays.append(
-            f"[{i}:a]"
-            f"volume={DEFAULT_TV_STATIC_VOL:.3f},"
-            f"adelay={delay_ms}|{delay_ms}"
-            f"[tv{i}]"
-        )
-
-    if not delays:
-        return None
-
-    mix_inputs = "".join(f"[tv{i}]" for i in range(len(delays)))
-    filter_str = (
-        ";".join(delays) +
-        f";{mix_inputs}amix="
-        f"inputs={len(delays)}:normalize=0[out]"
-    )
-
-    success, _ = _run_ffmpeg([
-        "ffmpeg", "-y",
-        *inputs,
-        "-filter_complex", filter_str,
-        "-map", "[out]",
-        "-t", str(total_duration),
-        "-c:a", "pcm_s16le",
-        output_path,
-    ])
-
-    if not success:
-        log.warning("  ⚠️  TV Static SFX failed")
-        return None
-
-    log.info("  ✅ TV Static SFX built")
-    return Path(output_path)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 🔊 SMART SFX BUILDER (existing - kept)
-# ═════════════════════════════════════════════════════════════════════════════
-
-def build_smart_sfx_track(
-    sentences:   list[str],
-    aligned:     list[dict],
+def _build_sfx_track_generic(
+    sfx_items:  list[dict],
+    total_dur:  float,
     output_path: str,
-    sfx_volume:  float = DEFAULT_SMART_SFX_VOL,
+    label:      str,
 ) -> Optional[Path]:
-    """بناء مسار Smart SFX من الجمل (keyword-based)."""
-    if not SMART_SFX_DIR.exists():
+    """
+    Generic builder for any SFX track.
+    
+    Each item in sfx_items:
+        {"sfx_file": Path, "time": float, "volume": float}
+    """
+    if not sfx_items:
         return None
 
-    if not sentences or not aligned:
-        return None
+    inputs:  list[str] = []
+    delays:  list[str] = []
+    idx = 0
 
-    detections = detect_smart_sfx_for_sentences(sentences)
-    sentence_times = [
-        float(seg.get("start", 0))
-        for seg in aligned[:len(sentences)]
-    ]
+    for item in sfx_items:
+        sfx_file = item.get("sfx_file")
+        if not sfx_file:
+            continue
 
-    active_sfx: list[SmartSFXDetection] = []
-    for i, detection in enumerate(detections):
-        if detection and i < len(sentence_times):
-            active_sfx.append(SmartSFXDetection(
-                sfx_path = detection["sfx_path"],
-                sfx_name = detection["sfx_name"],
-                keyword  = detection["keyword"],
-                time     = sentence_times[i],
-            ))
+        inputs += ["-i", str(sfx_file)]
+        delay_ms = int(item["time"] * 1000)
+        vol      = item.get("volume", 0.5)
 
-    if not active_sfx:
-        return None
-
-    log.info(f"  🔊 Smart SFX: {len(active_sfx)} effects")
-    for sfx in active_sfx:
-        log.info(
-            f"     [{sfx.time:.2f}s] "
-            f"{sfx.sfx_name} ← '{sfx.keyword}'"
-        )
-
-    total_dur = (
-        float(aligned[-1].get("end", 30))
-        if aligned else 30.0
-    )
-
-    inputs: list[str] = []
-    delays: list[str] = []
-
-    for i, sfx in enumerate(active_sfx):
-        inputs += ["-i", str(sfx.sfx_path)]
-        delay_ms = int(sfx.time * 1000)
         delays.append(
-            f"[{i}:a]volume={sfx_volume},"
-            f"adelay={delay_ms}|{delay_ms}[sfx{i}]"
+            f"[{idx}:a]volume={vol:.3f},"
+            f"adelay={delay_ms}|{delay_ms}"
+            f"[s{idx}]"
         )
+        idx += 1
 
-    mix_inputs = "".join(f"[sfx{i}]" for i in range(len(delays)))
+    if not delays:
+        return None
+
+    mix_inputs = "".join(
+        f"[s{i}]" for i in range(len(delays))
+    )
     filter_str = (
         ";".join(delays) +
         f";{mix_inputs}amix="
-        f"inputs={len(delays)}:normalize=0[out]"
+        f"inputs={len(delays)}:"
+        f"normalize=0[out]"
     )
 
     success, _ = _run_ffmpeg([
@@ -1403,15 +1039,327 @@ def build_smart_sfx_track(
     ])
 
     if not success:
-        log.warning("  ⚠️  Smart SFX track failed")
+        log.warning("  ⚠️  %s track failed", label)
         return None
 
-    log.info("  ✅ Smart SFX track built")
+    log.info("  ✅ %s built", label)
     return Path(output_path)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🎬 CLIP TRANSITION SFX (existing - kept for backward compat)
+# 🪝 HOOK SFX BUILDER (Opening)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_hook_sfx_track(
+    total_duration: float,
+    output_path:    str,
+    seed:           Optional[int] = None,
+) -> Optional[Path]:
+    """🪝 بناء مسار Hook SFX."""
+    hook_sfx = get_opening_sfx(seed=seed)
+    if not hook_sfx:
+        return None
+
+    log.info("  🪝 Building Hook SFX track...")
+
+    success, _ = _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i", str(hook_sfx),
+        "-af",
+        f"volume={DEFAULT_OPENING_VOL},"
+        f"apad=pad_dur={total_duration}",
+        "-t", str(total_duration),
+        "-c:a", "pcm_s16le",
+        output_path,
+    ])
+
+    if not success:
+        log.warning("  ⚠️  Hook SFX track failed")
+        return None
+
+    log.info(
+        "  ✅ Hook SFX built: %s", hook_sfx.name
+    )
+    return Path(output_path)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 💥 BIG TRANSITIONS SFX BUILDER
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_big_transitions_sfx_track(
+    transitions:    list[dict],
+    total_duration: float,
+    output_path:    str,
+) -> Optional[Path]:
+    """💥 بناء مسار Big Transitions SFX."""
+    big_trans = [
+        t for t in transitions if t.get("is_big")
+    ]
+
+    if not big_trans:
+        return None
+
+    if not BIG_TRANS_SFX_DIR.exists():
+        log.warning(
+            "  ⚠️  Big transitions dir not found"
+        )
+        return None
+
+    log.info(
+        "  💥 Building Big Transitions SFX: "
+        "%d transitions",
+        len(big_trans)
+    )
+
+    items: list[dict] = []
+    for i, trans in enumerate(big_trans):
+        sfx_file = get_big_transition_sfx(
+            transition_idx=i
+        )
+        if sfx_file:
+            items.append({
+                "sfx_file": sfx_file,
+                "time":     trans["time"],
+                "volume":   DEFAULT_BIG_TRANS_VOL,
+            })
+            log.info(
+                "     [%.2fs] %s → %s (%s)",
+                trans['time'],
+                trans['from_section'],
+                trans['to_section'],
+                sfx_file.name
+            )
+
+    return _build_sfx_track_generic(
+        items, total_duration, output_path,
+        "Big Transitions SFX",
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 👆 SMALL TRANSITIONS SFX BUILDER
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_small_transitions_sfx_track(
+    transitions:    list[dict],
+    total_duration: float,
+    output_path:    str,
+) -> Optional[Path]:
+    """👆 بناء مسار Small Transitions SFX."""
+    small_trans = [
+        t for t in transitions
+        if not t.get("is_big")
+    ]
+
+    if not small_trans:
+        return None
+
+    if not SMALL_TRANS_SFX_DIR.exists():
+        log.warning(
+            "  ⚠️  Small transitions dir not found"
+        )
+        return None
+
+    log.info(
+        "  👆 Building Small Transitions SFX: "
+        "%d snaps",
+        len(small_trans)
+    )
+
+    items: list[dict] = []
+    for i, trans in enumerate(small_trans):
+        sfx_file = get_small_transition_sfx(
+            transition_idx=i
+        )
+        if sfx_file:
+            items.append({
+                "sfx_file": sfx_file,
+                "time":     trans["time"],
+                "volume":   DEFAULT_SMALL_TRANS_VOL,
+            })
+
+    return _build_sfx_track_generic(
+        items, total_duration, output_path,
+        "Small Transitions SFX",
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ✨ PARTICLES SFX BUILDER
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_particles_sfx_track(
+    aligned:        list[dict],
+    tagged:         Optional[list[dict]],
+    total_duration: float,
+    output_path:    str,
+) -> Optional[Path]:
+    """✨ بناء مسار Particles SFX."""
+    if not aligned or not PARTICLES_SFX_DIR.exists():
+        return None
+
+    magic_tags = {
+        "shock", "revelation",
+        "climax", "inspiration",
+    }
+    items: list[dict] = []
+
+    for i, seg in enumerate(aligned):
+        tag = "information"
+        if tagged and i < len(tagged):
+            tag = (
+                tagged[i].get("final_tag")
+                or "information"
+            )
+        elif "tag" in seg:
+            tag = seg.get("tag", "information")
+
+        if tag in magic_tags:
+            sfx_file = get_particle_sfx(
+                idx=len(items)
+            )
+            if sfx_file:
+                items.append({
+                    "sfx_file": sfx_file,
+                    "time":     float(
+                        seg.get("start", 0)
+                    ),
+                    "volume":   DEFAULT_PARTICLE_VOL,
+                })
+
+    if not items:
+        return None
+
+    log.info(
+        "  ✨ Building Particles SFX: "
+        "%d magic moments",
+        len(items)
+    )
+
+    return _build_sfx_track_generic(
+        items, total_duration, output_path,
+        "Particles SFX",
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 📺 TV STATIC SFX BUILDER
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_tv_static_sfx_track(
+    big_transitions: list[dict],
+    total_duration:  float,
+    output_path:     str,
+    seed:            Optional[int] = None,
+) -> Optional[Path]:
+    """📺 بناء مسار TV Static SFX (مع seed)."""
+    if not TV_STATIC_SFX_DIR.exists():
+        return None
+
+    big_trans = [
+        t for t in big_transitions
+        if t.get("is_big")
+    ]
+    if not big_trans:
+        return None
+
+    # Select 50% of big transitions (with seed)
+    rng = random.Random(seed)
+    selected = [
+        t for t in big_trans
+        if rng.random() > 0.5
+    ]
+
+    if not selected:
+        return None
+
+    log.info(
+        "  📺 Building TV Static SFX: "
+        "%d static effects",
+        len(selected)
+    )
+
+    items: list[dict] = []
+    for i, trans in enumerate(selected):
+        sfx_file = get_tv_static_sfx(idx=i)
+        if sfx_file:
+            time_offset = max(
+                0, trans["time"] - 0.1
+            )
+            items.append({
+                "sfx_file": sfx_file,
+                "time":     time_offset,
+                "volume":   DEFAULT_TV_STATIC_VOL,
+            })
+
+    return _build_sfx_track_generic(
+        items, total_duration, output_path,
+        "TV Static SFX",
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 🔊 SMART SFX BUILDER (keyword-based)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def build_smart_sfx_track(
+    sentences:   list[str],
+    aligned:     list[dict],
+    output_path: str,
+    sfx_volume:  float = DEFAULT_SMART_SFX_VOL,
+) -> Optional[Path]:
+    """بناء مسار Smart SFX من الجمل."""
+    if not SMART_SFX_DIR.exists():
+        return None
+
+    if not sentences or not aligned:
+        return None
+
+    detections = detect_smart_sfx_for_sentences(
+        sentences
+    )
+    sentence_times = [
+        float(seg.get("start", 0))
+        for seg in aligned[:len(sentences)]
+    ]
+
+    items: list[dict] = []
+    for i, detection in enumerate(detections):
+        if detection and i < len(sentence_times):
+            items.append({
+                "sfx_file": detection["sfx_path"],
+                "time":     sentence_times[i],
+                "volume":   sfx_volume,
+            })
+
+    if not items:
+        return None
+
+    log.info(
+        "  🔊 Smart SFX: %d effects", len(items)
+    )
+    for item in items:
+        log.info(
+            "     [%.2fs] %s",
+            item["time"],
+            Path(str(item["sfx_file"])).name,
+        )
+
+    total_dur = (
+        float(aligned[-1].get("end", 30))
+        if aligned
+        else 30.0
+    )
+
+    return _build_sfx_track_generic(
+        items, total_dur, output_path,
+        "Smart SFX",
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 🎬 CLIP TRANSITION SFX (backward compat)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _calculate_transition_times(
@@ -1433,8 +1381,9 @@ def build_sfx_track(
     clip_durations: list[float],
     sfx_type:       str           = "swoosh",
     output_path:    Optional[str] = None,
+    seed:           Optional[int] = None,
 ) -> Optional[Path]:
-    """بناء مسار SFX لانتقالات الكليبات (قديم - للتوافق)."""
+    """بناء مسار SFX لانتقالات الكليبات."""
     if n_clips <= 1:
         return None
 
@@ -1447,54 +1396,44 @@ def build_sfx_track(
         return None
 
     if output_path is None:
-        output_path = _make_temp_path("sfx_track_", ".wav")
+        output_path = _make_temp_path(
+            "sfx_track_", ".wav"
+        )
 
-    transition_times = _calculate_transition_times(clip_durations)
+    transition_times = _calculate_transition_times(
+        clip_durations
+    )
     if not transition_times:
         return None
 
     total_dur = sum(clip_durations)
+    rng       = random.Random(seed)
 
-    inputs: list[str] = []
-    delays: list[str] = []
+    items: list[dict] = []
+    for trans_t in transition_times:
+        sfx_file = rng.choice(all_sfx)
+        items.append({
+            "sfx_file": sfx_file,
+            "time":     trans_t,
+            "volume":   DEFAULT_SFX_VOLUME,
+        })
 
-    for i, trans_t in enumerate(transition_times):
-        sfx_file  = random.choice(all_sfx)
-        inputs   += ["-i", str(sfx_file)]
-        delay_ms  = int(trans_t * 1000)
-        delays.append(
-            f"[{i}:a]adelay={delay_ms}|{delay_ms}[sfx{i}]"
+    result = _build_sfx_track_generic(
+        items, total_dur, output_path,
+        "SFX Track",
+    )
+
+    if result:
+        log.info(
+            "  ✅ SFX track: %d transitions",
+            len(transition_times)
         )
 
-    mix_inputs = "".join(f"[sfx{i}]" for i in range(len(delays)))
-    filter_str = (
-        ";".join(delays) +
-        f";{mix_inputs}amix="
-        f"inputs={len(delays)}:normalize=0[out]"
-    )
-
-    success, _ = _run_ffmpeg([
-        "ffmpeg", "-y",
-        *inputs,
-        "-filter_complex", filter_str,
-        "-map", "[out]",
-        "-t", str(total_dur),
-        "-c:a", "pcm_s16le",
-        output_path,
-    ])
-
-    if not success:
-        log.warning("  ⚠️  SFX track failed")
-        return None
-
-    log.info(
-        f"  ✅ SFX track: {len(transition_times)} transitions"
-    )
-    return Path(output_path)
+    return result
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🔀 MERGE TRACKS HELPER
+# 🔀 MERGE TRACKS (with limiter to prevent clipping)
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _merge_two_tracks(
@@ -1532,19 +1471,16 @@ def _merge_two_tracks(
 
 
 def _merge_multiple_tracks(
-    base_path:    str,
+    base_path:     str,
     overlay_paths: list[str],
-    output_path:  str,
-    duration:     float,
+    output_path:   str,
+    duration:      float,
 ) -> bool:
     """
-    🆕 دمج عدة tracks مع base track.
-
-    Args:
-        base_path: المسار الأساسي (voice + music)
-        overlay_paths: قائمة بالـ SFX tracks للدمج
-        output_path: المسار النهائي
-        duration: المدة الكلية
+    دمج عدة tracks مع base track + Limiter.
+    
+    alimiter prevents clipping when many SFX 
+    tracks are mixed together.
     """
     if not overlay_paths:
         return False
@@ -1554,13 +1490,20 @@ def _merge_multiple_tracks(
         inputs.extend(["-i", path])
 
     total_inputs = len(overlay_paths) + 1
-    mix_inputs   = "".join(f"[{i}:a]" for i in range(total_inputs))
+    mix_inputs   = "".join(
+        f"[{i}:a]" for i in range(total_inputs)
+    )
 
+    # amix + alimiter (prevents clipping)
     filter_complex = (
         f"{mix_inputs}amix="
         f"inputs={total_inputs}:"
         f"duration=first:"
-        f"normalize=0[out]"
+        f"normalize=0[mixed];"
+        f"[mixed]alimiter="
+        f"limit=0.9:"
+        f"attack=5:"
+        f"release=50[out]"
     )
 
     success, _ = _run_ffmpeg([
@@ -1584,29 +1527,32 @@ def _step_compressor_and_eq(
     voice_path: str,
     lang:       str,
 ) -> tuple[str, list[str]]:
-    """
-    تطبيق Compressor + EQ.
-
-    Returns:
-        (processed_path, temp_files_to_cleanup)
-    """
+    """تطبيق Compressor + EQ."""
     temp_files = []
 
     # Compressor
-    comp_path = _make_temp_path("voice_comp_", ".wav")
+    comp_path = _make_temp_path(
+        "voice_comp_", ".wav"
+    )
     temp_files.append(comp_path)
-    voice_processed = apply_compressor(voice_path, comp_path)
+    voice_processed = apply_compressor(
+        voice_path, comp_path
+    )
 
     # EQ
-    eq_path = _make_temp_path("voice_eq_", ".wav")
+    eq_path = _make_temp_path(
+        "voice_eq_", ".wav"
+    )
     temp_files.append(eq_path)
-    voice_eq = apply_eq(voice_processed, eq_path, lang=lang)
+    voice_eq = apply_eq(
+        voice_processed, eq_path, lang=lang
+    )
 
     return voice_eq, temp_files
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 🎯 MAIN PIPELINE: mix_voice_music_sfx (FULL PROFESSIONAL VERSION)
+# 🎯 MAIN PIPELINE: mix_voice_music_sfx
 # ═════════════════════════════════════════════════════════════════════════════
 
 def mix_voice_music_sfx(
@@ -1623,82 +1569,83 @@ def mix_voice_music_sfx(
     sentences:      Optional[list[str]]   = None,
     tagged:         Optional[list[dict]]  = None,
 ) -> Path:
-    """
-    🎬 FULL PROFESSIONAL AUDIO PIPELINE (2026)
-
-    Pipeline:
-        1. Compressor + EQ
-        2. Music mix with smart ducking
-        3. 🪝 Hook SFX (opening)
-        4. 💥 Big Transitions SFX (between sections)
-        5. 👆 Small Transitions SFX (between sentences)
-        6. ✨ Particles SFX (magical moments)
-        7. 📺 TV Static SFX (random transitions)
-        8. 🔊 Smart SFX (keyword-based)
-
-    Returns:
-        Path للملف النهائي
-    """
+    """🎬 FULL PROFESSIONAL AUDIO PIPELINE."""
     temp_files: list[str] = []
     sfx_tracks: list[str] = []
 
     try:
         log.info("\n  " + "═" * 60)
-        log.info("  🎬 PROFESSIONAL AUDIO PIPELINE STARTED")
+        log.info(
+            "  🎬 PROFESSIONAL AUDIO PIPELINE STARTED"
+        )
         log.info("  " + "═" * 60)
 
-        # ─────────────────────────────────────────────────
+        # ─────────────────────────────────────────
         # STEP 1+2: Compressor + EQ
-        # ─────────────────────────────────────────────────
-        voice_eq, eq_temps = _step_compressor_and_eq(
-            voice_path, lang,
+        # ─────────────────────────────────────────
+        voice_eq, eq_temps = (
+            _step_compressor_and_eq(voice_path, lang)
         )
         temp_files.extend(eq_temps)
 
-        # ─────────────────────────────────────────────────
-        # STEP 3: كشف الفقرات والانتقالات
-        # ─────────────────────────────────────────────────
-        sections = []
+        # ─────────────────────────────────────────
+        # STEP 3: Section detection
+        # ─────────────────────────────────────────
+        sections        = []
         all_transitions = []
         big_transitions = []
 
         if aligned:
-            sections = detect_video_sections(aligned, tagged)
-            all_transitions = get_section_transitions(sections)
+            sections = detect_video_sections(
+                aligned, tagged
+            )
+            all_transitions = get_section_transitions(
+                sections
+            )
             big_transitions = [
-                t for t in all_transitions if t.get("is_big")
+                t for t in all_transitions
+                if t.get("is_big")
             ]
 
+            log.info("\n  📊 Video Analysis:")
             log.info(
-                f"\n  📊 Video Analysis:"
-            )
-            log.info(f"     Sections: {len(sections)}")
-            log.info(
-                f"     Big transitions: {len(big_transitions)}"
+                "     Sections: %d", len(sections)
             )
             log.info(
-                f"     Small transitions: "
-                f"{len(all_transitions) - len(big_transitions)}"
+                "     Big transitions: %d",
+                len(big_transitions)
+            )
+            log.info(
+                "     Small transitions: %d",
+                len(all_transitions)
+                - len(big_transitions)
             )
 
-            # تفصيل الفقرات
             for sec in sections:
                 log.info(
-                    f"     [{sec.start_time:5.2f}s] "
-                    f"{sec.section_type:8s} [{sec.tag}]"
+                    "     [%5.2fs] %-8s [%s]",
+                    sec.start_time,
+                    sec.section_type,
+                    sec.tag
                 )
 
-        # ─────────────────────────────────────────────────
-        # STEP 4: الموسيقى مع Smart Ducking
-        # ─────────────────────────────────────────────────
-        music_file = get_music_file(content_type, seed=seed)
+        # ─────────────────────────────────────────
+        # STEP 4: Music + Smart Ducking
+        # ─────────────────────────────────────────
+        music_file = get_music_file(
+            content_type, seed=seed
+        )
 
         if music_file is None:
-            log.warning("  ⚠️  No music — voice only")
+            log.warning(
+                "  ⚠️  No music — voice only"
+            )
             return Path(voice_path)
 
         p          = Path(output_path)
-        mixed_path = _make_temp_path(f"{p.stem}_vm_", ".aac")
+        mixed_path = _make_temp_path(
+            f"{p.stem}_vm_", ".aac"
+        )
         temp_files.append(mixed_path)
 
         mixed = mix_audio(
@@ -1715,16 +1662,18 @@ def mix_voice_music_sfx(
             log.warning("  ⚠️  Music mix failed")
             return Path(voice_path)
 
-        current = str(mixed)
+        current   = str(mixed)
         total_dur = _safe_duration(current)
 
-        # ─────────────────────────────────────────────────
-        # STEP 5: بناء كل SFX tracks بشكل منفصل
-        # ─────────────────────────────────────────────────
-        log.info(f"\n  🎯 Building SFX tracks...")
+        # ─────────────────────────────────────────
+        # STEP 5: Build SFX tracks
+        # ─────────────────────────────────────────
+        log.info("\n  🎯 Building SFX tracks...")
 
         # 🪝 Hook SFX
-        hook_sfx_path = _make_temp_path("hook_sfx_", ".wav")
+        hook_sfx_path = _make_temp_path(
+            "hook_sfx_", ".wav"
+        )
         hook_track = build_hook_sfx_track(
             total_duration = total_dur,
             output_path    = hook_sfx_path,
@@ -1738,11 +1687,15 @@ def mix_voice_music_sfx(
 
         # 💥 Big Transitions SFX
         if all_transitions:
-            big_sfx_path = _make_temp_path("big_sfx_", ".wav")
-            big_track = build_big_transitions_sfx_track(
-                transitions    = all_transitions,
-                total_duration = total_dur,
-                output_path    = big_sfx_path,
+            big_sfx_path = _make_temp_path(
+                "big_sfx_", ".wav"
+            )
+            big_track = (
+                build_big_transitions_sfx_track(
+                    transitions    = all_transitions,
+                    total_duration = total_dur,
+                    output_path    = big_sfx_path,
+                )
             )
             if big_track:
                 sfx_tracks.append(big_sfx_path)
@@ -1752,11 +1705,15 @@ def mix_voice_music_sfx(
 
         # 👆 Small Transitions SFX
         if all_transitions:
-            small_sfx_path = _make_temp_path("small_sfx_", ".wav")
-            small_track = build_small_transitions_sfx_track(
-                transitions    = all_transitions,
-                total_duration = total_dur,
-                output_path    = small_sfx_path,
+            small_sfx_path = _make_temp_path(
+                "small_sfx_", ".wav"
+            )
+            small_track = (
+                build_small_transitions_sfx_track(
+                    transitions    = all_transitions,
+                    total_duration = total_dur,
+                    output_path    = small_sfx_path,
+                )
             )
             if small_track:
                 sfx_tracks.append(small_sfx_path)
@@ -1766,26 +1723,39 @@ def mix_voice_music_sfx(
 
         # ✨ Particles SFX
         if aligned:
-            particles_sfx_path = _make_temp_path("particles_", ".wav")
-            particles_track = build_particles_sfx_track(
-                aligned        = aligned,
-                tagged         = tagged,
-                total_duration = total_dur,
-                output_path    = particles_sfx_path,
+            particles_sfx_path = _make_temp_path(
+                "particles_", ".wav"
+            )
+            particles_track = (
+                build_particles_sfx_track(
+                    aligned        = aligned,
+                    tagged         = tagged,
+                    total_duration = total_dur,
+                    output_path    = particles_sfx_path,
+                )
             )
             if particles_track:
-                sfx_tracks.append(particles_sfx_path)
-                temp_files.append(particles_sfx_path)
+                sfx_tracks.append(
+                    particles_sfx_path
+                )
+                temp_files.append(
+                    particles_sfx_path
+                )
             else:
                 _safe_unlink(particles_sfx_path)
 
         # 📺 TV Static SFX
         if big_transitions:
-            tv_sfx_path = _make_temp_path("tv_static_", ".wav")
-            tv_track = build_tv_static_sfx_track(
-                big_transitions = all_transitions,
-                total_duration  = total_dur,
-                output_path     = tv_sfx_path,
+            tv_sfx_path = _make_temp_path(
+                "tv_static_", ".wav"
+            )
+            tv_track = (
+                build_tv_static_sfx_track(
+                    big_transitions = all_transitions,
+                    total_duration  = total_dur,
+                    output_path     = tv_sfx_path,
+                    seed            = seed,
+                )
             )
             if tv_track:
                 sfx_tracks.append(tv_sfx_path)
@@ -1795,7 +1765,9 @@ def mix_voice_music_sfx(
 
         # 🔊 Smart SFX (keyword-based)
         if sentences and aligned:
-            smart_sfx_path = _make_temp_path("smart_sfx_", ".wav")
+            smart_sfx_path = _make_temp_path(
+                "smart_sfx_", ".wav"
+            )
             smart_track = build_smart_sfx_track(
                 sentences   = sentences,
                 aligned     = aligned,
@@ -1808,16 +1780,19 @@ def mix_voice_music_sfx(
             else:
                 _safe_unlink(smart_sfx_path)
 
-        # ─────────────────────────────────────────────────
-        # STEP 6: دمج كل SFX tracks مع الصوت الأساسي
-        # ─────────────────────────────────────────────────
+        # ─────────────────────────────────────────
+        # STEP 6: Merge all SFX tracks
+        # ─────────────────────────────────────────
         if sfx_tracks:
             log.info(
-                f"\n  🔀 Merging {len(sfx_tracks)} SFX tracks "
-                f"with audio..."
+                "\n  🔀 Merging %d SFX tracks "
+                "with audio...",
+                len(sfx_tracks)
             )
 
-            final_temp = _make_temp_path("final_", ".aac")
+            final_temp = _make_temp_path(
+                "final_", ".aac"
+            )
 
             success = _merge_multiple_tracks(
                 base_path     = current,
@@ -1827,36 +1802,45 @@ def mix_voice_music_sfx(
             )
 
             if success:
-                # نقل للملف النهائي
-                shutil.move(final_temp, output_path)
+                # Move to final output
+                shutil.move(
+                    final_temp, output_path
+                )
                 _safe_unlink(current)
 
                 log.info(
-                    f"\n  ✅ FINAL AUDIO READY: "
-                    f"{Path(output_path).name}"
+                    "\n  ✅ FINAL AUDIO READY: %s",
+                    Path(output_path).name
                 )
-                log.info("  " + "═" * 60 + "\n")
+                log.info(
+                    "  " + "═" * 60 + "\n"
+                )
                 return Path(output_path)
             else:
-                log.warning("  ⚠️  SFX merge failed — using base mix")
+                log.warning(
+                    "  ⚠️  SFX merge failed "
+                    "— using base mix"
+                )
                 _safe_unlink(final_temp)
 
-        # ─────────────────────────────────────────────────
-        # Fallback: لا SFX، فقط الـ mix الأساسي
-        # ─────────────────────────────────────────────────
+        # ─────────────────────────────────────────
+        # Fallback: no SFX
+        # ─────────────────────────────────────────
         if current != output_path:
             if Path(current).exists():
                 shutil.move(current, output_path)
             else:
-                shutil.copy(voice_path, output_path)
+                shutil.copy(
+                    voice_path, output_path
+                )
 
         log.info(
-            f"\n  ✅ Audio ready (basic): "
-            f"{Path(output_path).name}"
+            "\n  ✅ Audio ready (basic): %s",
+            Path(output_path).name
         )
         return Path(output_path)
 
     finally:
-        # تنظيف temp files
+        # Cleanup ALL temp files
         for f in temp_files:
             _safe_unlink(f)
