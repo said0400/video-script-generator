@@ -1,25 +1,29 @@
 """
-🏷️ Smart Emotional Tags Parser
+🏷️ Smart Emotional Tags Parser v2.0 — Street Edition
 
 Features:
-  ✅ Extract tags from text
-  ✅ Auto-correct misspelled tags
-  ✅ Manual mapping قبل Fuzzy (أدق للـ synonyms)
+  ✅ 22 tags total (19 original + 3 new: hook/direct/cta)
+  ✅ Auto-correct misspelled tags (fuzzy matching)
+  ✅ Manual mapping for synonyms and variants
   ✅ Multi-language tag names (AR, FR, EN)
   ✅ Voice configuration per tag
-  ✅ Summary display
-  ✅ النص قبل أول tag لا يُهمَل
-  ✅ strip_tags_from_text() تحافظ على المسافات
-  ✅ line_counter متسق حتى مع segments الفارغة
+  ✅ Summary display with stats
+  ✅ Pre-text before first tag preserved
+  ✅ strip_tags_from_text() preserves spaces
+  ✅ line_counter consistent even with empty segments
+  ✅ Abbreviation support (info, inspire, drama, etc.)
+  ✅ Direct message → direct (French fix)
 
-Supported Tags (19 total):
-    Original:
+Supported Tags (22 total):
+    Original (19):
       [intrigue], [desire], [information], [inspiration],
-      [confident], [shock], [wisdom], [urgency], [calm], [emotional]
+      [confident], [shock], [wisdom], [urgency], [calm],
+      [emotional], [pause], [whisper], [curiosity],
+      [storytelling], [dramatic], [revelation], [tension],
+      [climax], [powerful]
 
-    Advanced:
-      [pause], [whisper], [curiosity], [storytelling],
-      [dramatic], [revelation], [tension], [climax], [powerful]
+    New (3):
+      [hook], [direct], [cta]
 """
 
 from __future__ import annotations
@@ -38,12 +42,12 @@ log = logging.getLogger(__name__)
 
 DEFAULT_TAG = "information"
 
-FUZZY_CUTOFF        = 0.6
+FUZZY_CUTOFF        = 0.65   # More conservative (was 0.6)
 FUZZY_MATCHES_LIMIT = 1
 
 _VALID_LANGS = frozenset({"ar", "fr", "en"})
 
-# ✅ كلمات الجمع حسب اللغة — تُستخدم في format_tags_summary
+# Plural words per language (for summary)
 _PLURAL_MAP: dict[str, tuple[str, str]] = {
     "ar": ("جملة", "جمل"),
     "fr": ("phrase", "phrases"),
@@ -57,7 +61,14 @@ _PLURAL_MAP: dict[str, tuple[str, str]] = {
 
 @dataclass(frozen=True)
 class TagConfig:
-    """إعدادات Tag صوتية ولغوية."""
+    """
+    Tag configuration (voice + linguistic).
+    
+    Attributes:
+        voice_rate:   0.8 = slow, 1.0 = normal, 1.2 = fast
+        voice_pitch:  -5 to +5 (semitones)
+        voice_volume: 0.7 to 1.15
+    """
     name_ar:      str
     name_en:      str
     name_fr:      str
@@ -68,10 +79,7 @@ class TagConfig:
     description:  str
 
     def get_name(self, lang: str = "ar") -> str:
-        """
-        جلب الاسم حسب اللغة.
-        ✅ dict-based بدل getattr.
-        """
+        """Get name based on language (dict-based)."""
         lang_map = {
             "ar": self.name_ar,
             "fr": self.name_fr,
@@ -93,10 +101,14 @@ class TagConfig:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAGS DEFINITIONS
+# TAGS DEFINITIONS — 22 tags total (19 original + 3 new)
 # ═════════════════════════════════════════════════════════════════════════════
 
 _TAG_CONFIGS: dict[str, TagConfig] = {
+
+    # ═══════════════════════════════════════════════════════════════
+    # ORIGINAL TAGS (19)
+    # ═══════════════════════════════════════════════════════════════
 
     "intrigue": TagConfig(
         name_ar="إثارة الفضول", name_en="Intrigue",
@@ -143,7 +155,7 @@ _TAG_CONFIGS: dict[str, TagConfig] = {
     "urgency": TagConfig(
         name_ar="عاجل", name_en="Urgency",
         name_fr="Urgence", voice_style="fast",
-        voice_rate=1.15, voice_pitch=+2, voice_volume=1.1,
+        voice_rate=1.08, voice_pitch=+2, voice_volume=1.10,
         description="صوت سريع وحاد",
     ),
     "calm": TagConfig(
@@ -212,6 +224,52 @@ _TAG_CONFIGS: dict[str, TagConfig] = {
         voice_rate=0.94, voice_pitch=-1, voice_volume=1.1,
         description="صوت حازم وواثق بقوة",
     ),
+
+    # ═══════════════════════════════════════════════════════════════
+    # NEW TAGS (3) — Street Content
+    # ═══════════════════════════════════════════════════════════════
+
+    "hook": TagConfig(
+        name_ar="افتتاحية صادمة",
+        name_en="Hook",
+        name_fr="Accroche",
+        voice_style="intense",
+        voice_rate=1.10,
+        voice_pitch=+2,
+        voice_volume=1.10,
+        description=(
+            "افتتاحية صادمة تجذب الانتباه فوراً "
+            "في الثواني الأولى من الفيديو"
+        ),
+    ),
+
+    "direct": TagConfig(
+        name_ar="مباشر وحاد",
+        name_en="Direct",
+        name_fr="Direct",
+        voice_style="bold",
+        voice_rate=0.97,
+        voice_pitch=0,
+        voice_volume=1.08,
+        description=(
+            "كلام مباشر بدون مقدمات — "
+            "كأنك تمسك المشاهد من كتفه"
+        ),
+    ),
+
+    "cta": TagConfig(
+        name_ar="دعوة للتفاعل",
+        name_en="Call to Action",
+        name_fr="Appel à l'action",
+        voice_style="uplifting",
+        voice_rate=1.05,
+        voice_pitch=+1,
+        voice_volume=1.10,
+        description=(
+            "دعوة قوية للحفظ أو المتابعة أو "
+            "المشاركة في نهاية الفيديو"
+        ),
+    ),
 }
 
 
@@ -241,31 +299,71 @@ TAG_INLINE_PATTERN = _TAG_RE
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# MANUAL TAG MAPPING
+# MANUAL TAG MAPPING — Extended for variants
 # ═════════════════════════════════════════════════════════════════════════════
 
-# ⚠️ ذاتية — قابلة للتعديل حسب السياق
 _MANUAL_TAG_MAP: dict[str, str] = {
+
+    # ═══════════════════════════════════════════════════════════════
+    # Emotion synonyms
+    # ═══════════════════════════════════════════════════════════════
     "excited":    "inspiration",
     "happy":      "inspiration",
-    "fear":       "urgency",
-    "angry":      "shock",
     "sad":        "emotional",
+    "angry":      "shock",
+    "fear":       "tension",
     "reflective": "wisdom",
     "mysterious": "intrigue",
     "suspense":   "tension",
-    "build":      "tension",
     "soft":       "calm",
-    "hard":       "powerful",
     "strong":     "powerful",
     "epic":       "climax",
     "story":      "storytelling",
     "secret":     "whisper",
     "reveal":     "revelation",
     "truth":      "revelation",
-    "moment":     "pause",
     "silence":    "pause",
     "question":   "curiosity",
+
+    # ═══════════════════════════════════════════════════════════════
+    # Hook variants
+    # ═══════════════════════════════════════════════════════════════
+    "opening":   "hook",
+    "intro":     "hook",
+    "start":     "hook",
+    "beginning": "hook",
+    "open":      "hook",
+
+    # ═══════════════════════════════════════════════════════════════
+    # Direct variants (including French "direct message")
+    # ═══════════════════════════════════════════════════════════════
+    "direct message": "direct",
+    "direct_message": "direct",
+    "direct_msg":     "direct",
+    "straight":       "direct",
+    "blunt":          "direct",
+
+    # ═══════════════════════════════════════════════════════════════
+    # CTA variants
+    # ═══════════════════════════════════════════════════════════════
+    "call to action": "cta",
+    "call_to_action": "cta",
+    "callto":         "cta",
+    "action":         "cta",
+    "save":           "cta",
+    "follow":         "cta",
+    "subscribe":      "cta",
+    "share":          "cta",
+
+    # ═══════════════════════════════════════════════════════════════
+    # Common abbreviations
+    # ═══════════════════════════════════════════════════════════════
+    "info":     "information",
+    "inspire":  "inspiration",
+    "conf":     "confident",
+    "emotion":  "emotional",
+    "drama":    "dramatic",
+    "tense":    "tension",
 }
 
 
@@ -277,8 +375,8 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
     """
     تقسيم المحتوى إلى جمل مع tags.
 
-    ✅ النص قبل أول tag لا يُهمَل.
-    ✅ line_counter متسق حتى مع segments الفارغة.
+    Pre-text before first tag is preserved.
+    line_counter is consistent even with empty segments.
 
     Returns:
         list of {"raw_tag": str|None, "text": str, "line": int}
@@ -294,7 +392,6 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
         >>> split_into_tagged_sentences("[shock][calm] هدوء")
         [
             {"raw_tag": "calm", "text": "هدوء", "line": 2},
-            # [shock] بدون نص → يُتجاهل لكن line_counter يزداد
         ]
     """
     if not content or not content.strip():
@@ -313,7 +410,7 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
     result:       list[dict] = []
     line_counter: int        = 1
 
-    # ✅ النص قبل أول tag
+    # Pre-text before first tag
     pre_text = text[:matches[0].start()].strip()
     if pre_text:
         result.append({
@@ -323,7 +420,7 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
         })
         line_counter += 1
 
-    # النصوص بين الـ tags
+    # Text between tags
     for i, match in enumerate(matches):
         raw_tag    = match.group(1).strip()
         text_start = match.end()
@@ -336,11 +433,11 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
         segment      = text[text_start:text_end].strip()
         current_line = line_counter
 
-        # ✅ line_counter يزداد دائماً
-        # حتى لو segment فارغ — لضمان تسلسل الأرقام
+        # line_counter increments always (even empty segments)
         line_counter += 1
 
         if not segment:
+            # Empty segment (e.g., [hook][shock] sequence)
             continue
 
         result.append({
@@ -357,6 +454,7 @@ def split_into_tagged_sentences(content: str) -> list[dict]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def is_valid_tag(tag: Optional[str]) -> bool:
+    """Check if tag exists in valid configs."""
     if not tag:
         return False
     return tag in _TAG_CONFIGS
@@ -366,13 +464,16 @@ def auto_correct_tag(
     raw_tag: Optional[str],
 ) -> tuple[Optional[str], str]:
     """
-    تصحيح tag خاطئ تلقائياً.
+    Auto-correct misspelled tag.
 
-    ✅ Strategy (4 levels):
+    Strategy (4 levels):
         1. Exact match
-        2. Case fix
-        3. Manual mapping  ← قبل Fuzzy
-        4. Fuzzy match     ← للأخطاء الإملائية فقط
+        2. Case fix (lowercase)
+        3. Manual mapping (synonyms + variants)
+        4. Fuzzy match (typos only, cutoff=0.65)
+
+    Returns:
+        (corrected_tag, source) or (None, "no_match")
     """
     if not raw_tag:
         return (None, "empty_tag")
@@ -388,11 +489,11 @@ def auto_correct_tag(
     if lower in _TAG_CONFIGS:
         return (lower, "case_fixed")
 
-    # 3) Manual mapping — قبل Fuzzy
+    # 3) Manual mapping (synonyms + variants)
     if lower in _MANUAL_TAG_MAP:
         return (_MANUAL_TAG_MAP[lower], "manual_map")
 
-    # 4) Fuzzy match
+    # 4) Fuzzy match (for typos only)
     fuzzy = get_close_matches(
         lower,
         VALID_TAG_NAMES,
@@ -400,6 +501,10 @@ def auto_correct_tag(
         cutoff = FUZZY_CUTOFF,
     )
     if fuzzy:
+        log.debug(
+            "  🔧 Fuzzy: [%s] → [%s]",
+            cleaned, fuzzy[0]
+        )
         return (fuzzy[0], "spelling_fixed")
 
     return (None, "no_match")
@@ -407,9 +512,9 @@ def auto_correct_tag(
 
 def strip_tags_from_text(text: str) -> str:
     """
-    إزالة جميع الـ tags من النص.
+    Remove all tags from text.
 
-    ✅ تستبدل الـ tag بمسافة للحفاظ على الفواصل.
+    Replaces tag with space to preserve word boundaries.
 
     Examples:
         >>> strip_tags_from_text("[shock] Hello [calm] World")
@@ -419,7 +524,7 @@ def strip_tags_from_text(text: str) -> str:
     """
     if not text:
         return ""
-    # ✅ sub بمسافة بدل حذف
+    # Replace tag with space (preserves word boundaries)
     cleaned = _TAG_RE.sub(" ", text)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
@@ -430,23 +535,25 @@ def strip_tags_from_text(text: str) -> str:
 # ═════════════════════════════════════════════════════════════════════════════
 
 def get_tag_info(tag: str) -> Optional[dict]:
+    """Get tag info as dict (for JSON/API)."""
     config = _TAG_CONFIGS.get(tag)
     return config.to_dict() if config else None
 
 
 def get_tag_config(tag: str) -> Optional[TagConfig]:
+    """Get tag config as TagConfig (for internal use)."""
     return _TAG_CONFIGS.get(tag)
 
 
 def get_tag_name(tag: str, lang: str = "ar") -> str:
     """
-    جلب اسم الـ tag حسب اللغة.
-    ✅ يتحقق من lang — fallback لـ "en".
+    Get tag name in specified language.
+    Falls back to English if lang invalid.
     """
     if lang not in _VALID_LANGS:
         log.warning(
-            f"  ⚠️  Unsupported lang '{lang}' "
-            f"in get_tag_name — using 'en'"
+            "  ⚠️  Unsupported lang %r in get_tag_name — using 'en'",
+            lang
         )
         lang = "en"
 
@@ -464,7 +571,14 @@ def get_tag_name(tag: str, lang: str = "ar") -> str:
 def _categorize_sentence_source(
     sent: dict,
 ) -> tuple[str, Optional[str]]:
-    """تصنيف مصدر الـ tag."""
+    """
+    Categorize tag source for summary.
+    
+    NOTE: Expects these fields (added by process_tags/AI, NOT split_into_tagged_sentences):
+        - tag_source: exact_match | case_fixed | manual_map | spelling_fixed | ai_suggested
+        - raw_tag:    original tag from content
+        - final_tag:  corrected tag
+    """
     source    = sent.get("tag_source", "unknown")
     raw_tag   = sent.get("raw_tag")
     final_tag = sent.get("final_tag", DEFAULT_TAG)
@@ -496,13 +610,17 @@ def format_tags_summary(
     lang:             str = "ar",
 ) -> str:
     """
-    بناء ملخص الـ tags.
-    ✅ يستخدم lang لكلمات الجمع.
+    Build tags summary with stats.
+    
+    Args:
+        tagged_sentences: list with final_tag, tag_source, raw_tag, line
+                         (these fields are added AFTER process_tags())
+        lang:            ar | fr | en (for plural words)
     """
     if not tagged_sentences:
         return "  ⚠️  No tagged sentences found"
 
-    # ✅ كلمات الجمع حسب lang
+    # Plural words per language
     singular, plural_word = _PLURAL_MAP.get(
         lang, _PLURAL_MAP["en"]
     )
@@ -556,9 +674,6 @@ def print_tags_summary(
     tagged_sentences: list[dict],
     lang:             str = "ar",
 ) -> None:
-    """
-    طباعة ملخص الـ tags.
-    ✅ log.info بدل print.
-    """
+    """Print tags summary via log."""
     summary = format_tags_summary(tagged_sentences, lang)
     log.info(summary)
