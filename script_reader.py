@@ -1,12 +1,12 @@
 """
-📋 Script Reader — Excel (.xlsx) and CSV support
+📋 Script Reader v2.0 — Final Production Edition
 
 Features:
   ✅ Auto lang + content_mode detection from filename
      (ar_short.xlsx, fr_long.xlsx, en_short.xlsx, ...)
   ✅ Multi-format support (Excel, CSV)
   ✅ Auto column detection with aliases
-  ✅ Positional fallback
+  ✅ Positional fallback with warnings
   ✅ Tag-aware content processing (Short + Long)
   ✅ Long content: each [tag]+paragraph = one unit
   ✅ Short content: sentence-level splitting
@@ -14,6 +14,10 @@ Features:
   ✅ Validation with detailed errors
   ✅ Pretty summary display
   ✅ Robust error handling
+  ✅ Word-boundary filename detection (no "archive" → "ar")
+  ✅ Smart sheet selection for Excel
+  ✅ CSV uses _process_rows (no code duplication)
+  ✅ DEFAULT_TAG instead of None for missing tags
 """
 
 from __future__ import annotations
@@ -25,10 +29,13 @@ from pathlib import Path
 from typing import Optional
 
 from tags_parser import (
+    DEFAULT_TAG,
     auto_correct_tag,
     split_into_tagged_sentences,
     strip_tags_from_text,
 )
+
+log = logging.getLogger(__name__)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CONSTANTS
@@ -38,10 +45,10 @@ EXCEL_EXTENSIONS = (".xlsx", ".xls")
 CSV_EXTENSIONS   = (".csv",)
 
 # Regex patterns
-_NORMALIZE_RE    = re.compile(r"[\s\-\/\\]")
-_TAG_RE          = re.compile(r"\[([a-zA-Z_]+)\]")
-_TAG_SPLIT_RE    = re.compile(r"(\[[a-zA-Z_]+\])")
-_FILE_LANG_RE    = re.compile(
+_NORMALIZE_RE = re.compile(r"[\s\-\/\\]")
+_TAG_RE       = re.compile(r"\[([a-zA-Z_]+)\]")
+_TAG_SPLIT_RE = re.compile(r"(\[[a-zA-Z_]+\])")
+_FILE_LANG_RE = re.compile(
     r"(?P<lang>ar|fr|en)[_\-](?P<mode>short|long)",
     re.IGNORECASE,
 )
@@ -68,9 +75,6 @@ _INVALID_NUMBERS = frozenset({
 # Supported values
 _VALID_LANGS = frozenset({"ar", "fr", "en"})
 _VALID_MODES = frozenset({"short", "long"})
-
-logging.basicConfig(level=logging.INFO, format="%(message)s")
-log = logging.getLogger(__name__)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -118,15 +122,14 @@ def _detect_file_meta(path: Path) -> tuple[str, str]:
     """
     استخراج lang و content_mode من اسم الملف.
 
-    Examples:
-        ar_short.xlsx  → ("ar", "short")
-        fr_long.xlsx   → ("fr", "long")
-        en_short.csv   → ("en", "short")
-        videos_ar.xlsx → ("ar", "short")   ← fallback
-        my_content.xlsx → ("ar", "short")  ← default
+    Uses word-boundary detection to avoid false matches
+    (e.g., "archive" → "ar" was a bug).
 
-    Returns:
-        (lang, content_mode)
+    Examples:
+        ar_short.xlsx      → ("ar", "short")
+        videos_fr_long.xlsx → ("fr", "long")
+        en_short.csv       → ("en", "short")
+        my_content.xlsx    → ("ar", "short")  ← default
     """
     stem  = path.stem.lower().strip()
     match = _FILE_LANG_RE.search(stem)
@@ -135,26 +138,32 @@ def _detect_file_meta(path: Path) -> tuple[str, str]:
         lang = match.group("lang").lower()
         mode = match.group("mode").lower()
         log.info(
-            f"  📁 Detected from filename: "
-            f"lang={lang.upper()}, mode={mode.upper()}"
+            "  📁 Detected from filename: lang=%s, mode=%s",
+            lang.upper(), mode.upper()
         )
         return lang, mode
 
-    # Fallback: اكتشاف اللغة فقط
+    # Fallback: word-boundary detection
     detected_lang = "ar"
     detected_mode = "short"
 
+    # Split by common separators
+    parts = re.split(r"[_\-\.\s]", stem)
+
     for lang in ("ar", "fr", "en"):
-        if lang in stem.split("_") or stem.startswith(lang):
+        # Check exact word match (not "archive" → "ar")
+        if lang in parts:
             detected_lang = lang
             break
 
-    if "long" in stem:
+    if "long" in parts:
         detected_mode = "long"
 
     log.warning(
-        f"  ⚠️  Cannot detect lang/mode from '{path.name}' "
-        f"— using {detected_lang.upper()}/{detected_mode.upper()}"
+        "  ⚠️  Cannot detect lang/mode from '%s' — using %s/%s",
+        path.name,
+        detected_lang.upper(),
+        detected_mode.upper()
     )
     return detected_lang, detected_mode
 
@@ -198,19 +207,28 @@ def _detect_columns(
         if idx is not None:
             col_map[field] = idx
 
-    # Positional fallback
+    # Positional fallback مع تحذير
     if "number" not in col_map and len(headers) >= 1:
         col_map["number"] = 0
+        log.warning(
+            "  ⚠️  'number' column not found — using col 0 (%r)",
+            headers[0]
+        )
     if "title" not in col_map and len(headers) >= 2:
         col_map["title"] = 1
+        log.warning(
+            "  ⚠️  'title' column not found — using col 1 (%r)",
+            headers[1]
+        )
 
-    # ✅ Content fallback: عيّن فقط للغة هذا الملف
+    # Content fallback
     if "content" in col_map:
         lang_key = f"{file_lang}_content"
         if lang_key not in col_map:
             col_map[lang_key] = col_map["content"]
             log.info(
-                f"  ℹ️  Using 'content' column as {lang_key}"
+                "  ℹ️  Using 'content' column as %s",
+                lang_key
             )
 
     return col_map
@@ -289,18 +307,7 @@ def _process_single_sentence(sent: dict) -> dict:
     """
     معالجة جملة/فقرة واحدة مع tag.
 
-    Input:
-        {"raw_tag": "shock", "text": "...", "line": 1}
-
-    Output:
-        {
-            "raw_tag":       "shock",
-            "final_tag":     "shock",
-            "tag_source":    "exact_match",
-            "text":          "...",
-            "text_with_tag": "[shock] ...",
-            "line":          1,
-        }
+    Uses DEFAULT_TAG instead of None for missing tags.
     """
     raw_tag = (sent.get("raw_tag") or "").strip()
     text    = (sent.get("text")    or "").strip()
@@ -313,17 +320,15 @@ def _process_single_sentence(sent: dict) -> dict:
             final_tag  = corrected
             tag_source = reason
         else:
-            final_tag  = None
+            # DEFAULT_TAG instead of None
+            final_tag  = DEFAULT_TAG
             tag_source = "needs_ai"
     else:
-        final_tag  = None
+        final_tag  = DEFAULT_TAG
         tag_source = "needs_ai"
 
     clean_text    = strip_tags_from_text(text)
-    text_with_tag = (
-        f"[{final_tag}] {clean_text}"
-        if final_tag else clean_text
-    )
+    text_with_tag = f"[{final_tag}] {clean_text}"
 
     return {
         "raw_tag":       raw_tag,
@@ -343,10 +348,6 @@ def _process_long_content(
     معالجة Long content:
     كل [tag] + الفقرة التي تليه = وحدة واحدة كاملة.
     لا تقسّم الفقرات إلى جمل.
-
-    مثال:
-        [story] سامر لم يكن شخصًا خارقًا. كان شابًا عاديًا جدًا...
-        → وحدة واحدة بـ tag=story والنص كله
     """
     parts  = _TAG_SPLIT_RE.split(content.strip())
     result : list[dict] = []
@@ -363,7 +364,10 @@ def _process_long_content(
         if _TAG_SPLIT_RE.fullmatch(part):
             # هذا tag → خذ النص الذي يليه
             raw_tag = part[1:-1].strip()
-            text    = parts[i + 1].strip() if i + 1 < len(parts) else ""
+            text    = (
+                parts[i + 1].strip()
+                if i + 1 < len(parts) else ""
+            )
             i += 2
         else:
             # نص بدون tag
@@ -382,8 +386,8 @@ def _process_long_content(
         line += 1
 
     log.info(
-        f"  📝 Long content parsed: "
-        f"{len(result)} paragraphs"
+        "  📝 Long content parsed: %d paragraphs",
+        len(result)
     )
     return result
 
@@ -403,8 +407,8 @@ def _process_short_content(
         if (sent.get("text") or "").strip()
     ]
     log.info(
-        f"  📝 Short content parsed: "
-        f"{len(result)} sentences"
+        "  📝 Short content parsed: %d sentences",
+        len(result)
     )
     return result
 
@@ -426,18 +430,8 @@ def process_tagged_content(
         content_mode: short | long
 
     Returns:
-        list of dicts:
-        [
-            {
-                "raw_tag":       "intrigue",
-                "final_tag":     "intrigue",
-                "tag_source":    "exact_match",
-                "text":          "النص بدون tag",
-                "text_with_tag": "[intrigue] النص...",
-                "line":          1,
-            },
-            ...
-        ]
+        list of dicts with: raw_tag, final_tag, tag_source,
+        text, text_with_tag, line
     """
     if not content or not content.strip():
         return []
@@ -453,18 +447,22 @@ def process_tagged_content(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _split_by_punctuation(text: str, lang: str) -> list[str]:
+    """تقسيم بعلامات الترقيم."""
     pattern = _AR_SENTENCE_RE if lang == "ar" else _EN_SENTENCE_RE
     return pattern.split(text.strip())
 
 
 def _merge_short_sentences(sentences: list[str]) -> list[str]:
+    """دمج الجمل القصيرة."""
     cleaned: list[str] = []
     for sent in sentences:
         sent = sent.strip()
         if len(sent) < MIN_SENTENCE_CHARS:
             continue
-        if (cleaned and
-                len(sent.split()) < MIN_SENTENCE_WORDS):
+        if (
+            cleaned and
+            len(sent.split()) < MIN_SENTENCE_WORDS
+        ):
             cleaned[-1] = cleaned[-1] + " " + sent
         else:
             cleaned.append(sent)
@@ -487,11 +485,11 @@ def split_into_sentences(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _process_rows(
-    rows:        list,
-    col_map:     dict[str, int],
-    skip_first:  bool = True,
-    file_lang:   str  = "ar",
-    content_mode: str = "short",
+    rows:         list,
+    col_map:      dict[str, int],
+    skip_first:   bool = True,
+    file_lang:    str  = "ar",
+    content_mode: str  = "short",
 ) -> list[dict]:
     """
     معالجة صفوف Excel/CSV.
@@ -502,7 +500,7 @@ def _process_rows(
     """
     scripts:      list[dict] = []
     auto_counter: int        = 1
-    start_idx     = 1 if skip_first else 0
+    start_idx                = 1 if skip_first else 0
 
     for row in rows[start_idx:]:
         if not _row_has_data(row):
@@ -510,7 +508,7 @@ def _process_rows(
 
         record = _row_to_dict(list(row), col_map)
 
-        # ✅ رقم تلقائي فريد
+        # رقم تلقائي فريد
         if (
             not record.get("number") or
             _normalize(record["number"]) in _INVALID_NUMBERS
@@ -519,13 +517,15 @@ def _process_rows(
 
         auto_counter += 1
 
-        # ✅ أضف metadata
+        # أضف metadata
         record["lang"]         = file_lang
         record["content_mode"] = content_mode
 
-        # ✅ اختر المحتوى المناسب للغة
-        lang_content = record.get(f"{file_lang}_content", "").strip()
-        generic      = record.get("content", "").strip()
+        # اختر المحتوى المناسب للغة
+        lang_content = record.get(
+            f"{file_lang}_content", ""
+        ).strip()
+        generic = record.get("content", "").strip()
         record["content"] = lang_content or generic
 
         if _is_valid_record(record):
@@ -539,10 +539,11 @@ def _process_rows(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _print_detected_columns(col_map: dict[str, int]) -> None:
+    """طباعة الأعمدة المُكتشَفة."""
     detected = sorted(col_map.keys())
     log.info(
-        f"  📊 Columns detected: "
-        f"{', '.join(detected)}"
+        "  📊 Columns detected: %s",
+        ', '.join(detected)
     )
 
 
@@ -554,9 +555,8 @@ def _read_excel(
     """
     قراءة ملف Excel.
 
-    Raises:
-        ImportError:  إذا openpyxl غير مثبت
-        RuntimeError: إذا الملف معطوب
+    Smart sheet selection: prefers sheets named
+    "scripts", "data", "videos", "content", "sheet1".
     """
     try:
         import openpyxl
@@ -572,10 +572,23 @@ def _read_excel(
             f"Cannot read Excel file '{path.name}': {e}"
         )
 
-    log.info(f"  📋 Sheets available: {wb.sheetnames}")
+    log.info(
+        "  📋 Sheets available: %s", wb.sheetnames
+    )
+
+    # Smart sheet selection
+    preferred_names = [
+        "scripts", "data", "videos", "content", "sheet1"
+    ]
+    ws = None
+    for name in wb.sheetnames:
+        if name.lower() in preferred_names:
+            ws = wb[name]
+            break
+    if ws is None:
+        ws = wb.active
 
     try:
-        ws   = wb.active
         rows = list(ws.iter_rows(values_only=True))
     except Exception as e:
         raise RuntimeError(
@@ -583,7 +596,9 @@ def _read_excel(
         )
 
     if not rows:
-        log.warning(f"  ⚠️  Excel file is empty: {path.name}")
+        log.warning(
+            "  ⚠️  Excel file is empty: %s", path.name
+        )
         return []
 
     headers = [
@@ -596,7 +611,7 @@ def _read_excel(
             f"Excel file has no valid headers: {path.name}"
         )
 
-    log.info(f"  📄 Using sheet: '{ws.title}'")
+    log.info("  📄 Using sheet: '%s'", ws.title)
     col_map = _detect_columns(headers, file_lang)
     _print_detected_columns(col_map)
 
@@ -616,8 +631,7 @@ def _read_csv(
     """
     قراءة ملف CSV.
 
-    Raises:
-        RuntimeError: إذا الملف معطوب
+    Uses _process_rows (no code duplication).
     """
     try:
         with open(path, encoding="utf-8-sig", newline="") as f:
@@ -625,7 +639,9 @@ def _read_csv(
             headers = next(reader, [])
 
             if not headers:
-                log.warning(f"  ⚠️  CSV is empty: {path.name}")
+                log.warning(
+                    "  ⚠️  CSV is empty: %s", path.name
+                )
                 return []
 
             if not any(h.strip() for h in headers):
@@ -633,9 +649,11 @@ def _read_csv(
                     f"CSV has no valid headers: {path.name}"
                 )
 
-            col_map = _detect_columns(headers, file_lang)
+            col_map  = _detect_columns(headers, file_lang)
             _print_detected_columns(col_map)
-            rows    = list(reader)
+            
+            # Build rows with headers as first row
+            all_rows = [list(headers)] + list(reader)
 
     except UnicodeDecodeError as e:
         raise RuntimeError(
@@ -652,34 +670,13 @@ def _read_csv(
             f"Cannot read CSV '{path.name}': {e}"
         )
 
-    scripts:      list[dict] = []
-    auto_counter: int        = 1
-
-    for row in rows:
-        if not _row_has_data(row):
-            continue
-
-        record = _row_to_dict(row, col_map)
-
-        if (
-            not record.get("number") or
-            _normalize(record["number"]) in _INVALID_NUMBERS
-        ):
-            record["number"] = str(auto_counter)
-
-        auto_counter += 1
-
-        record["lang"]         = file_lang
-        record["content_mode"] = content_mode
-
-        lang_content = record.get(f"{file_lang}_content", "").strip()
-        generic      = record.get("content", "").strip()
-        record["content"] = lang_content or generic
-
-        if _is_valid_record(record):
-            scripts.append(record)
-
-    return scripts
+    # Use shared _process_rows (no code duplication)
+    return _process_rows(
+        all_rows, col_map,
+        skip_first   = True,
+        file_lang    = file_lang,
+        content_mode = content_mode,
+    )
 
 
 def read_scripts(file_path: str) -> list[dict]:
@@ -707,7 +704,7 @@ def read_scripts(file_path: str) -> list[dict]:
     if not path.is_file():
         raise FileNotFoundError(f"Not a file: {path}")
 
-    # ✅ اكتشاف lang و content_mode من اسم الملف
+    # اكتشاف lang و content_mode من اسم الملف
     file_lang, content_mode = _detect_file_meta(path)
 
     ext = path.suffix.lower()
@@ -723,9 +720,9 @@ def read_scripts(file_path: str) -> list[dict]:
         )
 
     log.info(
-        f"  ✅ {len(scripts)} records loaded from "
-        f"'{path.name}' "
-        f"[{file_lang.upper()}/{content_mode.upper()}]"
+        "  ✅ %d records loaded from '%s' [%s/%s]",
+        len(scripts), path.name,
+        file_lang.upper(), content_mode.upper()
     )
     return scripts
 
@@ -744,14 +741,29 @@ def _check_tags_in_content(record: dict) -> list[str]:
     warnings: list[str] = []
     num  = record.get("number", "?")
     lang = record.get("lang", "ar")
+    mode = record.get("content_mode", "short").upper()
 
     content = record.get("content", "").strip()
     if content and _count_tags(content) == 0:
         warnings.append(
-            f"  ⚠️  #{num} ({lang.upper()}): "
+            f"  ⚠️  #{num} ({lang.upper()}) [{mode}]: "
             f"no [tags] found — AI will add them"
         )
     return warnings
+
+
+def _unique_num(num: str, seen: set[str]) -> str:
+    """
+    ضمان رقم فريد (لا تصادم).
+
+    Tries: num_1, num_2, ... until unique.
+    """
+    candidate = num
+    suffix    = 1
+    while candidate in seen:
+        candidate = f"{num}_{suffix}"
+        suffix   += 1
+    return candidate
 
 
 def validate_scripts(
@@ -780,10 +792,10 @@ def validate_scripts(
             )
             continue
 
-        # ✅ تحقق من الأرقام المكررة
+        # تحقق من الأرقام المكررة
         num = str(script.get("number", "")).strip()
         if num in seen_nums:
-            new_num = f"{num}_{len(seen_nums)}"
+            new_num = _unique_num(num, seen_nums)
             errors.append(
                 f"  ⚠️  #{num} duplicate number "
                 f"— renamed to #{new_num}"
@@ -805,6 +817,7 @@ def validate_scripts(
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _get_preview_text(record: dict) -> str:
+    """جلب نص المعاينة."""
     for key in ("content",) + ALL_CONTENT_KEYS:
         content = record.get(key, "")
         if content:
@@ -813,6 +826,7 @@ def _get_preview_text(record: dict) -> str:
 
 
 def _build_language_flags(record: dict) -> list[str]:
+    """بناء أعلام اللغة."""
     flags = []
     lang  = record.get("lang", "ar")
 
@@ -828,27 +842,28 @@ def _build_language_flags(record: dict) -> list[str]:
 
 
 def _print_script_entry(record: dict) -> None:
+    """طباعة معلومات سكريبت واحد."""
     num     = record.get("number", "?")
     title   = str(record.get("title", ""))[:TITLE_MAX_LENGTH]
     preview = _get_preview_text(record)
     flags   = _build_language_flags(record)
 
-    print(f"  #{num:>3}  {title}")
+    log.info("  #%s  %s", str(num).rjust(3), title)
     if preview:
-        print(f"       {preview}...")
+        log.info("       %s...", preview)
     if flags:
-        print(f"       {' | '.join(flags)}")
+        log.info("       %s", ' | '.join(flags))
 
 
 def print_scripts_summary(scripts: list[dict]) -> None:
     """طباعة ملخص السكريبتات المحملة."""
     sep = "═" * SUMMARY_WIDTH
 
-    print(f"\n{sep}")
-    print(f"  📋  {len(scripts)} scripts loaded")
-    print(sep)
+    log.info("\n%s", sep)
+    log.info("  📋  %d scripts loaded", len(scripts))
+    log.info("%s", sep)
 
     for script in scripts:
         _print_script_entry(script)
 
-    print(sep + "\n")
+    log.info("%s\n", sep)
