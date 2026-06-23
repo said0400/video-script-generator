@@ -1,12 +1,15 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# 🚫 .gitignore — Video Script Generator
+# 🚫 .gitignore — Video Script Generator v2.0
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # Updated for:
 #   ✅ stable-ts (replaced WhisperX)
 #   ✅ Long videos support
 #   ✅ Multi-format scripts
-#   ✅ Notifications log
+#   ✅ Gemini thumbnails (Nano Banana)
+#   ✅ OpenCV inpainting
+#   ✅ WhisperX cache files
+#   ✅ New SFX directories
 #
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -81,6 +84,8 @@ virtualenv/
 # ║                       🗄️ Databases                                          ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
+# Database files (never commit — contains sensitive data!)
+# vsg.db is excluded by *.db rule
 *.db
 *.sqlite
 *.sqlite3
@@ -99,12 +104,12 @@ virtualenv/
 *.aac
 *.m4a
 *.flac
+*.opus
 *.mp4
 *.mov
 *.webm
 *.mkv
 *.avi
-*.opus
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -128,14 +133,13 @@ virtualenv/
 
 output/
 output_*/
-output_long/
 reports/
 
 # Temp directories
-/tmp/vsg_*/
 tmp/
 temp/
 .tmp/
+vsg_tmp_*/
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -157,9 +161,12 @@ pnpm-debug.log*
 # ║                       📄 Manifests & Reports (temporary)                   ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
+# Temporary manifests (generated during video production)
 *_manifest.json
 *_thumbnail.html
+*thumbnail*.html
 *_words.srt
+*_whisperx_cache.json
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -174,7 +181,7 @@ pnpm-debug.log*
 .Trashes
 .AppleDouble
 .LSOverride
-Icon
+Icon?
 .AppleDB
 .AppleDesktop
 Network Trash Folder
@@ -202,8 +209,12 @@ $RECYCLE.BIN/
 # ║                       🛠️ IDEs & Editors                                     ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
-# VS Code
-.vscode/
+# VS Code (keep useful settings for team)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+.vscode/*.code-snippets
 *.code-workspace
 
 # JetBrains (PyCharm, IntelliJ, etc.)
@@ -237,14 +248,9 @@ $RECYCLE.BIN/
 
 *.log
 logs/
-notifications.log
 
 # Model caches (downloaded by stable-ts, transformers, etc.)
 .cache/
-~/.cache/
-.stable-ts/
-.transformers/
-.huggingface/
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
@@ -254,13 +260,14 @@ notifications.log
 # Playwright
 playwright-report/
 test-results/
+playwright/.cache/
 
 
 # ╔════════════════════════════════════════════════════════════════════════════╗
-# ║                       ✅ Exceptions — Keep These Files                     ║
+# ║                       ✅ EXCEPTIONS — Keep These Files                     ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 
-# Scripts (Excel files)
+# Scripts (Excel files for content)
 !scripts/videos_ar.xlsx
 !scripts/videos_fr.xlsx
 !scripts/videos_en.xlsx
@@ -268,16 +275,40 @@ test-results/
 !scripts/videos_fr_long.xlsx
 !scripts/videos_en_long.xlsx
 
-# Directory placeholders
+# Directory placeholders — Music
 !assets/music/.gitkeep
 !assets/music/motivation/.gitkeep
 !assets/music/cinematic/.gitkeep
+
+# Directory placeholders — Videos
 !assets/videos/.gitkeep
+
+# Directory placeholders — SFX (original)
 !sfx/swoosh/.gitkeep
 !sfx/whoosh/.gitkeep
 !sfx/smart/.gitkeep
 !sfx/transitions/.gitkeep
 
+# Directory placeholders — SFX (new)
+!sfx/opening/.gitkeep
+!sfx/big_transitions/.gitkeep
+!sfx/small_transitions/.gitkeep
+!sfx/particles/.gitkeep
+!sfx/tv_static/.gitkeep
+
+# Static assets (logos, icons, etc.)
+!assets/*.png
+!assets/*.jpg
+!assets/*.svg
+
+# Remotion public assets
+!remotion/public/*.png
+!remotion/public/*.jpg
+!remotion/public/*.svg
+!remotion/public/*.ico
+!remotion/public/manifest.json
+
 # Lock files for reproducible builds
 !remotion/package-lock.json
 !remotion/yarn.lock
+!package-lock.json
