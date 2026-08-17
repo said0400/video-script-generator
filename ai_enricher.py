@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 # CONFIG
 # ═══════════════════════════════════════════════════
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "openai/gpt-oss-120b"
 
 MAX_RETRIES_PER_KEY  = 3
 RATE_LIMIT_WAIT      = 3.0
