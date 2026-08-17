@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 # CONFIG
 # ═══════════════════════════════════════════════════
 
-MODEL = "llama-3.1-8b-instant"
+MODEL = "llama-3.3-70b-versatile"
 
 MAX_RETRIES_PER_KEY  = 3
 RATE_LIMIT_WAIT      = 3.0
