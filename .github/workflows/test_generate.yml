@@ -236,7 +236,8 @@ jobs:
           print(f'✅ stable-ts     : {stable_whisper.__version__}')
           print(f'✅ librosa       : {librosa.__version__}')
           print(f'✅ numpy         : {np.__version__}')
-          print(f'✅ playwright    : {playwright.__version__}')
+          print(f'✅ playwright    : {version("playwright")}')
+
           "
 
       - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
