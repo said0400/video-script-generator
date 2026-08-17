@@ -42,7 +42,6 @@ env:
   NODE_VERSION:   "20"
   TORCH_VERSION:  "2.5.1"
   FW_VERSION:     "1.1.0"
-  # ✅ v3.2 — توحيد إصدار Playwright
   PLAYWRIGHT_VERSION: "1.50.0"
 
 jobs:
@@ -152,7 +151,6 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      # ✅ v3.2 — إضافة libgomp1 المطلوب لـ stable-ts
       - name: 🔧 Install system dependencies
         run: |
           sudo apt-get update -q
@@ -185,7 +183,6 @@ jobs:
             whisper-v3-${{ runner.os }}-torch${{ env.TORCH_VERSION }}-
             whisper-v3-${{ runner.os }}-
 
-      # ✅ v3.2 — Cache Playwright browsers (Python + Node.js)
       - name: 💾 Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -222,6 +219,7 @@ jobs:
             "setuptools|faster-whisper|torch|stable-ts|playwright" \
             || true
 
+      # ✅ إصلاح: from importlib.metadata import version
       - name: ✅ Verify key packages
         run: |
           python -c "
@@ -230,14 +228,13 @@ jobs:
           import stable_whisper
           import librosa
           import numpy as np
-          import playwright
+          from importlib.metadata import version
           print(f'✅ PyTorch       : {torch.__version__}')
           print(f'✅ faster-whisper: {faster_whisper.__version__}')
           print(f'✅ stable-ts     : {stable_whisper.__version__}')
           print(f'✅ librosa       : {librosa.__version__}')
           print(f'✅ numpy         : {np.__version__}')
-          print(f'✅ playwright    : {version("playwright")}')
-
+          print(f'✅ playwright    : {version(\"playwright\")}')
           "
 
       - name: 🟢 Setup Node.js ${{ env.NODE_VERSION }}
@@ -257,7 +254,6 @@ jobs:
           echo "📋 Playwright version (Node):"
           npx playwright --version 2>/dev/null || echo "  (not found)"
 
-      # ✅ v3.2 — تثبيت Chromium لكلا البيئتين
       - name: 🌐 Install Playwright Chromium (Python + Node.js)
         run: |
           echo "🐍 Installing for Python Playwright..."
