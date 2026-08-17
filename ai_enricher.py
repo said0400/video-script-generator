@@ -1,10 +1,11 @@
 """
-🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.2
+🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.3
 
-Changes from v7.1:
-  ✅ 1. _clean_json() — إصلاح علامات الاقتباس الزائدة ""text"
-  ✅ 2. _parse_json_response() — محاولة إضافية بعد fix_quotes
-  ✅ 3. enrich_record() — time.sleep(1.0) بين العمليات لتقليل Rate Limiting
+Changes from v7.2:
+  ✅ 1. _fix_unquoted_array_values() — إصلاح array items بدون quotes
+  ✅ 2. _parse_json_response() — محاولة جديدة بعد unquoted fix
+  ✅ 3. generate_engagement_questions() — prompt أصرم مع مثال
+  ✅ 4. generate_pattern_interrupts() — prompt أصرم مع مثال
 """
 
 from __future__ import annotations
@@ -28,9 +29,9 @@ from tags_parser import (
 
 log = logging.getLogger(__name__)
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # CONFIG
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 MODEL = "llama-3.1-8b-instant"
 
@@ -59,7 +60,6 @@ BATCH_SIZE_KEYWORDS = 20
 BATCH_SLEEP         = 2.0
 ANALYSIS_CACHE_SIZE = 50
 
-# ✅ استراحة بين العمليات لتقليل Rate Limiting
 INTER_OPERATION_SLEEP = 1.0
 
 DEFAULT_EMOJI_LEFT   = "🔥"
@@ -76,9 +76,9 @@ _VALID_LANGS = frozenset({"ar", "fr", "en"})
 _VALID_MODES = frozenset({"short", "long"})
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # LANGUAGE MAPS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 LANG_NAMES: dict[str, str] = {
     "ar": "Arabic",
@@ -87,9 +87,9 @@ LANG_NAMES: dict[str, str] = {
 }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # TAG VISUAL STYLES
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 TAG_VISUAL_STYLE: dict[str, str] = {
     "intrigue":     "person whispering secret curious close up face",
@@ -114,9 +114,9 @@ TAG_VISUAL_STYLE: dict[str, str] = {
 }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # ABSTRACT WORDS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 ABSTRACT_WORDS: frozenset[str] = frozenset({
     "mystery", "mysterious", "journey", "soul", "shadows",
@@ -130,9 +130,9 @@ ABSTRACT_WORDS: frozenset[str] = frozenset({
 })
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # VISUAL KEYWORDS EXAMPLES
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 VISUAL_KEYWORDS_EXAMPLES: dict[str, list[str]] = {
     "psychology": [
@@ -200,9 +200,9 @@ def _get_topic_examples(content_type: str) -> list[str]:
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # STREET STYLES
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 STREET_STYLE: dict[str, dict] = {
     "ar": {
@@ -242,9 +242,9 @@ STREET_STYLE: dict[str, dict] = {
 }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # DEFAULTS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 DEFAULT_ACCENT_COLORS: list[str] = [
     "#FF003C", "#FFD700", "#00FFFF", "#39FF14",
@@ -262,17 +262,17 @@ _STREET_FALLBACK: dict[str, str] = {
 }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # EXCEPTIONS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 class AIEnrichmentError(Exception):
     pass
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # VALIDATION
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _validate_lang(lang: str) -> None:
     if lang not in _VALID_LANGS:
@@ -284,9 +284,9 @@ def _validate_mode(mode: str) -> None:
         raise ValueError(f"Invalid content_mode '{mode}'")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # THREAD-SAFE GROQ KEY ROTATION + CLIENT CACHING
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 _groq_keys:   list[str]       = []
 _groq_index:  int             = 0
@@ -305,11 +305,15 @@ def _load_groq_keys() -> list[str]:
         seen.add(main)
 
     for i in range(1, MAX_KEYS_SCAN + 1):
-        k1 = os.environ.get(f"GROQ_API_KEY{i}", "").strip()
+        k1 = os.environ.get(
+            f"GROQ_API_KEY{i}", ""
+        ).strip()
         if k1 and k1 not in seen:
             keys.append(k1)
             seen.add(k1)
-        k2 = os.environ.get(f"GROQ_API_KEY_{i}", "").strip()
+        k2 = os.environ.get(
+            f"GROQ_API_KEY_{i}", ""
+        ).strip()
         if k2 and k2 not in seen:
             keys.append(k2)
             seen.add(k2)
@@ -330,14 +334,16 @@ def _ensure_keys_loaded() -> None:
         _keys_loaded = True
         if _groq_keys:
             log.info(
-                f"  🔑 Loaded {len(_groq_keys)} Groq API keys"
+                "  🔑 Loaded %d Groq API keys",
+                len(_groq_keys)
             )
         else:
-            log.warning("  ⚠️  No Groq API keys found")
+            log.warning(
+                "  ⚠️  No Groq API keys found"
+            )
 
 
 def _get_client(key: str) -> Groq:
-    """✅ Thread-safe client caching."""
     with _groq_lock:
         if key not in _clients:
             _clients[key] = Groq(
@@ -353,48 +359,140 @@ def _rotate_groq_key() -> None:
         n = len(_groq_keys)
         if n <= 1:
             log.warning(
-                "  ⚠️  No additional Groq keys to rotate"
+                "  ⚠️  No additional Groq keys"
             )
             return
         _groq_index = (_groq_index + 1) % n
         new_idx     = _groq_index
-    log.info(f"  🔄 Groq key rotated → #{new_idx + 1}/{n}")
+    log.info(
+        "  🔄 Groq key rotated → #%d/%d",
+        new_idx + 1, n
+    )
 
 
 def _is_rate_limit_error(error: str) -> bool:
     err_lower = error.lower()
     return any(
-        ind in err_lower for ind in RATE_LIMIT_KEYWORDS
+        ind in err_lower
+        for ind in RATE_LIMIT_KEYWORDS
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ✅ JSON PARSER — مع إصلاح علامات الاقتباس الزائدة
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
+# ✅ v7.3 — JSON FIXERS
+# ═══════════════════════════════════════════════════
 
 def _fix_quotes(text: str) -> str:
-    """
-    ✅ إصلاح علامات الاقتباس الزائدة داخل JSON strings.
-
-    مثال على المشكلة (نص فرنسي):
-      ""La réponse est" → "La réponse est"
-
-    هذا يحدث عندما يضع الـ LLM علامة اقتباس
-    إضافية في بداية قيمة string.
-    """
-    # Pattern: "" في بداية قيمة → استبدل بـ "
+    """إصلاح علامات الاقتباس الزائدة."""
     text = re.sub(r'""([^"\n]+)"', r'"\1"', text)
-    # Pattern: قيمة تنتهي بـ "" أيضاً
     text = re.sub(r'"([^"\n]+)""', r'"\1"', text)
     return text
 
 
+# ✅ NEW in v7.3
+_UNQUOTED_ARRAY_RE = re.compile(
+    r'\[\s*((?:[^"\[\]{}]|"[^"]*")'
+    r'(?:\s*,\s*(?:[^"\[\]{}]|"[^"]*"))*)\s*\]',
+    re.DOTALL,
+)
+
+
+def _fix_unquoted_array_values(text: str) -> str:
+    """
+    ✅ v7.3 — إصلاح array items بدون quotes.
+
+    يعالج:
+    1. ["item1", item2, item3]  → كل بدون quotes
+    2. ["item1", item2, "item3"]  → مختلطة
+    3. [item1\nitem2\nitem3]  → بدون فواصل
+
+    Examples:
+        ["ok", without quotes, also ok]
+        → ["ok", "without quotes", "also ok"]
+    """
+    def _fix_array_content(match: re.Match) -> str:
+        raw = match.group(0)
+        # استخراج المحتوى بين [ و ]
+        inner = raw[1:-1].strip()
+
+        if not inner:
+            return raw
+
+        # أولاً: إضافة فواصل مفقودة بين السطور
+        # pattern: نهاية سطر + بداية سطر جديد بدون فاصلة
+        inner = re.sub(
+            r'("|\w|[^\s,\[\]{}])(\s*\n\s*)(?=[^\s,\[\]{}])',
+            r'\1,\n    ',
+            inner,
+        )
+
+        # تقسيم على الفواصل مع الحفاظ على quoted strings
+        # استخدام regex للتقسيم الذكي
+        parts: list[str] = []
+        current          = ""
+        in_quote         = False
+        i                = 0
+
+        while i < len(inner):
+            ch = inner[i]
+            if ch == '"' and not in_quote:
+                in_quote = True
+                current += ch
+            elif ch == '"' and in_quote:
+                in_quote = False
+                current += ch
+            elif ch == ',' and not in_quote:
+                parts.append(current.strip())
+                current = ""
+            else:
+                current += ch
+            i += 1
+
+        if current.strip():
+            parts.append(current.strip())
+
+        # معالجة كل item
+        fixed_parts: list[str] = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+
+            # إذا كان بـ quotes صحيحة → اتركه
+            if (
+                part.startswith('"') and
+                part.endswith('"') and
+                len(part) >= 2
+            ):
+                fixed_parts.append(part)
+                continue
+
+            # إزالة quotes جزئية
+            if part.startswith('"'):
+                part = part[1:]
+            if part.endswith('"'):
+                part = part[:-1]
+
+            # escape أي quotes داخلية
+            part = part.replace('\\', '\\\\')
+            part = part.replace('"', '\\"')
+            part = part.strip()
+
+            if part:
+                fixed_parts.append(f'"{part}"')
+
+        if not fixed_parts:
+            return raw
+
+        return "[" + ", ".join(fixed_parts) + "]"
+
+    return _UNQUOTED_ARRAY_RE.sub(
+        _fix_array_content, text
+    )
+
+
 def _clean_json(raw: str) -> str:
-    """
-    تنظيف واستخراج أول JSON كامل.
-    ✅ escape sequences + Balanced Brackets.
-    ✅ إصلاح علامات الاقتباس الزائدة.
-    """
+    """تنظيف واستخراج أول JSON كامل."""
     if not raw:
         return ""
 
@@ -403,7 +501,7 @@ def _clean_json(raw: str) -> str:
     text = re.sub(r"\n?\s*```\s*$",            "", text)
     text = text.strip()
 
-    # ✅ إصلاح علامات الاقتباس الزائدة قبل التحليل
+    # ✅ إصلاح قبل التحليل
     text = _fix_quotes(text)
 
     start_obj = text.find("{")
@@ -413,14 +511,22 @@ def _clean_json(raw: str) -> str:
         return text
 
     if start_obj == -1:
-        start, open_char, close_char = start_arr, "[", "]"
+        start, open_char, close_char = (
+            start_arr, "[", "]"
+        )
     elif start_arr == -1:
-        start, open_char, close_char = start_obj, "{", "}"
+        start, open_char, close_char = (
+            start_obj, "{", "}"
+        )
     else:
         if start_obj < start_arr:
-            start, open_char, close_char = start_obj, "{", "}"
+            start, open_char, close_char = (
+                start_obj, "{", "}"
+            )
         else:
-            start, open_char, close_char = start_arr, "[", "]"
+            start, open_char, close_char = (
+                start_arr, "[", "]"
+            )
 
     depth     = 0
     in_string = False
@@ -429,7 +535,11 @@ def _clean_json(raw: str) -> str:
     while i < len(text):
         char = text[i]
 
-        if in_string and char == "\\" and i + 1 < len(text):
+        if (
+            in_string and
+            char == "\\" and
+            i + 1 < len(text)
+        ):
             i += 2
             continue
 
@@ -453,18 +563,17 @@ def _parse_json_response(
     operation:     str,
 ) -> Any:
     """
-    Parse JSON مع محاولات متعددة.
-    ✅ محاولة إضافية بعد _fix_quotes.
-    ✅ MAX_SEARCH_ATTEMPTS لمنع loop لا ينتهي.
+    ✅ v7.3 — Parse JSON مع 5 محاولات.
+
+    محاولة جديدة: _fix_unquoted_array_values
     """
     if not raw or not raw.strip():
         raise AIEnrichmentError(
             f"❌ {operation}: empty response"
         )
 
-    # Attempt 1: مباشر (يشمل _fix_quotes داخل _clean_json)
-    try:
-        cleaned = _clean_json(raw)
+    def _try_parse(text: str) -> Any:
+        cleaned = _clean_json(text)
         data    = json.loads(cleaned)
         if isinstance(data, expected_type):
             return data
@@ -472,25 +581,42 @@ def _parse_json_response(
             f"Expected {expected_type.__name__}, "
             f"got {type(data).__name__}"
         )
+
+    # Attempt 1: مباشر
+    try:
+        return _try_parse(raw)
     except json.JSONDecodeError:
         pass
     except ValueError as e:
-        raise AIEnrichmentError(f"❌ {operation}: {e}")
+        raise AIEnrichmentError(
+            f"❌ {operation}: {e}"
+        )
 
-    # Attempt 2: تطبيق _fix_quotes على النص الخام أولاً
+    # Attempt 2: بعد _fix_quotes
     try:
-        fixed   = _fix_quotes(raw)
-        cleaned = _clean_json(fixed)
-        data    = json.loads(cleaned)
-        if isinstance(data, expected_type):
-            log.debug(
-                f"  ✓ {operation}: parsed after quote fix"
-            )
-            return data
+        result = _try_parse(_fix_quotes(raw))
+        log.debug(
+            "  ✓ %s: parsed after quote fix",
+            operation
+        )
+        return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 3: إزالة backticks
+    # ✅ Attempt 3 NEW: بعد _fix_unquoted_array_values
+    try:
+        fixed  = _fix_unquoted_array_values(raw)
+        fixed  = _fix_quotes(fixed)
+        result = _try_parse(fixed)
+        log.debug(
+            "  ✓ %s: parsed after unquoted fix",
+            operation
+        )
+        return result
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Attempt 4: إزالة backticks + كل الـ fixes
     try:
         no_ticks = (
             raw
@@ -499,18 +625,18 @@ def _parse_json_response(
             .replace("```",     "")
             .strip()
         )
+        no_ticks = _fix_unquoted_array_values(no_ticks)
         no_ticks = _fix_quotes(no_ticks)
-        cleaned  = _clean_json(no_ticks)
-        data     = json.loads(cleaned)
-        if isinstance(data, expected_type):
-            log.debug(
-                f"  ✓ {operation}: parsed after backtick"
-            )
-            return data
+        result   = _try_parse(no_ticks)
+        log.debug(
+            "  ✓ %s: parsed after backtick+fix",
+            operation
+        )
+        return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 4: بحث في كل positions مع حد
+    # Attempt 5: بحث في positions + كل الـ fixes
     try:
         open_chars = (
             ["[", "{"] if expected_type == list
@@ -523,19 +649,23 @@ def _parse_json_response(
                 idx = raw.find(open_char, idx)
                 if idx == -1:
                     break
-                # ✅ تطبيق _fix_quotes على كل candidate
-                candidate = _clean_json(
-                    _fix_quotes(raw[idx:])
-                )
                 try:
-                    data = json.loads(candidate)
+                    candidate = raw[idx:]
+                    candidate = _fix_unquoted_array_values(
+                        candidate
+                    )
+                    candidate = _fix_quotes(candidate)
+                    candidate = _clean_json(candidate)
+                    data      = json.loads(candidate)
                     if isinstance(data, expected_type):
                         log.debug(
-                            f"  ✓ {operation}: "
-                            f"parsed via search at {idx}"
+                            "  ✓ %s: search at %d",
+                            operation, idx
                         )
                         return data
-                except json.JSONDecodeError:
+                except (
+                    json.JSONDecodeError, ValueError
+                ):
                     pass
                 idx      += 1
                 attempts += 1
@@ -548,9 +678,9 @@ def _parse_json_response(
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # SAFE HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _safe_truncate(text: str, max_chars: int) -> str:
     if not text:
@@ -601,16 +731,15 @@ def _filter_abstract_keywords(
     return result
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # CONTENT CACHE
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 _analysis_cache:      dict[str, dict] = {}
 _analysis_cache_lock: threading.RLock = threading.RLock()
 
 
 def _make_cache_key(text: str, lang: str) -> str:
-    """✅ SHA256 + نص كامل — لا تصادم."""
     content = f"{lang}:{text}"
     return hashlib.sha256(
         content.encode("utf-8")
@@ -641,9 +770,9 @@ def _set_cached_analysis(
         _analysis_cache[key] = analysis
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # CORE GROQ CALLER
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _call_groq(
     prompt:         str,
@@ -651,11 +780,6 @@ def _call_groq(
     temperature:    float = 0.7,
     operation_name: str   = "AI call",
 ) -> str:
-    """
-    ✅ جميع قراءات _groq_keys داخل lock.
-    ✅ Exponential backoff بحد أقصى RATE_LIMIT_WAIT_MAX.
-    ✅ choices check قبل الوصول.
-    """
     _ensure_keys_loaded()
 
     if not _groq_keys:
@@ -680,15 +804,19 @@ def _call_groq(
 
         try:
             log.info(
-                f"  🤖 {operation_name} "
-                f"[key#{cur_idx + 1}/{n_keys} "
-                f"attempt {attempt + 1}/{total_attempts}]..."
+                "  🤖 %s [key#%d/%d attempt %d/%d]...",
+                operation_name,
+                cur_idx + 1, n_keys,
+                attempt + 1, total_attempts,
             )
 
             resp = client.chat.completions.create(
                 model       = MODEL,
                 messages    = [
-                    {"role": "user", "content": prompt}
+                    {
+                        "role":    "user",
+                        "content": prompt,
+                    }
                 ],
                 temperature = temperature,
                 max_tokens  = max_tokens,
@@ -699,7 +827,9 @@ def _call_groq(
                     "Groq returned empty choices list"
                 )
 
-            content = resp.choices[0].message.content or ""
+            content = (
+                resp.choices[0].message.content or ""
+            )
             if not content.strip():
                 raise ValueError(
                     "Empty response content from Groq"
@@ -717,15 +847,16 @@ def _call_groq(
                     RATE_LIMIT_WAIT_MAX,
                 )
                 log.warning(
-                    f"  🛑 Rate limit [key#{cur_idx + 1}] "
-                    f"— waiting {wait:.1f}s..."
+                    "  🛑 Rate limit [key#%d] "
+                    "— waiting %.1fs...",
+                    cur_idx + 1, wait,
                 )
                 _rotate_groq_key()
                 time.sleep(wait)
             elif attempt < total_attempts - 1:
                 log.warning(
-                    f"  ⚠️  Error: {err_str[:80]} "
-                    f"— rotating key..."
+                    "  ⚠️  Error: %s — rotating key...",
+                    err_str[:80],
                 )
                 _rotate_groq_key()
                 time.sleep(2)
@@ -738,9 +869,9 @@ def _call_groq(
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # DATA EXTRACTION HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _extract_string_list(
     data:      Any,
@@ -763,7 +894,6 @@ def _extract_lang_value(
     operation: str,
     min_count: int = 3,
 ) -> list[str]:
-    # Priority 1: اللغة المطلوبة
     if lang in data:
         result = _extract_string_list(
             data[lang], min_count
@@ -771,7 +901,6 @@ def _extract_lang_value(
         if result:
             return result
 
-    # Priority 2: aliases
     lang_aliases: dict[str, list[str]] = {
         "ar": ["arabic", "arab", "ar_content"],
         "fr": ["french", "français", "fr_content"],
@@ -784,33 +913,34 @@ def _extract_lang_value(
             )
             if result:
                 log.warning(
-                    f"  ⚠️  {operation}: "
-                    f"using alias '{alias}'"
+                    "  ⚠️  %s: using alias '%s'",
+                    operation, alias,
                 )
                 return result
 
-    # Priority 3: English fallback
     if "en" in data and lang != "en":
         result = _extract_string_list(
             data["en"], min_count
         )
         if result:
             log.warning(
-                f"  ⚠️  {operation}: falling back to 'en'"
+                "  ⚠️  %s: falling back to 'en'",
+                operation,
             )
             return result
 
-    # Priority 4: أي قيمة
     for key, val in data.items():
         result = _extract_string_list(val, min_count)
         if result:
             log.warning(
-                f"  ⚠️  {operation}: last resort '{key}'"
+                "  ⚠️  %s: last resort '%s'",
+                operation, key,
             )
             return result
 
     raise AIEnrichmentError(
-        f"❌ {operation}: cannot find valid '{lang}' data.\n"
+        f"❌ {operation}: cannot find valid "
+        f"'{lang}' data.\n"
         f"   Keys found: {list(data.keys())}"
     )
 
@@ -830,7 +960,8 @@ def _extract_en_value(
         result = _extract_string_list(val, min_count)
         if result:
             log.warning(
-                f"  ⚠️  {operation} EN: using key '{key}'"
+                "  ⚠️  %s EN: using key '%s'",
+                operation, key,
             )
             return result
     raise AIEnrichmentError(
@@ -838,9 +969,9 @@ def _extract_en_value(
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 1️⃣ CONTENT ANALYSIS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 REQUIRED_ANALYSIS_FIELDS = (
     "content_type", "primary_emotion",
@@ -913,16 +1044,17 @@ def analyze_content(
     _set_cached_analysis(title, content, lang, data)
 
     log.info(
-        f"  ✅ Analysis: {data['content_type']} | "
-        f"{data['primary_emotion']} | "
-        f"intensity={data['intensity']}/10"
+        "  ✅ Analysis: %s | %s | intensity=%d/10",
+        data['content_type'],
+        data['primary_emotion'],
+        data['intensity'],
     )
     return data
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 2️⃣ TAG SUGGESTION
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _normalize_suggested_tag(tag: str) -> str:
     tag = str(tag).strip().lower()
@@ -952,7 +1084,8 @@ def _suggest_tags_batch(
     prompt = (
         f"Choose emotional tags for video narration "
         f"sentences.\n\n"
-        f"Context: {context.get('content_type')} content, "
+        f"Context: "
+        f"{context.get('content_type')} content, "
         f"{context.get('tone')} tone.\n"
         f"Language: {lang_name}\n\n"
         f"Available tags:\n{available_tags}\n\n"
@@ -973,7 +1106,9 @@ def _suggest_tags_batch(
             f"-{start_idx + len(batch)}]"
         ),
     )
-    tags = _parse_json_response(raw, list, "Tag Suggestion")
+    tags = _parse_json_response(
+        raw, list, "Tag Suggestion"
+    )
 
     cleaned = [
         _normalize_suggested_tag(t)
@@ -996,16 +1131,22 @@ def suggest_tags_for_sentences(
 
     n = len(sentences_needing_tags)
 
-    if content_mode == "short" or n <= BATCH_SIZE_TAGS:
+    if (
+        content_mode == "short" or
+        n <= BATCH_SIZE_TAGS
+    ):
         result = _suggest_tags_batch(
             sentences_needing_tags, context, lang, 0
         )
-        log.info(f"  ✅ Suggested {len(result)} tags")
+        log.info(
+            "  ✅ Suggested %d tags", len(result)
+        )
         return result
 
     log.info(
-        f"  📦 Tag Suggestion: "
-        f"{n} sentences → batches of {BATCH_SIZE_TAGS}"
+        "  📦 Tag Suggestion: "
+        "%d sentences → batches of %d",
+        n, BATCH_SIZE_TAGS,
     )
     all_tags: list[str] = []
 
@@ -1014,7 +1155,8 @@ def suggest_tags_for_sentences(
         batch = sentences_needing_tags[start:end]
 
         log.info(
-            f"  📦 Tag Batch [{start + 1}-{end}/{n}]..."
+            "  📦 Tag Batch [%d-%d/%d]...",
+            start + 1, end, n,
         )
         batch_tags = _suggest_tags_batch(
             batch, context, lang, start
@@ -1025,14 +1167,14 @@ def suggest_tags_for_sentences(
             time.sleep(BATCH_SLEEP)
 
     log.info(
-        f"  ✅ Suggested {len(all_tags)} tags total"
+        "  ✅ Suggested %d tags total", len(all_tags)
     )
     return all_tags
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 3️⃣ POWER WORDS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _filter_power_words(
     words: list,
@@ -1072,8 +1214,8 @@ def generate_power_words(
     )
 
     prompt = (
-        f"Extract {count} powerful single words from this "
-        f"{lang_name} text.\n\n"
+        f"Extract {count} powerful single words "
+        f"from this {lang_name} text.\n\n"
         f"Content type: "
         f"{context.get('content_type', 'general')}\n"
         f"Primary emotion: "
@@ -1093,26 +1235,30 @@ def generate_power_words(
         prompt,
         max_tokens     = 300,
         temperature    = 0.6,
-        operation_name = f"Power Words ({lang.upper()})",
+        operation_name = (
+            f"Power Words ({lang.upper()})"
+        ),
     )
-    words  = _parse_json_response(raw, list, "Power Words")
+    words  = _parse_json_response(
+        raw, list, "Power Words"
+    )
     result = _filter_power_words(words, count)
 
     if len(result) < 3:
         raise AIEnrichmentError(
-            f"❌ Power Words: only {len(result)} valid words"
+            f"❌ Power Words: only {len(result)} valid"
         )
 
     log.info(
-        f"  ✅ Power Words ({lang.upper()}): "
-        f"{len(result)} words"
+        "  ✅ Power Words (%s): %d words",
+        lang.upper(), len(result),
     )
     return result
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 4️⃣ VISUAL KEYWORDS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _generate_visual_keywords_batch(
     sentences: list[str],
@@ -1123,7 +1269,9 @@ def _generate_visual_keywords_batch(
 ) -> list[list[str]]:
     n            = len(sentences)
     content_type = context.get("content_type", "general")
-    emotion      = context.get("primary_emotion", "neutral")
+    emotion      = context.get(
+        "primary_emotion", "neutral"
+    )
     safe_title   = _safe_title(title, TITLE_SHORT_CHARS)
 
     tokens_per_sentence = 40
@@ -1142,7 +1290,8 @@ def _generate_visual_keywords_batch(
     sentences_text = ""
     for i, sentence in enumerate(sentences):
         tag         = (
-            tags[i] if i < len(tags) else "information"
+            tags[i] if i < len(tags)
+            else "information"
         )
         visual_hint = TAG_VISUAL_STYLE.get(
             tag, DEFAULT_VISUAL_STYLE
@@ -1167,7 +1316,7 @@ def _generate_visual_keywords_batch(
         f"Emotion: {emotion}\n\n"
         f"=== CRITICAL RULES ===\n"
         f"1. Keywords must work as REAL search queries\n"
-        f"2. ALWAYS include: person/people OR face OR hands\n"
+        f"2. ALWAYS include: person/people/face/hands\n"
         f"3. Include a clear ACTION or EMOTION word\n"
         f"4. 3-5 words per keyword\n"
         f"5. English only\n"
@@ -1212,9 +1361,15 @@ def _generate_visual_keywords_batch(
         result: list[list[str]] = []
 
         for i in range(n):
-            tag = tags[i] if i < len(tags) else "information"
+            tag = (
+                tags[i] if i < len(tags)
+                else "information"
+            )
 
-            if i < len(data) and isinstance(data[i], list):
+            if (
+                i < len(data) and
+                isinstance(data[i], list)
+            ):
                 raw_kws = [
                     str(k).strip()
                     for k in data[i][:5]
@@ -1231,24 +1386,27 @@ def _generate_visual_keywords_batch(
                         )
             else:
                 log.debug(
-                    f"  ⚠️  Sentence {i + 1} using fallback."
+                    "  ⚠️  Sentence %d using fallback.",
+                    i + 1,
                 )
                 kws = list(fallbacks)
 
             result.append(kws[:3])
             log.info(
-                f"     [{i + 1}/{n}] [{tag}] → {kws[:3]}"
+                "     [%d/%d] [%s] → %s",
+                i + 1, n, tag, kws[:3],
             )
 
         return result
 
     except Exception as e:
         log.warning(
-            f"  ⚠️  Keywords batch {batch_num} failed: {e}"
+            "  ⚠️  Keywords batch %d failed: %s",
+            batch_num, e,
         )
         if raw:
             log.debug(
-                f"  Raw (first 500): {raw[:500]}"
+                "  Raw (first 500): %s", raw[:500]
             )
         return [list(fallbacks) for _ in range(n)]
 
@@ -1272,27 +1430,36 @@ def generate_visual_keywords(
         tags = ["information"] * n
     elif len(tags) != n:
         log.warning(
-            f"  ⚠️  tags length ({len(tags)}) != "
-            f"sentences length ({n}) — fixing"
+            "  ⚠️  tags length (%d) != sentences (%d)"
+            " — fixing",
+            len(tags), n,
         )
         if len(tags) < n:
-            tags = tags + ["information"] * (n - len(tags))
+            tags = (
+                tags +
+                ["information"] * (n - len(tags))
+            )
         else:
             tags = tags[:n]
 
     log.info(
-        f"  🎬 Generating B-Roll keywords: "
-        f"{n} sentences..."
+        "  🎬 Generating B-Roll keywords: %d sentences...",
+        n,
     )
 
-    if content_mode == "short" or n <= BATCH_SIZE_KEYWORDS:
+    if (
+        content_mode == "short" or
+        n <= BATCH_SIZE_KEYWORDS
+    ):
         return _generate_visual_keywords_batch(
-            sentences, title, context, tags, batch_num=1
+            sentences, title, context, tags,
+            batch_num=1,
         )
 
     log.info(
-        f"  📦 Long mode — batching {n} sentences "
-        f"(batches of {BATCH_SIZE_KEYWORDS})"
+        "  📦 Long mode — batching %d sentences "
+        "(batches of %d)",
+        n, BATCH_SIZE_KEYWORDS,
     )
     result:    list[list[str]] = []
     batch_num: int             = 0
@@ -1302,8 +1469,8 @@ def generate_visual_keywords(
         batch_num += 1
 
         log.info(
-            f"  📦 Keywords Batch "
-            f"[{start + 1}-{end}/{n}]..."
+            "  📦 Keywords Batch [%d-%d/%d]...",
+            start + 1, end, n,
         )
         batch_res = _generate_visual_keywords_batch(
             sentences[start:end],
@@ -1318,15 +1485,15 @@ def generate_visual_keywords(
             time.sleep(BATCH_SLEEP)
 
     log.info(
-        f"  ✅ Visual Keywords: "
-        f"{len(result)} sentences × 3"
+        "  ✅ Visual Keywords: %d sentences × 3",
+        len(result),
     )
     return result
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # BILINGUAL HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _get_bilingual_json_format(
     lang:    str,
@@ -1334,7 +1501,9 @@ def _get_bilingual_json_format(
 ) -> str:
     if lang == "en":
         return f'{{"en": {example}}}'
-    return f'{{"{lang}": {example}, "en": {example}}}'
+    return (
+        f'{{"{lang}": {example}, "en": {example}}}'
+    )
 
 
 def _get_lang_instruction(lang: str) -> str:
@@ -1359,7 +1528,9 @@ def _generate_bilingual_content(
         temperature    = temperature,
         operation_name = operation_name,
     )
-    data = _parse_json_response(raw, dict, operation_name)
+    data = _parse_json_response(
+        raw, dict, operation_name
+    )
 
     if lang == "en":
         en_values = _extract_en_value(
@@ -1371,8 +1542,8 @@ def _generate_bilingual_content(
                 f"❌ {operation_name}: not enough data"
             )
         log.info(
-            f"  ✅ {operation_name}: "
-            f"EN({len(result['en'])})"
+            "  ✅ %s: EN(%d)",
+            operation_name, len(result['en']),
         )
         return result
 
@@ -1387,19 +1558,24 @@ def _generate_bilingual_content(
         "en": en_values[:count],
     }
     if (
-        len(result[lang]) < min_count
-        or len(result["en"]) < min_count
+        len(result[lang]) < min_count or
+        len(result["en"]) < min_count
     ):
         raise AIEnrichmentError(
             f"❌ {operation_name}: not enough data"
         )
     log.info(
-        f"  ✅ {operation_name}: "
-        f"{lang.upper()}({len(result[lang])}) | "
-        f"EN({len(result['en'])})"
+        "  ✅ %s: %s(%d) | EN(%d)",
+        operation_name,
+        lang.upper(), len(result[lang]),
+        len(result['en']),
     )
     return result
 
+
+# ═══════════════════════════════════════════════════
+# ✅ v7.3 — STRICT PROMPT BUILDER
+# ═══════════════════════════════════════════════════
 
 def _build_list_prompt(
     operation:  str,
@@ -1409,31 +1585,52 @@ def _build_list_prompt(
     context:    dict,
     rules:      str,
     example:    str,
+    correct_ex: str = "",
+    wrong_ex:   str = "",
 ) -> str:
+    """
+    ✅ v7.3 — prompt أكثر صرامة مع CORRECT/WRONG examples.
+    """
     lang_instruction = _get_lang_instruction(lang)
     json_format      = _get_bilingual_json_format(
         lang, example
     )
-    content_type = context.get("content_type", "general")
-    emotion      = context.get("primary_emotion", "curiosity")
+    content_type = context.get(
+        "content_type", "general"
+    )
+    emotion      = context.get(
+        "primary_emotion", "curiosity"
+    )
 
-    return (
+    prompt = (
         f"Generate {count} {operation} "
         f"{lang_instruction}.\n\n"
         f'Title: "{safe_title}" | '
         f"Type: {content_type} | "
         f"Emotion: {emotion}\n\n"
-        f"Rules: {rules}\n\n"
-        f"IMPORTANT: Return ONLY valid JSON. "
-        f"Do NOT use double quotes inside string values.\n"
-        f"Return ONLY JSON (no markdown, no extra text):\n"
+        f"STRICT RULES:\n{rules}\n\n"
+    )
+
+    if correct_ex and wrong_ex:
+        prompt += (
+            f"CORRECT FORMAT:\n{correct_ex}\n\n"
+            f"WRONG FORMAT (DO NOT DO THIS):\n"
+            f"{wrong_ex}\n\n"
+        )
+
+    prompt += (
+        f"CRITICAL: Every string item MUST have "
+        f'double quotes. Example: "item"\n'
+        f"Return ONLY valid JSON (no markdown):\n"
         f"{json_format}"
     )
 
+    return prompt
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 5️⃣ PATTERN INTERRUPTS
-# ═════════════════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════
+# 5️⃣ PATTERN INTERRUPTS — v7.3 strict prompt
+# ═══════════════════════════════════════════════════
 
 def generate_pattern_interrupts(
     title:   str,
@@ -1443,32 +1640,44 @@ def generate_pattern_interrupts(
     count:   int = 6,
 ) -> dict[str, list[str]]:
     safe_title = _safe_title(title, TITLE_SHORT_CHARS)
-    prompt     = _build_list_prompt(
+
+    prompt = _build_list_prompt(
         operation  = "SHORT pattern interrupt phrases",
         count      = count,
         lang       = lang,
         safe_title = safe_title,
         context    = context,
         rules      = (
-            "1-4 words MAX, shocking, can include emojis. "
-            "Do NOT use double quotes inside phrases."
+            "1. 1-4 words MAX per phrase\n"
+            "2. Shocking and attention-grabbing\n"
+            "3. Each item MUST have double quotes\n"
+            "4. Emojis allowed INSIDE the quotes\n"
+            "5. NO missing commas between items"
         ),
-        example    = '["phrase1","phrase2",...]',
+        example    = (
+            '["phrase1 😮","phrase2","phrase3"]'
+        ),
+        correct_ex = (
+            '{"en": ["Wait...", "No way!", "Real talk"]}'
+        ),
+        wrong_ex   = (
+            '{"en": [Wait..., No way!, Real talk]}'
+        ),
     )
     return _generate_bilingual_content(
         operation_name = "Pattern Interrupts",
         prompt         = prompt,
         max_tokens     = 800,
-        temperature    = 0.8,
+        temperature    = 0.7,
         lang           = lang,
         count          = count,
         min_count      = 3,
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 6️⃣ ENGAGEMENT QUESTIONS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
+# 6️⃣ ENGAGEMENT QUESTIONS — v7.3 strict prompt
+# ═══════════════════════════════════════════════════
 
 def generate_engagement_questions(
     title:   str,
@@ -1478,32 +1687,50 @@ def generate_engagement_questions(
     count:   int = 6,
 ) -> dict[str, list[str]]:
     safe_title = _safe_title(title, TITLE_SHORT_CHARS)
-    prompt     = _build_list_prompt(
+
+    prompt = _build_list_prompt(
         operation  = "SHORT engagement questions",
         count      = count,
         lang       = lang,
         safe_title = safe_title,
         context    = context,
         rules      = (
-            "3-7 words, encourage comments, can use emojis. "
-            "Do NOT use double quotes inside questions."
+            "1. 3-7 words per question\n"
+            "2. Each item MUST have double quotes\n"
+            "3. Each item MUST end with comma "
+            "EXCEPT the last\n"
+            "4. Emojis allowed INSIDE the quotes\n"
+            "5. NO line breaks inside a string value\n"
+            "6. Questions encourage comments"
         ),
-        example    = '["question1","question2",...]',
+        example    = (
+            '["Question one? 🤔","Question two? 😮",'
+            '"Question three? 💭"]'
+        ),
+        correct_ex = (
+            '{"en": ["What do you think? 🤔", '
+            '"Have you felt this? 😮", '
+            '"Can you relate? 💭"]}'
+        ),
+        wrong_ex   = (
+            '{"en": [What do you think, '
+            'Have you felt this]}'
+        ),
     )
     return _generate_bilingual_content(
         operation_name = "Engagement Questions",
         prompt         = prompt,
         max_tokens     = 800,
-        temperature    = 0.8,
+        temperature    = 0.7,
         lang           = lang,
         count          = count,
         min_count      = 3,
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 7️⃣ HASHTAGS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _clean_hashtags(tags: list) -> list[str]:
     result: list[str] = []
@@ -1524,18 +1751,24 @@ def generate_hashtags(
     lang:    str = "ar",
     count:   int = 12,
 ) -> dict[str, list[str]]:
-    content_type     = context.get("content_type", "general")
-    safe_title       = _safe_title(title, TITLE_SHORT_CHARS)
+    content_type     = context.get(
+        "content_type", "general"
+    )
+    safe_title       = _safe_title(
+        title, TITLE_SHORT_CHARS
+    )
     lang_instruction = _get_lang_instruction(lang)
     json_format      = _get_bilingual_json_format(
         lang, '["#tag1","#tag2",...]'
     )
 
     prompt = (
-        f"Generate {count} hashtags {lang_instruction}.\n\n"
+        f"Generate {count} hashtags "
+        f"{lang_instruction}.\n\n"
         f'Title: "{safe_title}" | Type: {content_type}\n'
-        f"Rules: start with #, underscores for spaces.\n\n"
-        f"Return ONLY JSON (no markdown, no extra text):\n"
+        f"Rules: start with #, "
+        f"underscores for spaces.\n\n"
+        f"Return ONLY JSON (no markdown):\n"
         f"{json_format}"
     )
 
@@ -1559,7 +1792,8 @@ def generate_hashtags(
                 "❌ Hashtags: not enough EN tags"
             )
         log.info(
-            f"  ✅ Hashtags: EN({len(result['en'])})"
+            "  ✅ Hashtags: EN(%d)",
+            len(result['en']),
         )
         return result
 
@@ -1573,24 +1807,26 @@ def generate_hashtags(
         lang: _clean_hashtags(lang_values[:count]),
         "en": _clean_hashtags(en_values[:count]),
     }
-    if len(result[lang]) < 5 or len(result["en"]) < 5:
+    if (
+        len(result[lang]) < 5 or
+        len(result["en"]) < 5
+    ):
         raise AIEnrichmentError(
             "❌ Hashtags: not enough tags"
         )
     log.info(
-        f"  ✅ Hashtags: "
-        f"{lang.upper()}({len(result[lang])}) | "
-        f"EN({len(result['en'])})"
+        "  ✅ Hashtags: %s(%d) | EN(%d)",
+        lang.upper(), len(result[lang]),
+        len(result['en']),
     )
     return result
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 8️⃣ CAPTIONS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _extract_caption(data: dict, lang: str) -> str:
-    """✅ اللغة المطلوبة أولاً دائماً."""
     if (
         lang in data
         and isinstance(data[lang], str)
@@ -1605,8 +1841,9 @@ def _extract_caption(data: dict, lang: str) -> str:
         and data["en"].strip()
     ):
         log.warning(
-            f"  ⚠️  Caption: falling back to 'en' "
-            f"(requested '{lang}')"
+            "  ⚠️  Caption: falling back to 'en' "
+            "(requested '%s')",
+            lang,
         )
         return data["en"].strip()
 
@@ -1632,7 +1869,9 @@ def generate_captions(
     lang:     str = "ar",
 ) -> dict[str, str]:
     lang_name    = LANG_NAMES.get(lang, "Arabic")
-    safe_title   = _safe_title(title, TITLE_SHORT_CHARS)
+    safe_title   = _safe_title(
+        title, TITLE_SHORT_CHARS
+    )
     safe_content = _safe_truncate(
         content, CONTENT_CAPTION_CHARS
     )
@@ -1645,7 +1884,9 @@ def generate_captions(
             f'{{"{lang}": "caption text here", '
             f'"en": "caption text here"}}'
         )
-        lang_instruction = f"in {lang_name} AND English"
+        lang_instruction = (
+            f"in {lang_name} AND English"
+        )
 
     prompt = (
         f"Write a social media caption "
@@ -1659,7 +1900,7 @@ def generate_captions(
         f"- 2-3 lines of value\n"
         f"- Call-to-action + emojis\n"
         f"- NO hashtags in body\n\n"
-        f"Return ONLY JSON (no markdown, no extra text):\n"
+        f"Return ONLY JSON (no markdown):\n"
         f"{json_format}"
     )
 
@@ -1674,8 +1915,10 @@ def generate_captions(
     lang_caption = _extract_caption(data, lang)
     en_caption   = (
         data["en"].strip()
-        if "en" in data
-        and isinstance(data["en"], str)
+        if (
+            "en" in data and
+            isinstance(data["en"], str)
+        )
         else ""
     )
 
@@ -1694,7 +1937,8 @@ def generate_captions(
         )
         result  = {"en": caption[:CAPTION_MAX_LENGTH]}
         log.info(
-            f"  ✅ Captions: EN({len(result['en'])})"
+            "  ✅ Captions: EN(%d)",
+            len(result['en']),
         )
         return result
 
@@ -1713,16 +1957,16 @@ def generate_captions(
         "en": en_caption[:CAPTION_MAX_LENGTH],
     }
     log.info(
-        f"  ✅ Captions: "
-        f"{lang.upper()}({len(result[lang])}) | "
-        f"EN({len(result['en'])})"
+        "  ✅ Captions: %s(%d) | EN(%d)",
+        lang.upper(), len(result[lang]),
+        len(result['en']),
     )
     return result
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 9️⃣ STREET DESCRIPTION
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def generate_street_description(
     title:   str,
@@ -1733,7 +1977,9 @@ def generate_street_description(
     style        = STREET_STYLE.get(
         lang, STREET_STYLE["en"]
     )
-    content_type = context.get("content_type", "general")
+    content_type = context.get(
+        "content_type", "general"
+    )
     emotion      = context.get(
         "primary_emotion", "curiosity"
     )
@@ -1756,8 +2002,9 @@ def generate_street_description(
         f"3. Add a real example or story\n"
         f"4. Strong call-to-action\n"
         f"5. Use lots of emojis\n"
-        f"6. {style['hashtag_lang']}: add 20-25 hashtags "
-        f"at end separated by:\n.\n.\n.\n\n"
+        f"6. {style['hashtag_lang']}: "
+        f"add 20-25 hashtags at end separated by:\n"
+        f".\n.\n.\n\n"
         f"Write ONLY the description directly "
         f"(no JSON, no markdown)."
     )
@@ -1777,14 +2024,14 @@ def generate_street_description(
                 f"Too short: {len(description)} chars"
             )
         log.info(
-            f"  ✅ Street Description ({lang.upper()}): "
-            f"{len(description)} chars"
+            "  ✅ Street Description (%s): %d chars",
+            lang.upper(), len(description),
         )
         return description
 
     except Exception as e:
         log.warning(
-            f"  ⚠️  Street Description failed: {e}"
+            "  ⚠️  Street Description failed: %s", e
         )
         cta = _STREET_FALLBACK.get(
             lang, _STREET_FALLBACK["en"]
@@ -1796,9 +2043,9 @@ def generate_street_description(
         )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 🔟 ACCENT COLORS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def _validate_hex_colors(
     colors: list,
@@ -1816,7 +2063,6 @@ def _fill_default_colors(
     colors: list[str],
     target: int = 4,
 ) -> list[str]:
-    """✅ يضيف ألوان افتراضية — لا infinite loop."""
     default_idx = 0
     max_tries   = target * 2
     for _ in range(max_tries):
@@ -1824,7 +2070,8 @@ def _fill_default_colors(
             break
         colors.append(
             DEFAULT_ACCENT_COLORS[
-                default_idx % len(DEFAULT_ACCENT_COLORS)
+                default_idx %
+                len(DEFAULT_ACCENT_COLORS)
             ]
         )
         default_idx += 1
@@ -1835,7 +2082,9 @@ def suggest_accent_colors(context: dict) -> list[str]:
     emotion      = context.get(
         "primary_emotion", "curiosity"
     )
-    content_type = context.get("content_type", "general")
+    content_type = context.get(
+        "content_type", "general"
+    )
     intensity    = context.get("intensity", 7)
 
     prompt = (
@@ -1862,27 +2111,28 @@ def suggest_accent_colors(context: dict) -> list[str]:
 
         if len(valid_colors) < 2:
             log.warning(
-                f"  ⚠️  Accent Colors: "
-                f"only {len(valid_colors)} valid "
-                f"— using defaults"
+                "  ⚠️  Accent Colors: "
+                "only %d valid — using defaults",
+                len(valid_colors),
             )
             return list(DEFAULT_ACCENT_COLORS)
 
         final = _fill_default_colors(valid_colors)
-        log.info(f"  ✅ Accent Colors: {final}")
+        log.info("  ✅ Accent Colors: %s", final)
         return final
 
     except Exception as e:
         log.warning(
-            f"  ⚠️  Accent Colors failed: {e} "
-            f"— using defaults"
+            "  ⚠️  Accent Colors failed: %s "
+            "— using defaults",
+            e,
         )
         return list(DEFAULT_ACCENT_COLORS)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 1️⃣1️⃣ HOOK KEYWORD
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 PROMPT_PREFIXES_TO_STRIP = (
     "keyword:", "answer:", "result:", "→", ":",
@@ -1906,15 +2156,19 @@ def generate_hook_keyword(
     if not content or not content.strip():
         return HOOK_FALLBACK
 
-    content_type = context.get("content_type", "general")
+    content_type = context.get(
+        "content_type", "general"
+    )
     emotion      = context.get(
         "primary_emotion", "curiosity"
     )
-    safe_title   = _safe_title(title, TITLE_SHORT_CHARS)
+    safe_title   = _safe_title(
+        title, TITLE_SHORT_CHARS
+    )
 
     prompt = (
-        f"ONE powerful visual keyword for first 3 seconds "
-        f"of video.\n\n"
+        f"ONE powerful visual keyword for first "
+        f"3 seconds of video.\n\n"
         f'Topic: "{safe_title}" | '
         f"Type: {content_type} | "
         f"Emotion: {emotion}\n\n"
@@ -1948,17 +2202,21 @@ def generate_hook_keyword(
         )
         if not keyword or len(keyword) > 80:
             keyword = HOOK_FALLBACK_KEYWORD
-        log.info(f"  ✅ Hook keyword: '{keyword}'")
+        log.info(
+            "  ✅ Hook keyword: '%s'", keyword
+        )
         return keyword
 
     except Exception as e:
-        log.warning(f"  ⚠️  Hook keyword failed: {e}")
+        log.warning(
+            "  ⚠️  Hook keyword failed: %s", e
+        )
         return HOOK_FALLBACK_KEYWORD
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 1️⃣2️⃣ CUSTOM HOOK
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def generate_custom_hook(
     title:   str,
@@ -1967,12 +2225,16 @@ def generate_custom_hook(
     lang:    str = "ar",
 ) -> str:
     lang_name    = LANG_NAMES.get(lang, "Arabic")
-    content_type = context.get("content_type", "general")
+    content_type = context.get(
+        "content_type", "general"
+    )
     emotion      = context.get(
         "primary_emotion", "curiosity"
     )
     tone         = context.get("tone", "mysterious")
-    safe_title   = _safe_title(title, TITLE_SHORT_CHARS)
+    safe_title   = _safe_title(
+        title, TITLE_SHORT_CHARS
+    )
     safe_content = _safe_truncate(
         content, CONTENT_HOOK_CHARS
     )
@@ -1989,9 +2251,12 @@ def generate_custom_hook(
         f"- Maximum 10 words\n"
         f"- Instant curiosity or shock\n"
         f"- Sound like a secret\n\n"
-        f'GOOD Arabic: "90٪ من الناس لا يعرفون هذا السر"\n'
-        f'GOOD French: "Ce que personne ne te dit..."\n'
-        f'GOOD English: "Nobody tells you this truth"\n\n'
+        f'GOOD Arabic: '
+        f'"90٪ من الناس لا يعرفون هذا السر"\n'
+        f'GOOD French: '
+        f'"Ce que personne ne te dit..."\n'
+        f'GOOD English: '
+        f'"Nobody tells you this truth"\n\n'
         f"Return ONLY the hook sentence "
         f"(no quotes, no markdown):"
     )
@@ -2007,7 +2272,7 @@ def generate_custom_hook(
         )
         hook = _clean_keyword_response(raw)
         if hook and 3 <= len(hook.split()) <= 15:
-            log.info(f"  ✅ Custom hook: '{hook}'")
+            log.info("  ✅ Custom hook: '%s'", hook)
             return hook
         log.warning(
             "  ⚠️  Hook too short/long — using title"
@@ -2015,13 +2280,15 @@ def generate_custom_hook(
         return safe_title
 
     except Exception as e:
-        log.warning(f"  ⚠️  Custom hook failed: {e}")
+        log.warning(
+            "  ⚠️  Custom hook failed: %s", e
+        )
         return safe_title
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 🎯 MASTER ENRICHMENT — HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
+# 🎯 MASTER ENRICHMENT HELPERS
+# ═══════════════════════════════════════════════════
 
 def _build_attractive_title(title: str) -> dict:
     return {
@@ -2035,7 +2302,6 @@ def _apply_suggested_tags(
     tagged:    list[dict],
     suggested: list[str],
 ) -> None:
-    """✅ يعدّل الـ dicts مباشرة (by reference)."""
     for i, sent in enumerate(tagged):
         if i >= len(suggested):
             break
@@ -2052,7 +2318,6 @@ def _handle_tag_suggestions(
     lang:         str,
     content_mode: str = "short",
 ) -> None:
-    """✅ يعالج الأخطاء ويُطبق DEFAULT_TAG عند الفشل."""
     if not tagged:
         return
 
@@ -2069,13 +2334,14 @@ def _handle_tag_suggestions(
         )
         _apply_suggested_tags(tags_needed, suggested)
         log.info(
-            f"  ✅ Tags applied: "
-            f"{len(suggested)}/{len(tags_needed)}"
+            "  ✅ Tags applied: %d/%d",
+            len(suggested), len(tags_needed),
         )
     except Exception as e:
         log.warning(
-            f"  ⚠️  Tag suggestions failed: {e} "
-            f"— using DEFAULT_TAG"
+            "  ⚠️  Tag suggestions failed: %s "
+            "— using DEFAULT_TAG",
+            e,
         )
         for sent in tags_needed:
             sent["final_tag"]     = DEFAULT_TAG
@@ -2101,9 +2367,9 @@ def _prepare_keywords_input(
     return sentences, tags
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 # 🎯 MASTER ENRICHMENT
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════
 
 def enrich_record(
     record:       dict,
@@ -2113,13 +2379,13 @@ def enrich_record(
     content_mode: str                  = "short",
 ) -> dict:
     """
-    الدالة الرئيسية للإثراء بالـ AI — v7.2
+    الدالة الرئيسية للإثراء بالـ AI — v7.3
 
     ✅ الإصلاحات:
-      - _fix_quotes() في _clean_json() و _parse_json_response()
-      - time.sleep(INTER_OPERATION_SLEEP) بين كل عملية
-      - "Do NOT use double quotes inside values" في الـ prompts
-      - جميع إصلاحات v7.1 محفوظة
+      - _fix_unquoted_array_values() جديدة
+      - _parse_json_response() 5 محاولات
+      - Prompts أصرم مع CORRECT/WRONG examples
+      - جميع إصلاحات v7.2 محفوظة
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
@@ -2141,18 +2407,20 @@ def enrich_record(
 
     if verbose:
         log.info(
-            f"\n  🧠 AI Enrichment for: "
-            f"'{_safe_title(title, TITLE_DISPLAY_CHARS)}'"
-            f" ({lang_name})"
+            "\n  🧠 AI Enrichment for: '%s' (%s)",
+            _safe_title(title, TITLE_DISPLAY_CHARS),
+            lang_name,
         )
-        log.info(f"  {'─' * 50}")
+        log.info("  %s", "─" * 50)
         log.info(
-            f"  📌 Title: "
-            f"{DEFAULT_EMOJI_LEFT} "
-            f"{_safe_title(title, TITLE_SHORT_CHARS)} "
-            f"{DEFAULT_EMOJI_RIGHT}"
+            "  📌 Title: %s %s %s",
+            DEFAULT_EMOJI_LEFT,
+            _safe_title(title, TITLE_SHORT_CHARS),
+            DEFAULT_EMOJI_RIGHT,
         )
-        log.info(f"  📐 Mode: {content_mode.upper()}")
+        log.info(
+            "  📐 Mode: %s", content_mode.upper()
+        )
 
     # 1. Content Analysis
     analysis = analyze_content(title, content, lang)
@@ -2239,25 +2507,29 @@ def enrich_record(
     if verbose:
         total_ops = 12
         ops_done  = 10 if is_long else 12
-        log.info(f"  {'─' * 50}")
+        log.info("  %s", "─" * 50)
         log.info(
-            f"  ✅ AI enrichment complete "
-            f"({ops_done}/{total_ops} operations)"
-            + (
-                " [long mode: hooks skipped]"
-                if is_long else ""
-            )
-        )
-        log.info(f"  🪝 Hook: '{custom_hook}'")
-        log.info(
-            f"  📌 Final: "
-            f"{attractive_title['emoji_left']} "
-            f"{_safe_title(attractive_title['title'], TITLE_DISPLAY_CHARS)}"
-            f" {attractive_title['emoji_right']}"
+            "  ✅ AI enrichment complete "
+            "(%d/%d operations)%s",
+            ops_done, total_ops,
+            " [long mode: hooks skipped]"
+            if is_long else "",
         )
         log.info(
-            f"  📝 Street Description: "
-            f"{len(street_description)} chars"
+            "  🪝 Hook: '%s'", custom_hook
+        )
+        log.info(
+            "  📌 Final: %s %s %s",
+            attractive_title['emoji_left'],
+            _safe_title(
+                attractive_title['title'],
+                TITLE_DISPLAY_CHARS,
+            ),
+            attractive_title['emoji_right'],
+        )
+        log.info(
+            "  📝 Street Description: %d chars",
+            len(street_description),
         )
 
     return {
