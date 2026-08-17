@@ -1,11 +1,14 @@
 """
-🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.3
+🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.5
 
-Changes from v7.2:
-  ✅ 1. _fix_unquoted_array_values() — إصلاح array items بدون quotes
-  ✅ 2. _parse_json_response() — محاولة جديدة بعد unquoted fix
-  ✅ 3. generate_engagement_questions() — prompt أصرم مع مثال
-  ✅ 4. generate_pattern_interrupts() — prompt أصرم مع مثال
+Changes from v7.3:
+  ✅ 1. _fix_trailing_comma_in_string() — فاصلة داخل string
+  ✅ 2. _fix_multiline_strings() — multiline strings في JSON
+  ✅ 3. _fix_unclosed_quotes() — quotes غير مغلقة
+  ✅ 4. _apply_all_fixes() — دالة موحّدة لكل الإصلاحات
+  ✅ 5. _parse_json_response() — 5 محاولات موحّدة
+  ✅ 6. generate_hashtags() — prompt أصرم + temperature=0.5
+  ✅ 7. generate_captions() — prompt أصرم مع ONE line rule
 """
 
 from __future__ import annotations
@@ -379,7 +382,7 @@ def _is_rate_limit_error(error: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════
-# ✅ v7.3 — JSON FIXERS
+# ✅ v7.5 — JSON FIXERS (كل دوال الإصلاح)
 # ═══════════════════════════════════════════════════
 
 def _fix_quotes(text: str) -> str:
@@ -389,7 +392,115 @@ def _fix_quotes(text: str) -> str:
     return text
 
 
-# ✅ NEW in v7.3
+def _fix_multiline_strings(text: str) -> str:
+    """
+    ✅ v7.5 — إصلاح multiline strings في JSON.
+
+    المشكلة: LLM يكتب caption على عدة أسطر:
+        "fr": "نص السطر الأول
+        نص السطر الثاني"
+
+    الإصلاح:
+        "fr": "نص السطر الأول\\nنص السطر الثاني"
+    """
+    lines     = text.split('\n')
+    result    = []
+    in_string = False
+
+    for line in lines:
+        # عدّ quotes غير مُهرَّبة في السطر
+        quote_count = 0
+        j           = 0
+        while j < len(line):
+            if line[j] == '\\':
+                j += 2
+                continue
+            if line[j] == '"':
+                quote_count += 1
+            j += 1
+
+        if not in_string:
+            result.append(line)
+            # quotes فردية → دخلنا string
+            if quote_count % 2 == 1:
+                in_string = True
+        else:
+            # داخل string → استبدل newline بـ \n
+            if result:
+                result[-1] = (
+                    result[-1] +
+                    '\\n' +
+                    line.strip()
+                )
+            else:
+                result.append(line)
+            # quotes فردية → خرجنا من string
+            if quote_count % 2 == 1:
+                in_string = False
+
+    return '\n'.join(result)
+
+
+def _fix_trailing_comma_in_string(text: str) -> str:
+    """
+    ✅ v7.5 — إصلاح فاصلة داخل string قبل الإغلاق.
+
+    المشكلة:
+        "Do you notice? 😊,"   ← فاصلة قبل "
+        "text1""text2"         ← items ملتصقة
+
+    الإصلاح:
+        "Do you notice? 😊",
+        "text1", "text2"
+    """
+    # Pattern 1: ,"  → ",
+    # فاصلة داخل الـ string قبل إغلاقها مباشرة
+    text = re.sub(
+        r',"(\s*[,\]\n])',
+        r'"\1',
+        text,
+    )
+
+    # Pattern 2: "text," → "text",
+    # أي فاصلة قبل آخر " في string
+    text = re.sub(
+        r',("\s*(?:[,\]\n]))',
+        r'"\1',
+        text,
+    )
+
+    # Pattern 3: "text1""text2" → "text1", "text2"
+    # items ملتصقة بـ ""
+    text = re.sub(
+        r'"(\s*)"',
+        r'", "',
+        text,
+    )
+
+    return text
+
+
+def _fix_unclosed_quotes(text: str) -> str:
+    """
+    ✅ v7.5 — إصلاح quotes غير مغلقة داخل JSON arrays.
+
+    المشكلة:
+        "#_الموت_ليس_الخاسر_,   ← مفتوح بلا إغلاق
+        "#_الأفضل_من_الخسارة"
+
+    الإصلاح:
+        "#_الموت_ليس_الخاسر_",  ← أضف " قبل الفاصلة
+        "#_الأفضل_من_الخسارة"
+    """
+    # Pattern: "text, → "text",
+    text = re.sub(
+        r'"([^"\n,]+),\s*\n',
+        r'"\1",\n',
+        text,
+    )
+    return text
+
+
 _UNQUOTED_ARRAY_RE = re.compile(
     r'\[\s*((?:[^"\[\]{}]|"[^"]*")'
     r'(?:\s*,\s*(?:[^"\[\]{}]|"[^"]*"))*)\s*\]',
@@ -402,36 +513,28 @@ def _fix_unquoted_array_values(text: str) -> str:
     ✅ v7.3 — إصلاح array items بدون quotes.
 
     يعالج:
-    1. ["item1", item2, item3]  → كل بدون quotes
-    2. ["item1", item2, "item3"]  → مختلطة
-    3. [item1\nitem2\nitem3]  → بدون فواصل
-
-    Examples:
-        ["ok", without quotes, also ok]
-        → ["ok", "without quotes", "also ok"]
+    1. ["item1", item2, item3]  → مختلطة
+    2. [item1\nitem2]           → بدون فواصل
     """
     def _fix_array_content(match: re.Match) -> str:
-        raw = match.group(0)
-        # استخراج المحتوى بين [ و ]
+        raw   = match.group(0)
         inner = raw[1:-1].strip()
 
         if not inner:
             return raw
 
-        # أولاً: إضافة فواصل مفقودة بين السطور
-        # pattern: نهاية سطر + بداية سطر جديد بدون فاصلة
+        # إضافة فواصل مفقودة بين السطور
         inner = re.sub(
             r'("|\w|[^\s,\[\]{}])(\s*\n\s*)(?=[^\s,\[\]{}])',
             r'\1,\n    ',
             inner,
         )
 
-        # تقسيم على الفواصل مع الحفاظ على quoted strings
-        # استخدام regex للتقسيم الذكي
-        parts: list[str] = []
-        current          = ""
-        in_quote         = False
-        i                = 0
+        # تقسيم ذكي مع الحفاظ على quoted strings
+        parts:    list[str] = []
+        current             = ""
+        in_quote            = False
+        i                   = 0
 
         while i < len(inner):
             ch = inner[i]
@@ -451,14 +554,12 @@ def _fix_unquoted_array_values(text: str) -> str:
         if current.strip():
             parts.append(current.strip())
 
-        # معالجة كل item
         fixed_parts: list[str] = []
         for part in parts:
             part = part.strip()
             if not part:
                 continue
 
-            # إذا كان بـ quotes صحيحة → اتركه
             if (
                 part.startswith('"') and
                 part.endswith('"') and
@@ -467,13 +568,11 @@ def _fix_unquoted_array_values(text: str) -> str:
                 fixed_parts.append(part)
                 continue
 
-            # إزالة quotes جزئية
             if part.startswith('"'):
                 part = part[1:]
             if part.endswith('"'):
                 part = part[:-1]
 
-            # escape أي quotes داخلية
             part = part.replace('\\', '\\\\')
             part = part.replace('"', '\\"')
             part = part.strip()
@@ -491,6 +590,25 @@ def _fix_unquoted_array_values(text: str) -> str:
     )
 
 
+def _apply_all_fixes(text: str) -> str:
+    """
+    ✅ v7.5 — تطبيق كل الإصلاحات بالترتيب الصحيح.
+
+    الترتيب مهم:
+    1. multiline أولاً (قبل أي شيء)
+    2. trailing comma
+    3. unclosed quotes
+    4. unquoted array values
+    5. double quotes زائدة أخيراً
+    """
+    text = _fix_multiline_strings(text)
+    text = _fix_trailing_comma_in_string(text)
+    text = _fix_unclosed_quotes(text)
+    text = _fix_unquoted_array_values(text)
+    text = _fix_quotes(text)
+    return text
+
+
 def _clean_json(raw: str) -> str:
     """تنظيف واستخراج أول JSON كامل."""
     if not raw:
@@ -501,7 +619,7 @@ def _clean_json(raw: str) -> str:
     text = re.sub(r"\n?\s*```\s*$",            "", text)
     text = text.strip()
 
-    # ✅ إصلاح قبل التحليل
+    # إصلاح قبل التحليل
     text = _fix_quotes(text)
 
     start_obj = text.find("{")
@@ -563,9 +681,14 @@ def _parse_json_response(
     operation:     str,
 ) -> Any:
     """
-    ✅ v7.3 — Parse JSON مع 5 محاولات.
+    ✅ v7.5 — Parse JSON مع 5 محاولات موحّدة.
 
-    محاولة جديدة: _fix_unquoted_array_values
+    الترتيب:
+    1. مباشر
+    2. كل الـ fixes (_apply_all_fixes)
+    3. backticks + كل الـ fixes
+    4. _fix_quotes فقط (للتوافق القديم)
+    5. بحث في positions + كل الـ fixes
     """
     if not raw or not raw.strip():
         raise AIEnrichmentError(
@@ -592,31 +715,19 @@ def _parse_json_response(
             f"❌ {operation}: {e}"
         )
 
-    # Attempt 2: بعد _fix_quotes
+    # Attempt 2: كل الـ fixes دفعة واحدة
     try:
-        result = _try_parse(_fix_quotes(raw))
-        log.debug(
-            "  ✓ %s: parsed after quote fix",
-            operation
-        )
-        return result
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # ✅ Attempt 3 NEW: بعد _fix_unquoted_array_values
-    try:
-        fixed  = _fix_unquoted_array_values(raw)
-        fixed  = _fix_quotes(fixed)
+        fixed  = _apply_all_fixes(raw)
         result = _try_parse(fixed)
         log.debug(
-            "  ✓ %s: parsed after unquoted fix",
-            operation
+            "  ✓ %s: parsed after all fixes",
+            operation,
         )
         return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 4: إزالة backticks + كل الـ fixes
+    # Attempt 3: إزالة backticks + كل الـ fixes
     try:
         no_ticks = (
             raw
@@ -625,12 +736,22 @@ def _parse_json_response(
             .replace("```",     "")
             .strip()
         )
-        no_ticks = _fix_unquoted_array_values(no_ticks)
-        no_ticks = _fix_quotes(no_ticks)
-        result   = _try_parse(no_ticks)
+        fixed  = _apply_all_fixes(no_ticks)
+        result = _try_parse(fixed)
         log.debug(
-            "  ✓ %s: parsed after backtick+fix",
-            operation
+            "  ✓ %s: parsed after backtick+fixes",
+            operation,
+        )
+        return result
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Attempt 4: _fix_quotes فقط (للتوافق القديم)
+    try:
+        result = _try_parse(_fix_quotes(raw))
+        log.debug(
+            "  ✓ %s: parsed after quote fix only",
+            operation,
         )
         return result
     except (json.JSONDecodeError, ValueError):
@@ -650,17 +771,15 @@ def _parse_json_response(
                 if idx == -1:
                     break
                 try:
-                    candidate = raw[idx:]
-                    candidate = _fix_unquoted_array_values(
-                        candidate
+                    candidate = _apply_all_fixes(
+                        raw[idx:]
                     )
-                    candidate = _fix_quotes(candidate)
                     candidate = _clean_json(candidate)
                     data      = json.loads(candidate)
                     if isinstance(data, expected_type):
                         log.debug(
                             "  ✓ %s: search at %d",
-                            operation, idx
+                            operation, idx,
                         )
                         return data
                 except (
@@ -790,7 +909,7 @@ def _call_groq(
     with _groq_lock:
         n_keys = len(_groq_keys)
 
-    total_attempts         = n_keys * MAX_RETRIES_PER_KEY
+    total_attempts            = n_keys * MAX_RETRIES_PER_KEY
     last_error: Optional[str] = None
 
     for attempt in range(total_attempts):
@@ -1574,7 +1693,7 @@ def _generate_bilingual_content(
 
 
 # ═══════════════════════════════════════════════════
-# ✅ v7.3 — STRICT PROMPT BUILDER
+# ✅ v7.5 — STRICT PROMPT BUILDER
 # ═══════════════════════════════════════════════════
 
 def _build_list_prompt(
@@ -1589,7 +1708,7 @@ def _build_list_prompt(
     wrong_ex:   str = "",
 ) -> str:
     """
-    ✅ v7.3 — prompt أكثر صرامة مع CORRECT/WRONG examples.
+    ✅ v7.5 — prompt أكثر صرامة مع CORRECT/WRONG examples.
     """
     lang_instruction = _get_lang_instruction(lang)
     json_format      = _get_bilingual_json_format(
@@ -1629,7 +1748,7 @@ def _build_list_prompt(
 
 
 # ═══════════════════════════════════════════════════
-# 5️⃣ PATTERN INTERRUPTS — v7.3 strict prompt
+# 5️⃣ PATTERN INTERRUPTS
 # ═══════════════════════════════════════════════════
 
 def generate_pattern_interrupts(
@@ -1676,7 +1795,7 @@ def generate_pattern_interrupts(
 
 
 # ═══════════════════════════════════════════════════
-# 6️⃣ ENGAGEMENT QUESTIONS — v7.3 strict prompt
+# 6️⃣ ENGAGEMENT QUESTIONS
 # ═══════════════════════════════════════════════════
 
 def generate_engagement_questions(
@@ -1729,7 +1848,7 @@ def generate_engagement_questions(
 
 
 # ═══════════════════════════════════════════════════
-# 7️⃣ HASHTAGS
+# 7️⃣ HASHTAGS — v7.5 strict prompt
 # ═══════════════════════════════════════════════════
 
 def _clean_hashtags(tags: list) -> list[str]:
@@ -1751,6 +1870,9 @@ def generate_hashtags(
     lang:    str = "ar",
     count:   int = 12,
 ) -> dict[str, list[str]]:
+    """
+    ✅ v7.5 — prompt أصرم + temperature=0.5
+    """
     content_type     = context.get(
         "content_type", "general"
     )
@@ -1759,23 +1881,32 @@ def generate_hashtags(
     )
     lang_instruction = _get_lang_instruction(lang)
     json_format      = _get_bilingual_json_format(
-        lang, '["#tag1","#tag2",...]'
+        lang, '["#tag1","#tag2","#tag3"]'
     )
 
     prompt = (
         f"Generate {count} hashtags "
         f"{lang_instruction}.\n\n"
-        f'Title: "{safe_title}" | Type: {content_type}\n'
-        f"Rules: start with #, "
-        f"underscores for spaces.\n\n"
-        f"Return ONLY JSON (no markdown):\n"
+        f'Title: "{safe_title}" | '
+        f"Type: {content_type}\n\n"
+        f"STRICT RULES:\n"
+        f"1. Each hashtag MUST start with #\n"
+        f"2. Use underscores instead of spaces\n"
+        f"3. Each item MUST have double quotes\n"
+        f"4. NO commas or special chars inside the tag\n"
+        f"5. NO unclosed quotes\n\n"
+        f"CORRECT:\n"
+        f'{{"ar": ["#لا_تستسلم", "#النجاح"]}}\n\n'
+        f"WRONG:\n"
+        f'{{"ar": ["#tag, extra", "#bad"]}}\n\n'
+        f"Return ONLY valid JSON (no markdown):\n"
         f"{json_format}"
     )
 
     raw  = _call_groq(
         prompt,
         max_tokens     = 700,
-        temperature    = 0.6,
+        temperature    = 0.5,  # ✅ أقل من 0.6
         operation_name = "Hashtags",
     )
     data = _parse_json_response(raw, dict, "Hashtags")
@@ -1823,7 +1954,7 @@ def generate_hashtags(
 
 
 # ═══════════════════════════════════════════════════
-# 8️⃣ CAPTIONS
+# 8️⃣ CAPTIONS — v7.5 ONE line rule
 # ═══════════════════════════════════════════════════
 
 def _extract_caption(data: dict, lang: str) -> str:
@@ -1868,6 +1999,9 @@ def generate_captions(
     hashtags: dict[str, list[str]],
     lang:     str = "ar",
 ) -> dict[str, str]:
+    """
+    ✅ v7.5 — prompt أصرم مع ONE line rule
+    """
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     safe_title   = _safe_title(
         title, TITLE_SHORT_CHARS
@@ -1877,12 +2011,12 @@ def generate_captions(
     )
 
     if lang == "en":
-        json_format      = '{"en": "caption text here"}'
+        json_format      = '{"en": "caption on ONE line"}'
         lang_instruction = "in English"
     else:
         json_format = (
-            f'{{"{lang}": "caption text here", '
-            f'"en": "caption text here"}}'
+            f'{{"{lang}": "caption on ONE line", '
+            f'"en": "caption on ONE line"}}'
         )
         lang_instruction = (
             f"in {lang_name} AND English"
@@ -1900,14 +2034,23 @@ def generate_captions(
         f"- 2-3 lines of value\n"
         f"- Call-to-action + emojis\n"
         f"- NO hashtags in body\n\n"
-        f"Return ONLY JSON (no markdown):\n"
+        f"CRITICAL JSON RULES:\n"
+        f"1. The entire caption MUST be on ONE line\n"
+        f"2. Use \\n for line breaks "
+        f"(NOT actual newlines)\n"
+        f"3. NO multiline strings in JSON\n\n"
+        f"CORRECT:\n"
+        f'{{"{lang}": "Hook! 🔥\\nLine 2\\nCTA 👇"}}\n\n'
+        f"WRONG:\n"
+        f'{{"{lang}": "Hook! 🔥\nLine 2\nCTA 👇"}}\n\n'
+        f"Return ONLY valid JSON (no markdown):\n"
         f"{json_format}"
     )
 
     raw  = _call_groq(
         prompt,
         max_tokens     = 800,
-        temperature    = 0.7,
+        temperature    = 0.6,  # ✅ أقل من 0.7
         operation_name = "Captions",
     )
     data = _parse_json_response(raw, dict, "Captions")
@@ -2379,13 +2522,16 @@ def enrich_record(
     content_mode: str                  = "short",
 ) -> dict:
     """
-    الدالة الرئيسية للإثراء بالـ AI — v7.3
+    الدالة الرئيسية للإثراء بالـ AI — v7.5
 
-    ✅ الإصلاحات:
-      - _fix_unquoted_array_values() جديدة
-      - _parse_json_response() 5 محاولات
-      - Prompts أصرم مع CORRECT/WRONG examples
-      - جميع إصلاحات v7.2 محفوظة
+    ✅ الإصلاحات الجديدة:
+      - _fix_multiline_strings()
+      - _fix_trailing_comma_in_string()
+      - _fix_unclosed_quotes()
+      - _apply_all_fixes() — دالة موحّدة
+      - _parse_json_response() — 5 محاولات موحّدة
+      - generate_hashtags() — temperature=0.5
+      - generate_captions() — ONE line rule
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
