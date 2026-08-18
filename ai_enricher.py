@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 # CONFIG
 # ═══════════════════════════════════════════════════
 
-MODEL = "openai/gpt-oss-120b"
+MODEL = "llama-3.3-70b-versatile"
 
 MAX_RETRIES_PER_KEY  = 3
 RATE_LIMIT_WAIT      = 3.0
@@ -1138,7 +1138,7 @@ def analyze_content(
 
     raw  = _call_groq(
         prompt,
-        max_tokens     = 400,
+        max_tokens     = 800,
         temperature    = 0.3,
         operation_name = "Content Analysis",
     )
