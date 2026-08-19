@@ -966,7 +966,17 @@ def _call_groq(
             content = (
                 resp.choices[0].message.content or ""
             )
-            if not content.strip():
+           if not content.strip():
+                # ✅ Empty response → try next model
+                if len(models_to_try) > 1:
+                    old = models_to_try.pop(0)
+                    current_model = models_to_try[0]
+                    log.warning(
+                        "  🔄 Empty response from '%s'"
+                        " → trying '%s'",
+                        old, current_model,
+                    )
+                    continue
                 raise ValueError(
                     "Empty response from Groq"
                 )
