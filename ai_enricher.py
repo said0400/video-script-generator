@@ -922,8 +922,8 @@ def _call_groq(
     current_model             = models_to_try[0]
     model_switches            = 0
     max_model_switches        = len(MODELS_PRIORITY)
-    empty_retries             = 0        # ✅ عدّاد empty
-    MAX_EMPTY_RETRIES         = 2        # ✅ حد أقصى
+    empty_retries             = 0
+    MAX_EMPTY_RETRIES         = 2
 
     for attempt in range(
         total_attempts + max_model_switches
@@ -977,7 +977,7 @@ def _call_groq(
             if not content:
                 empty_retries += 1
 
-                # ✅ أعد المحاولة بنفس الموديل أولاً
+                # ✅ retry same model first
                 if empty_retries <= MAX_EMPTY_RETRIES:
                     log.warning(
                         "  🔄 Empty response — retry "
@@ -985,11 +985,11 @@ def _call_groq(
                         empty_retries,
                         MAX_EMPTY_RETRIES,
                     )
-                    _rotate_key()
+                    _rotate_groq_key()  # ✅ FIXED
                     time.sleep(2)
                     continue
 
-                # ✅ بعد فشل — انتقل للموديل التالي
+                # ✅ after retries → switch model
                 empty_retries = 0
                 if len(models_to_try) > 1:
                     old = models_to_try.pop(0)
@@ -1004,7 +1004,7 @@ def _call_groq(
                     "Empty response from Groq"
                 )
 
-            # ✅ نجح — أعد العدّاد
+            # ✅ success — reset counter
             empty_retries = 0
             return content
 
@@ -1100,6 +1100,8 @@ def _call_groq(
         f"   Last error: "
         f"{last_error[:200] if last_error else '?'}"
     )
+
+
 # ═══════════════════════════════════════════════════
 # DATA EXTRACTION HELPERS
 # ═══════════════════════════════════════════════════
