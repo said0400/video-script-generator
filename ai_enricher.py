@@ -38,12 +38,11 @@ log = logging.getLogger(__name__)
 
 # ✅ v7.6 — قائمة موديلات مع Auto Fallback
 MODELS_PRIORITY = [
-    "llama-3.3-70b-versatile",   # الأقوى للنصوص العربية
-    "meta-llama/llama-4-scout-17b-16e-instruct",  # Llama 4 Scout الجديد
-    "openai/gpt-oss-120b",       # قوي بديل
-    "qwen/qwen3-32b",            # Qwen ممتاز للعربية
-    "openai/gpt-oss-20b",        # أخف
-    "llama-3.1-8b-instant",      # الأسرع (fallback)
+    "groq/compound",          # الأقوى — Groq's flagship
+    "groq/compound-mini",     # سريع وخفيف
+    "openai/gpt-oss-120b",    # قوي (أحياناً empty)
+    "qwen/qwen3.6-27b",       # ممتاز (يحتاج strip <think>)
+    "allam-2-7b",             # ممتاز للعربية (IBM ALLAM)
 ]
 
 MAX_RETRIES_PER_KEY  = 3
