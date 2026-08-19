@@ -923,6 +923,8 @@ def _call_groq(
     current_model             = models_to_try[0]
     model_switches            = 0
     max_model_switches        = len(MODELS_PRIORITY)
+    empty_retries             = 0        # ✅ عدّاد empty
+    MAX_EMPTY_RETRIES         = 2        # ✅ حد أقصى
 
     for attempt in range(
         total_attempts + max_model_switches
@@ -964,8 +966,32 @@ def _call_groq(
             content = (
                 resp.choices[0].message.content or ""
             )
-            if not content.strip():
-                # ✅ Empty response → try next model
+
+            # ✅ Strip <think> tags (Qwen models)
+            content = re.sub(
+                r"<think>.*?</think>",
+                "",
+                content,
+                flags=re.DOTALL,
+            ).strip()
+
+            if not content:
+                empty_retries += 1
+
+                # ✅ أعد المحاولة بنفس الموديل أولاً
+                if empty_retries <= MAX_EMPTY_RETRIES:
+                    log.warning(
+                        "  🔄 Empty response — retry "
+                        "same model (%d/%d)",
+                        empty_retries,
+                        MAX_EMPTY_RETRIES,
+                    )
+                    _rotate_key()
+                    time.sleep(2)
+                    continue
+
+                # ✅ بعد فشل — انتقل للموديل التالي
+                empty_retries = 0
                 if len(models_to_try) > 1:
                     old = models_to_try.pop(0)
                     current_model = models_to_try[0]
@@ -979,7 +1005,9 @@ def _call_groq(
                     "Empty response from Groq"
                 )
 
-            return content.strip()
+            # ✅ نجح — أعد العدّاد
+            empty_retries = 0
+            return content
 
         except Exception as e:
             err_str    = str(e)
@@ -1025,6 +1053,23 @@ def _call_groq(
                 _rotate_groq_key()
                 time.sleep(wait)
 
+            # 400 = bad request → switch MODEL
+            elif "400" in err_str:
+                model_switches += 1
+                if len(models_to_try) > 1:
+                    old = models_to_try.pop(0)
+                    current_model = models_to_try[0]
+                    log.warning(
+                        "  🔄 Model '%s' error 400"
+                        " → trying '%s'",
+                        old, current_model,
+                    )
+                    continue
+                else:
+                    raise AIEnrichmentError(
+                        "❌ All models returned 400"
+                    )
+
             # 401/403 = auth → switch KEY
             elif (
                 "401" in err_str or
@@ -1056,8 +1101,6 @@ def _call_groq(
         f"   Last error: "
         f"{last_error[:200] if last_error else '?'}"
     )
-
-
 # ═══════════════════════════════════════════════════
 # DATA EXTRACTION HELPERS
 # ═══════════════════════════════════════════════════
