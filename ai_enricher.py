@@ -966,7 +966,7 @@ def _call_groq(
             content = (
                 resp.choices[0].message.content or ""
             )
-           if not content.strip():
+            if not content.strip():
                 # ✅ Empty response → try next model
                 if len(models_to_try) > 1:
                     old = models_to_try.pop(0)
