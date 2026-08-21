@@ -1,14 +1,11 @@
 """
-🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.5
+🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.7
 
-Changes from v7.3:
-  ✅ 1. _fix_trailing_comma_in_string() — فاصلة داخل string
-  ✅ 2. _fix_multiline_strings() — multiline strings في JSON
-  ✅ 3. _fix_unclosed_quotes() — quotes غير مغلقة
-  ✅ 4. _apply_all_fixes() — دالة موحّدة لكل الإصلاحات
-  ✅ 5. _parse_json_response() — 5 محاولات موحّدة
-  ✅ 6. generate_hashtags() — prompt أصرم + temperature=0.5
-  ✅ 7. generate_captions() — prompt أصرم مع ONE line rule
+Changes from v7.5:
+  ✅ 1. Instant Model Switch on 429 RateLimit: عند حدوث 429 يتم الانتقال للموديل التالي فوراً
+  ✅ 2. Includes ALLAM-2-7B (النموذج العربي المتخصص على Groq بحدود عالية)
+  ✅ 3. Smart Key Rotation + Model Fallback
+  ✅ 4. Qwen <think> tag stripper
 """
 
 from __future__ import annotations
@@ -36,18 +33,18 @@ log = logging.getLogger(__name__)
 # CONFIG
 # ═══════════════════════════════════════════════════
 
-# ✅ v7.6 — قائمة موديلات مع Auto Fallback
+# ✅ v7.7 — قائمة الموديلات المتاحة على Groq مرتبة حسب الأفضلية والسرعة
 MODELS_PRIORITY = [
-    "groq/compound",          # الأقوى — Groq's flagship
-    "groq/compound-mini",     # سريع وخفيف
-    "openai/gpt-oss-120b",    # قوي (أحياناً empty)
-    "qwen/qwen3.6-27b",       # ممتاز (يحتاج strip <think>)
-    "allam-2-7b",             # ممتاز للعربية (IBM ALLAM)
+    "groq/compound",          # الموديل الرئيسي الممتاز
+    "groq/compound-mini",     # السريع
+    "allam-2-7b",             # النموذج العربي المتخصص (حصته عالية جداً)
+    "openai/gpt-oss-120b",    # قوي ومتاح
+    "qwen/qwen3.6-27b",       # ممتازة جودته
 ]
 
-MAX_RETRIES_PER_KEY  = 3
-RATE_LIMIT_WAIT      = 3.0
-RATE_LIMIT_WAIT_MAX  = 60.0
+MAX_RETRIES_PER_KEY  = 2
+RATE_LIMIT_WAIT      = 1.0
+RATE_LIMIT_WAIT_MAX  = 30.0
 MAX_KEYS_SCAN        = 20
 GROQ_TIMEOUT         = 60
 MAX_SEARCH_ATTEMPTS  = 20
@@ -67,10 +64,10 @@ CAPTION_HASHTAG_LIMIT   = 12
 
 BATCH_SIZE_TAGS     = 10
 BATCH_SIZE_KEYWORDS = 20
-BATCH_SLEEP         = 2.0
+BATCH_SLEEP         = 1.5
 ANALYSIS_CACHE_SIZE = 50
 
-INTER_OPERATION_SLEEP = 1.0
+INTER_OPERATION_SLEEP = 0.5
 
 DEFAULT_EMOJI_LEFT   = "🔥"
 DEFAULT_EMOJI_RIGHT  = "💥"
@@ -80,6 +77,7 @@ DEFAULT_VISUAL_STYLE = "person serious face talking camera"
 RATE_LIMIT_KEYWORDS = (
     "429", "rate_limit", "rate limit",
     "quota", "ratequota", "tokens per minute",
+    "requests per day", "rpd",
 )
 
 _VALID_LANGS = frozenset({"ar", "fr", "en"})
@@ -368,9 +366,6 @@ def _rotate_groq_key() -> None:
     with _groq_lock:
         n = len(_groq_keys)
         if n <= 1:
-            log.warning(
-                "  ⚠️  No additional Groq keys"
-            )
             return
         _groq_index = (_groq_index + 1) % n
         new_idx     = _groq_index
@@ -389,33 +384,21 @@ def _is_rate_limit_error(error: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════
-# ✅ v7.5 — JSON FIXERS (كل دوال الإصلاح)
+# JSON FIXERS
 # ═══════════════════════════════════════════════════
 
 def _fix_quotes(text: str) -> str:
-    """إصلاح علامات الاقتباس الزائدة."""
     text = re.sub(r'""([^"\n]+)"', r'"\1"', text)
     text = re.sub(r'"([^"\n]+)""', r'"\1"', text)
     return text
 
 
 def _fix_multiline_strings(text: str) -> str:
-    """
-    ✅ v7.5 — إصلاح multiline strings في JSON.
-
-    المشكلة: LLM يكتب caption على عدة أسطر:
-        "fr": "نص السطر الأول
-        نص السطر الثاني"
-
-    الإصلاح:
-        "fr": "نص السطر الأول\\nنص السطر الثاني"
-    """
     lines     = text.split('\n')
     result    = []
     in_string = False
 
     for line in lines:
-        # عدّ quotes غير مُهرَّبة في السطر
         quote_count = 0
         j           = 0
         while j < len(line):
@@ -428,11 +411,9 @@ def _fix_multiline_strings(text: str) -> str:
 
         if not in_string:
             result.append(line)
-            # quotes فردية → دخلنا string
             if quote_count % 2 == 1:
                 in_string = True
         else:
-            # داخل string → استبدل newline بـ \n
             if result:
                 result[-1] = (
                     result[-1] +
@@ -441,7 +422,6 @@ def _fix_multiline_strings(text: str) -> str:
                 )
             else:
                 result.append(line)
-            # quotes فردية → خرجنا من string
             if quote_count % 2 == 1:
                 in_string = False
 
@@ -449,62 +429,14 @@ def _fix_multiline_strings(text: str) -> str:
 
 
 def _fix_trailing_comma_in_string(text: str) -> str:
-    """
-    ✅ v7.5 — إصلاح فاصلة داخل string قبل الإغلاق.
-
-    المشكلة:
-        "Do you notice? 😊,"   ← فاصلة قبل "
-        "text1""text2"         ← items ملتصقة
-
-    الإصلاح:
-        "Do you notice? 😊",
-        "text1", "text2"
-    """
-    # Pattern 1: ,"  → ",
-    # فاصلة داخل الـ string قبل إغلاقها مباشرة
-    text = re.sub(
-        r',"(\s*[,\]\n])',
-        r'"\1',
-        text,
-    )
-
-    # Pattern 2: "text," → "text",
-    # أي فاصلة قبل آخر " في string
-    text = re.sub(
-        r',("\s*(?:[,\]\n]))',
-        r'"\1',
-        text,
-    )
-
-    # Pattern 3: "text1""text2" → "text1", "text2"
-    # items ملتصقة بـ ""
-    text = re.sub(
-        r'"(\s*)"',
-        r'", "',
-        text,
-    )
-
+    text = re.sub(r',"(\s*[,\]\n])', r'"\1', text)
+    text = re.sub(r',("\s*(?:[,\]\n]))', r'"\1', text)
+    text = re.sub(r'"(\s*)"', r'", "', text)
     return text
 
 
 def _fix_unclosed_quotes(text: str) -> str:
-    """
-    ✅ v7.5 — إصلاح quotes غير مغلقة داخل JSON arrays.
-
-    المشكلة:
-        "#_الموت_ليس_الخاسر_,   ← مفتوح بلا إغلاق
-        "#_الأفضل_من_الخسارة"
-
-    الإصلاح:
-        "#_الموت_ليس_الخاسر_",  ← أضف " قبل الفاصلة
-        "#_الأفضل_من_الخسارة"
-    """
-    # Pattern: "text, → "text",
-    text = re.sub(
-        r'"([^"\n,]+),\s*\n',
-        r'"\1",\n',
-        text,
-    )
+    text = re.sub(r'"([^"\n,]+),\s*\n', r'"\1",\n', text)
     return text
 
 
@@ -516,13 +448,6 @@ _UNQUOTED_ARRAY_RE = re.compile(
 
 
 def _fix_unquoted_array_values(text: str) -> str:
-    """
-    ✅ v7.3 — إصلاح array items بدون quotes.
-
-    يعالج:
-    1. ["item1", item2, item3]  → مختلطة
-    2. [item1\nitem2]           → بدون فواصل
-    """
     def _fix_array_content(match: re.Match) -> str:
         raw   = match.group(0)
         inner = raw[1:-1].strip()
@@ -530,18 +455,16 @@ def _fix_unquoted_array_values(text: str) -> str:
         if not inner:
             return raw
 
-        # إضافة فواصل مفقودة بين السطور
         inner = re.sub(
             r'("|\w|[^\s,\[\]{}])(\s*\n\s*)(?=[^\s,\[\]{}])',
             r'\1,\n    ',
             inner,
         )
 
-        # تقسيم ذكي مع الحفاظ على quoted strings
-        parts:    list[str] = []
-        current             = ""
-        in_quote            = False
-        i                   = 0
+        parts: list[str] = []
+        current          = ""
+        in_quote         = False
+        i                = 0
 
         while i < len(inner):
             ch = inner[i]
@@ -592,22 +515,10 @@ def _fix_unquoted_array_values(text: str) -> str:
 
         return "[" + ", ".join(fixed_parts) + "]"
 
-    return _UNQUOTED_ARRAY_RE.sub(
-        _fix_array_content, text
-    )
+    return _UNQUOTED_ARRAY_RE.sub(_fix_array_content, text)
 
 
 def _apply_all_fixes(text: str) -> str:
-    """
-    ✅ v7.5 — تطبيق كل الإصلاحات بالترتيب الصحيح.
-
-    الترتيب مهم:
-    1. multiline أولاً (قبل أي شيء)
-    2. trailing comma
-    3. unclosed quotes
-    4. unquoted array values
-    5. double quotes زائدة أخيراً
-    """
     text = _fix_multiline_strings(text)
     text = _fix_trailing_comma_in_string(text)
     text = _fix_unclosed_quotes(text)
@@ -617,7 +528,6 @@ def _apply_all_fixes(text: str) -> str:
 
 
 def _clean_json(raw: str) -> str:
-    """تنظيف واستخراج أول JSON كامل."""
     if not raw:
         return ""
 
@@ -626,7 +536,6 @@ def _clean_json(raw: str) -> str:
     text = re.sub(r"\n?\s*```\s*$",            "", text)
     text = text.strip()
 
-    # إصلاح قبل التحليل
     text = _fix_quotes(text)
 
     start_obj = text.find("{")
@@ -687,16 +596,6 @@ def _parse_json_response(
     expected_type: type,
     operation:     str,
 ) -> Any:
-    """
-    ✅ v7.5 — Parse JSON مع 5 محاولات موحّدة.
-
-    الترتيب:
-    1. مباشر
-    2. كل الـ fixes (_apply_all_fixes)
-    3. backticks + كل الـ fixes
-    4. _fix_quotes فقط (للتوافق القديم)
-    5. بحث في positions + كل الـ fixes
-    """
     if not raw or not raw.strip():
         raise AIEnrichmentError(
             f"❌ {operation}: empty response"
@@ -712,29 +611,21 @@ def _parse_json_response(
             f"got {type(data).__name__}"
         )
 
-    # Attempt 1: مباشر
     try:
         return _try_parse(raw)
     except json.JSONDecodeError:
         pass
     except ValueError as e:
-        raise AIEnrichmentError(
-            f"❌ {operation}: {e}"
-        )
+        raise AIEnrichmentError(f"❌ {operation}: {e}")
 
-    # Attempt 2: كل الـ fixes دفعة واحدة
     try:
         fixed  = _apply_all_fixes(raw)
         result = _try_parse(fixed)
-        log.debug(
-            "  ✓ %s: parsed after all fixes",
-            operation,
-        )
+        log.debug("  ✓ %s: parsed after all fixes", operation)
         return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 3: إزالة backticks + كل الـ fixes
     try:
         no_ticks = (
             raw
@@ -745,26 +636,18 @@ def _parse_json_response(
         )
         fixed  = _apply_all_fixes(no_ticks)
         result = _try_parse(fixed)
-        log.debug(
-            "  ✓ %s: parsed after backtick+fixes",
-            operation,
-        )
+        log.debug("  ✓ %s: parsed after backtick+fixes", operation)
         return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 4: _fix_quotes فقط (للتوافق القديم)
     try:
         result = _try_parse(_fix_quotes(raw))
-        log.debug(
-            "  ✓ %s: parsed after quote fix only",
-            operation,
-        )
+        log.debug("  ✓ %s: parsed after quote fix only", operation)
         return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 5: بحث في positions + كل الـ fixes
     try:
         open_chars = (
             ["[", "{"] if expected_type == list
@@ -778,20 +661,13 @@ def _parse_json_response(
                 if idx == -1:
                     break
                 try:
-                    candidate = _apply_all_fixes(
-                        raw[idx:]
-                    )
+                    candidate = _apply_all_fixes(raw[idx:])
                     candidate = _clean_json(candidate)
                     data      = json.loads(candidate)
                     if isinstance(data, expected_type):
-                        log.debug(
-                            "  ✓ %s: search at %d",
-                            operation, idx,
-                        )
+                        log.debug("  ✓ %s: search at %d", operation, idx)
                         return data
-                except (
-                    json.JSONDecodeError, ValueError
-                ):
+                except (json.JSONDecodeError, ValueError):
                     pass
                 idx      += 1
                 attempts += 1
@@ -897,7 +773,7 @@ def _set_cached_analysis(
 
 
 # ═══════════════════════════════════════════════════
-# CORE GROQ CALLER
+# CORE GROQ CALLER — INSTANT MODEL FALLBACK ON 429
 # ═══════════════════════════════════════════════════
 
 def _call_groq(
@@ -916,18 +792,14 @@ def _call_groq(
     with _groq_lock:
         n_keys = len(_groq_keys)
 
-    total_attempts            = n_keys * MAX_RETRIES_PER_KEY
+    total_attempts     = max(len(MODELS_PRIORITY) * n_keys * 2, 10)
     last_error: Optional[str] = None
-    models_to_try             = list(MODELS_PRIORITY)
-    current_model             = models_to_try[0]
-    model_switches            = 0
-    max_model_switches        = len(MODELS_PRIORITY)
-    empty_retries             = 0
-    MAX_EMPTY_RETRIES         = 2
+    models_to_try      = list(MODELS_PRIORITY)
+    current_model      = models_to_try[0]
+    empty_retries      = 0
+    MAX_EMPTY_RETRIES  = 1
 
-    for attempt in range(
-        total_attempts + max_model_switches
-    ):
+    for attempt in range(total_attempts):
         with _groq_lock:
             n_keys  = len(_groq_keys)
             cur_idx = _groq_index % n_keys
@@ -937,8 +809,7 @@ def _call_groq(
 
         try:
             log.info(
-                "  🤖 %s [key#%d/%d attempt %d"
-                " model=%s]...",
+                "  🤖 %s [key#%d/%d attempt %d model=%s]...",
                 operation_name,
                 cur_idx + 1, n_keys,
                 attempt + 1,
@@ -947,26 +818,17 @@ def _call_groq(
 
             resp = client.chat.completions.create(
                 model       = current_model,
-                messages    = [
-                    {
-                        "role":    "user",
-                        "content": prompt,
-                    }
-                ],
+                messages    = [{"role": "user", "content": prompt}],
                 temperature = temperature,
                 max_tokens  = max_tokens,
             )
 
             if not resp.choices:
-                raise ValueError(
-                    "Groq returned empty choices"
-                )
+                raise ValueError("Groq returned empty choices")
 
-            content = (
-                resp.choices[0].message.content or ""
-            )
+            content = resp.choices[0].message.content or ""
 
-            # ✅ Strip <think> tags (Qwen models)
+            # Strip <think> tags (Qwen models)
             content = re.sub(
                 r"<think>.*?</think>",
                 "",
@@ -976,35 +838,26 @@ def _call_groq(
 
             if not content:
                 empty_retries += 1
-
-                # ✅ retry same model first
                 if empty_retries <= MAX_EMPTY_RETRIES:
                     log.warning(
-                        "  🔄 Empty response — retry "
-                        "same model (%d/%d)",
-                        empty_retries,
-                        MAX_EMPTY_RETRIES,
+                        "  🔄 Empty response — retry same model (%d/%d)",
+                        empty_retries, MAX_EMPTY_RETRIES,
                     )
-                    _rotate_groq_key()  # ✅ FIXED
-                    time.sleep(2)
+                    _rotate_groq_key()
+                    time.sleep(1)
                     continue
 
-                # ✅ after retries → switch model
                 empty_retries = 0
                 if len(models_to_try) > 1:
                     old = models_to_try.pop(0)
                     current_model = models_to_try[0]
                     log.warning(
-                        "  🔄 Empty response from '%s'"
-                        " → trying '%s'",
+                        "  🔄 Empty response from '%s' → trying '%s'",
                         old, current_model,
                     )
                     continue
-                raise ValueError(
-                    "Empty response from Groq"
-                )
+                raise ValueError("Empty response from Groq")
 
-            # ✅ success — reset counter
             empty_retries = 0
             return content
 
@@ -1012,93 +865,58 @@ def _call_groq(
             err_str    = str(e)
             last_error = err_str
 
-            # 404 = model not found → switch MODEL
-            if (
-                "404" in err_str or
-                "model_not_found" in err_str or
-                "does not exist" in err_str
-            ):
-                model_switches += 1
-                if len(models_to_try) > 1:
-                    old = models_to_try.pop(0)
-                    current_model = models_to_try[0]
-                    log.warning(
-                        "  🔄 Model '%s' not available"
-                        " → trying '%s'"
-                        " (%d/%d)",
-                        old, current_model,
-                        model_switches,
-                        max_model_switches,
-                    )
-                    continue
-                else:
-                    raise AIEnrichmentError(
-                        "❌ No available Groq models!\n"
-                        "   Tried: "
-                        + str(MODELS_PRIORITY)
-                    )
-
-            # 429 = rate limit → switch KEY
-            elif _is_rate_limit_error(err_str):
-                wait = min(
-                    RATE_LIMIT_WAIT * (2 ** attempt),
-                    RATE_LIMIT_WAIT_MAX,
-                )
+            # ✅ 429 Rate Limit -> Instantly Switch Model AND Rotate Key
+            if _is_rate_limit_error(err_str):
                 log.warning(
-                    "  🛑 Rate limit [key#%d]"
-                    " — waiting %.1fs...",
-                    cur_idx + 1, wait,
+                    "  🛑 Rate limit on model '%s' [key#%d]",
+                    current_model, cur_idx + 1,
                 )
                 _rotate_groq_key()
-                time.sleep(wait)
+                if len(models_to_try) > 1:
+                    old = models_to_try.pop(0)
+                    current_model = models_to_try[0]
+                    log.info(
+                        "  ⚡ Instant fallback to model '%s'",
+                        current_model,
+                    )
+                    time.sleep(0.5)
+                    continue
+                else:
+                    # All models rate limited
+                    log.warning("  ⚠️ All models rate-limited, sleeping briefly...")
+                    time.sleep(2)
+                    continue
 
-            # 400 = bad request → switch MODEL
-            elif "400" in err_str:
-                model_switches += 1
+            # 404 or 400 = Model unavailable or Bad Request -> Switch Model
+            elif "404" in err_str or "400" in err_str or "model_not_found" in err_str:
                 if len(models_to_try) > 1:
                     old = models_to_try.pop(0)
                     current_model = models_to_try[0]
                     log.warning(
-                        "  🔄 Model '%s' error 400"
-                        " → trying '%s'",
-                        old, current_model,
+                        "  🔄 Model '%s' error (%s) → trying '%s'",
+                        old, "404/400", current_model,
                     )
                     continue
                 else:
                     raise AIEnrichmentError(
-                        "❌ All models returned 400"
+                        f"❌ All Groq models failed: {err_str[:150]}"
                     )
 
-            # 401/403 = auth → switch KEY
-            elif (
-                "401" in err_str or
-                "403" in err_str
-            ):
-                log.warning(
-                    "  🔑 Auth error [key#%d]"
-                    " — rotating...",
-                    cur_idx + 1,
-                )
+            # 401/403 = Auth error -> Rotate Key
+            elif "401" in err_str or "403" in err_str:
+                log.warning("  🔑 Auth error [key#%d] — rotating...", cur_idx + 1)
                 _rotate_groq_key()
                 time.sleep(1)
 
-            # Other → rotate + retry
-            elif attempt < (
-                total_attempts + max_model_switches - 1
-            ):
-                log.warning(
-                    "  ⚠️  Error: %s"
-                    " — rotating key...",
-                    err_str[:80],
-                )
+            # Other errors -> rotate key and sleep briefly
+            else:
+                log.warning("  ⚠️ Error: %s — rotating key...", err_str[:100])
                 _rotate_groq_key()
-                time.sleep(2)
+                time.sleep(1)
 
     raise AIEnrichmentError(
-        f"❌ {operation_name} FAILED after "
-        f"{attempt + 1} attempts.\n"
-        f"   Last error: "
-        f"{last_error[:200] if last_error else '?'}"
+        f"❌ {operation_name} FAILED after {total_attempts} attempts.\n"
+        f"   Last error: {last_error[:200] if last_error else '?'}"
     )
 
 
@@ -1807,7 +1625,7 @@ def _generate_bilingual_content(
 
 
 # ═══════════════════════════════════════════════════
-# ✅ v7.5 — STRICT PROMPT BUILDER
+# STRICT PROMPT BUILDER
 # ═══════════════════════════════════════════════════
 
 def _build_list_prompt(
@@ -1821,9 +1639,6 @@ def _build_list_prompt(
     correct_ex: str = "",
     wrong_ex:   str = "",
 ) -> str:
-    """
-    ✅ v7.5 — prompt أكثر صرامة مع CORRECT/WRONG examples.
-    """
     lang_instruction = _get_lang_instruction(lang)
     json_format      = _get_bilingual_json_format(
         lang, example
@@ -1962,7 +1777,7 @@ def generate_engagement_questions(
 
 
 # ═══════════════════════════════════════════════════
-# 7️⃣ HASHTAGS — v7.5 strict prompt
+# 7️⃣ HASHTAGS
 # ═══════════════════════════════════════════════════
 
 def _clean_hashtags(tags: list) -> list[str]:
@@ -1984,9 +1799,6 @@ def generate_hashtags(
     lang:    str = "ar",
     count:   int = 12,
 ) -> dict[str, list[str]]:
-    """
-    ✅ v7.5 — prompt أصرم + temperature=0.5
-    """
     content_type     = context.get(
         "content_type", "general"
     )
@@ -2020,7 +1832,7 @@ def generate_hashtags(
     raw  = _call_groq(
         prompt,
         max_tokens     = 700,
-        temperature    = 0.5,  # ✅ أقل من 0.6
+        temperature    = 0.5,
         operation_name = "Hashtags",
     )
     data = _parse_json_response(raw, dict, "Hashtags")
@@ -2068,7 +1880,7 @@ def generate_hashtags(
 
 
 # ═══════════════════════════════════════════════════
-# 8️⃣ CAPTIONS — v7.5 ONE line rule
+# 8️⃣ CAPTIONS
 # ═══════════════════════════════════════════════════
 
 def _extract_caption(data: dict, lang: str) -> str:
@@ -2113,9 +1925,6 @@ def generate_captions(
     hashtags: dict[str, list[str]],
     lang:     str = "ar",
 ) -> dict[str, str]:
-    """
-    ✅ v7.5 — prompt أصرم مع ONE line rule
-    """
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     safe_title   = _safe_title(
         title, TITLE_SHORT_CHARS
@@ -2164,7 +1973,7 @@ def generate_captions(
     raw  = _call_groq(
         prompt,
         max_tokens     = 800,
-        temperature    = 0.6,  # ✅ أقل من 0.7
+        temperature    = 0.6,
         operation_name = "Captions",
     )
     data = _parse_json_response(raw, dict, "Captions")
@@ -2544,7 +2353,7 @@ def generate_custom_hook(
 
 
 # ═══════════════════════════════════════════════════
-# 🎯 MASTER ENRICHMENT HELPERS
+# MASTER ENRICHMENT HELPERS
 # ═══════════════════════════════════════════════════
 
 def _build_attractive_title(title: str) -> dict:
@@ -2625,7 +2434,7 @@ def _prepare_keywords_input(
 
 
 # ═══════════════════════════════════════════════════
-# 🎯 MASTER ENRICHMENT
+# MASTER ENRICHMENT
 # ═══════════════════════════════════════════════════
 
 def enrich_record(
@@ -2635,18 +2444,6 @@ def enrich_record(
     verbose:      bool                 = True,
     content_mode: str                  = "short",
 ) -> dict:
-    """
-    الدالة الرئيسية للإثراء بالـ AI — v7.5
-
-    ✅ الإصلاحات الجديدة:
-      - _fix_multiline_strings()
-      - _fix_trailing_comma_in_string()
-      - _fix_unclosed_quotes()
-      - _apply_all_fixes() — دالة موحّدة
-      - _parse_json_response() — 5 محاولات موحّدة
-      - generate_hashtags() — temperature=0.5
-      - generate_captions() — ONE line rule
-    """
     _validate_lang(lang)
     _validate_mode(content_mode)
 
