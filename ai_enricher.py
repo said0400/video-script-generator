@@ -1,12 +1,12 @@
 """
-🧠 Smart AI Assistant powered by Groq — Production Version v8.0
+🧠 Smart AI Assistant powered by Groq — Production Version v8.1
 
-Fixes & Upgrades:
-  ✅ 1. Disabled SDK internal retries (max_retries=0) for instant 429 detection.
-  ✅ 2. Instant Model Drop on 429/400/413: يتم حذف الموديل فوراً والتنقل للموديل التالي بـ 0.1 ثانية.
-  ✅ 3. Multi-Model Priority Queue with daily quota isolation.
-  ✅ 4. Qwen & ALLAM <think> tag stripper.
-  ✅ 5. Thread-safe client and key rotation.
+Fixes & Upgrades in v8.1:
+  ✅ 1. Safe Int Parsing: دالة _safe_int تحمي عملية تحويل الأرقام من نصوص الموديل غير المتوقعة (مثل "<1-10>")
+  ✅ 2. Fixed Prompt Placeholders: استبدال الرموز الإرشادية بمشاهد رقمية صريحة لعدم إرباك النموذج
+  ✅ 3. Disabled SDK internal retries (max_retries=0) for instant 429 detection.
+  ✅ 4. Instant Model Drop on 429/400/413.
+  ✅ 5. Qwen & ALLAM <think> tag stripper.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 # CONFIG
 # ═══════════════════════════════════════════════════
 
-# ✅ v8.0 — قائمة الموديلات المتاحة على Groq مرتبة حسب الأفضلية وحجم الحصة
+# ✅ v8.1 — قائمة الموديلات المتاحة على Groq مرتبة حسب الأفضلية وحجم الحصة
 MODELS_PRIORITY = [
     "groq/compound",          # الموديل الرئيسي
     "allam-2-7b",             # النموذج العربي المتميز حصة يومية مستقلة
@@ -280,7 +280,7 @@ class AIEnrichmentError(Exception):
 
 
 # ═══════════════════════════════════════════════════
-# VALIDATION
+# VALIDATION & PARSING HELPERS
 # ═══════════════════════════════════════════════════
 
 def _validate_lang(lang: str) -> None:
@@ -291,6 +291,50 @@ def _validate_lang(lang: str) -> None:
 def _validate_mode(mode: str) -> None:
     if mode not in _VALID_MODES:
         raise ValueError(f"Invalid content_mode '{mode}'")
+
+
+def _safe_int(val: Any, default: int = DEFAULT_INTENSITY, min_val: int = 1, max_val: int = 10) -> int:
+    """
+    تحويل آمن لأي قيمة إلى رقم صحيح بين min_val و max_val.
+    يحمي الكود من نصوص النماذج مثل "<1-10>" أو "8/10" أو القيم الفارغة.
+    """
+    if val is None:
+        return default
+
+    if isinstance(val, (int, float)):
+        try:
+            return max(min_val, min(max_val, int(val)))
+        except (ValueError, OverflowError):
+            return default
+
+    s = str(val).strip()
+
+    # إذا كان النص يحتوي على صيغة مجال مثل "<1-10>" أو "1-10"
+    if "<" in s or ("-" in s and not s.startswith("-")):
+        # إذا كانت الصيغة واضحة مثل "<1-10>" نرجع القيمة الافتراضية بدلاً من تخمين الرقم
+        if "<" in s or s == "1-10":
+            return default
+
+    # محاولة تحويل مباشر
+    try:
+        return max(min_val, min(max_val, int(float(s))))
+    except ValueError:
+        pass
+
+    # استخراج أول رقم موجود بالنص باستخدام Regex
+    match = re.search(r'\b(10|[1-9])\b', s)
+    if match:
+        return int(match.group(1))
+
+    digits = re.findall(r'\d+', s)
+    if digits:
+        try:
+            parsed = int(digits[0])
+            return max(min_val, min(max_val, parsed))
+        except ValueError:
+            return default
+
+    return default
 
 
 # ═══════════════════════════════════════════════════
@@ -358,7 +402,7 @@ def _get_client(key: str) -> Groq:
             _clients[key] = Groq(
                 api_key     = key,
                 timeout     = GROQ_TIMEOUT,
-                max_retries = 0,  # ✅ Disable internal SDK retries for instant fallback
+                max_retries = 0,  # ✅ إلغاء المحاولات الداخلية لسرعة الاستجابة عند 429
             )
         return _clients[key]
 
@@ -1018,7 +1062,7 @@ def analyze_content(
         f'"primary_emotion":"<curiosity|fear|desire|anger|'
         f'hope|sadness|joy|awe|surprise>",'
         f'"secondary_emotions":["emotion1","emotion2"],'
-        f'"intensity":<1-10>,'
+        f'"intensity":8,'
         f'"audience":"<short>",'
         f'"tone":"<energetic|calm|emotional|'
         f'inspirational|mysterious|urgent>",'
@@ -1042,12 +1086,7 @@ def analyze_content(
                 f"{field}"
             )
 
-    data["intensity"] = max(
-        1,
-        min(10, int(data.get(
-            "intensity", DEFAULT_INTENSITY
-        ))),
-    )
+    data["intensity"] = _safe_int(data.get("intensity", DEFAULT_INTENSITY))
 
     _set_cached_analysis(title, content, lang, data)
 
@@ -2563,3 +2602,4 @@ def enrich_record(
         "lang":                 lang,
         "content_mode":         content_mode,
     }
+      
