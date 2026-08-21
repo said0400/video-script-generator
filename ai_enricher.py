@@ -1,11 +1,12 @@
 """
-🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.7
+🧠 Smart AI Assistant powered by Groq — Production Version v8.0
 
-Changes from v7.5:
-  ✅ 1. Instant Model Switch on 429 RateLimit: عند حدوث 429 يتم الانتقال للموديل التالي فوراً
-  ✅ 2. Includes ALLAM-2-7B (النموذج العربي المتخصص على Groq بحدود عالية)
-  ✅ 3. Smart Key Rotation + Model Fallback
-  ✅ 4. Qwen <think> tag stripper
+Fixes & Upgrades:
+  ✅ 1. Disabled SDK internal retries (max_retries=0) for instant 429 detection.
+  ✅ 2. Instant Model Drop on 429/400/413: يتم حذف الموديل فوراً والتنقل للموديل التالي بـ 0.1 ثانية.
+  ✅ 3. Multi-Model Priority Queue with daily quota isolation.
+  ✅ 4. Qwen & ALLAM <think> tag stripper.
+  ✅ 5. Thread-safe client and key rotation.
 """
 
 from __future__ import annotations
@@ -33,13 +34,13 @@ log = logging.getLogger(__name__)
 # CONFIG
 # ═══════════════════════════════════════════════════
 
-# ✅ v7.7 — قائمة الموديلات المتاحة على Groq مرتبة حسب الأفضلية والسرعة
+# ✅ v8.0 — قائمة الموديلات المتاحة على Groq مرتبة حسب الأفضلية وحجم الحصة
 MODELS_PRIORITY = [
-    "groq/compound",          # الموديل الرئيسي الممتاز
-    "groq/compound-mini",     # السريع
-    "allam-2-7b",             # النموذج العربي المتخصص (حصته عالية جداً)
-    "openai/gpt-oss-120b",    # قوي ومتاح
-    "qwen/qwen3.6-27b",       # ممتازة جودته
+    "groq/compound",          # الموديل الرئيسي
+    "allam-2-7b",             # النموذج العربي المتميز حصة يومية مستقلة
+    "groq/compound-mini",     # نموذج سريع
+    "openai/gpt-oss-120b",    # قوي ومستقل الحصة
+    "qwen/qwen3.6-27b",       # جودة عالية جداً
 ]
 
 MAX_RETRIES_PER_KEY  = 2
@@ -64,7 +65,7 @@ CAPTION_HASHTAG_LIMIT   = 12
 
 BATCH_SIZE_TAGS     = 10
 BATCH_SIZE_KEYWORDS = 20
-BATCH_SLEEP         = 1.5
+BATCH_SLEEP         = 1.0
 ANALYSIS_CACHE_SIZE = 50
 
 INTER_OPERATION_SLEEP = 0.5
@@ -355,8 +356,9 @@ def _get_client(key: str) -> Groq:
     with _groq_lock:
         if key not in _clients:
             _clients[key] = Groq(
-                api_key = key,
-                timeout = GROQ_TIMEOUT,
+                api_key     = key,
+                timeout     = GROQ_TIMEOUT,
+                max_retries = 0,  # ✅ Disable internal SDK retries for instant fallback
             )
         return _clients[key]
 
@@ -773,7 +775,7 @@ def _set_cached_analysis(
 
 
 # ═══════════════════════════════════════════════════
-# CORE GROQ CALLER — INSTANT MODEL FALLBACK ON 429
+# CORE GROQ CALLER (INSTANT MODEL DROP ON 429/413/400)
 # ═══════════════════════════════════════════════════
 
 def _call_groq(
@@ -785,37 +787,27 @@ def _call_groq(
     _ensure_keys_loaded()
 
     if not _groq_keys:
-        raise AIEnrichmentError(
-            "GROQ_API_KEY not found in environment."
-        )
+        raise AIEnrichmentError("GROQ_API_KEY not found in environment.")
 
-    with _groq_lock:
-        n_keys = len(_groq_keys)
-
-    total_attempts     = max(len(MODELS_PRIORITY) * n_keys * 2, 10)
+    candidate_models = list(MODELS_PRIORITY)
     last_error: Optional[str] = None
-    models_to_try      = list(MODELS_PRIORITY)
-    current_model      = models_to_try[0]
-    empty_retries      = 0
-    MAX_EMPTY_RETRIES  = 1
 
-    for attempt in range(total_attempts):
+    while candidate_models:
+        current_model = candidate_models[0]
+
         with _groq_lock:
-            n_keys  = len(_groq_keys)
-            cur_idx = _groq_index % n_keys
-            key     = _groq_keys[cur_idx]
+            num_keys = len(_groq_keys)
+            cur_idx  = _groq_index % num_keys
+            key      = _groq_keys[cur_idx]
 
         client = _get_client(key)
 
-        try:
-            log.info(
-                "  🤖 %s [key#%d/%d attempt %d model=%s]...",
-                operation_name,
-                cur_idx + 1, n_keys,
-                attempt + 1,
-                current_model,
-            )
+        log.info(
+            "  🤖 %s [model=%s, key#%d/%d]...",
+            operation_name, current_model, cur_idx + 1, num_keys
+        )
 
+        try:
             resp = client.chat.completions.create(
                 model       = current_model,
                 messages    = [{"role": "user", "content": prompt}],
@@ -828,7 +820,7 @@ def _call_groq(
 
             content = resp.choices[0].message.content or ""
 
-            # Strip <think> tags (Qwen models)
+            # Strip <think> tags (Qwen / DeepSeek models)
             content = re.sub(
                 r"<think>.*?</think>",
                 "",
@@ -837,85 +829,50 @@ def _call_groq(
             ).strip()
 
             if not content:
-                empty_retries += 1
-                if empty_retries <= MAX_EMPTY_RETRIES:
-                    log.warning(
-                        "  🔄 Empty response — retry same model (%d/%d)",
-                        empty_retries, MAX_EMPTY_RETRIES,
-                    )
-                    _rotate_groq_key()
-                    time.sleep(1)
-                    continue
+                log.warning("  ⚠️ Empty response from '%s' → trying next model", current_model)
+                candidate_models.pop(0)  # Drop this model
+                continue
 
-                empty_retries = 0
-                if len(models_to_try) > 1:
-                    old = models_to_try.pop(0)
-                    current_model = models_to_try[0]
-                    log.warning(
-                        "  🔄 Empty response from '%s' → trying '%s'",
-                        old, current_model,
-                    )
-                    continue
-                raise ValueError("Empty response from Groq")
-
-            empty_retries = 0
             return content
 
         except Exception as e:
             err_str    = str(e)
             last_error = err_str
 
-            # ✅ 429 Rate Limit -> Instantly Switch Model AND Rotate Key
+            # ✅ 1) Rate Limit (429 / Quota / RPD) -> Drop model immediately!
             if _is_rate_limit_error(err_str):
                 log.warning(
-                    "  🛑 Rate limit on model '%s' [key#%d]",
-                    current_model, cur_idx + 1,
+                    "  🛑 Model '%s' rate-limited (429/RPD). Dropping model...",
+                    current_model
                 )
                 _rotate_groq_key()
-                if len(models_to_try) > 1:
-                    old = models_to_try.pop(0)
-                    current_model = models_to_try[0]
-                    log.info(
-                        "  ⚡ Instant fallback to model '%s'",
-                        current_model,
-                    )
-                    time.sleep(0.5)
-                    continue
-                else:
-                    # All models rate limited
-                    log.warning("  ⚠️ All models rate-limited, sleeping briefly...")
-                    time.sleep(2)
-                    continue
+                candidate_models.pop(0)  # Drop model and try next in MODELS_PRIORITY
+                continue
 
-            # 404 or 400 = Model unavailable or Bad Request -> Switch Model
-            elif "404" in err_str or "400" in err_str or "model_not_found" in err_str:
-                if len(models_to_try) > 1:
-                    old = models_to_try.pop(0)
-                    current_model = models_to_try[0]
-                    log.warning(
-                        "  🔄 Model '%s' error (%s) → trying '%s'",
-                        old, "404/400", current_model,
-                    )
-                    continue
-                else:
-                    raise AIEnrichmentError(
-                        f"❌ All Groq models failed: {err_str[:150]}"
-                    )
+            # ✅ 2) Model not found or Bad Request (404/400/413) -> Drop model!
+            elif any(code in err_str for code in ("404", "400", "413", "model_not_found")):
+                log.warning(
+                    "  ⚠️ Model '%s' error (%s) -> dropping model...",
+                    current_model, err_str[:80]
+                )
+                _rotate_groq_key()
+                candidate_models.pop(0)  # Drop model and try next!
+                continue
 
-            # 401/403 = Auth error -> Rotate Key
+            # ✅ 3) Auth error (401/403) -> Rotate key
             elif "401" in err_str or "403" in err_str:
-                log.warning("  🔑 Auth error [key#%d] — rotating...", cur_idx + 1)
+                log.warning("  🔑 Auth error [key#%d] — rotating key...", cur_idx + 1)
                 _rotate_groq_key()
                 time.sleep(1)
 
-            # Other errors -> rotate key and sleep briefly
+            # ✅ 4) Other error -> Rotate key
             else:
-                log.warning("  ⚠️ Error: %s — rotating key...", err_str[:100])
+                log.warning("  ⚠️ Error on '%s': %s — rotating key...", current_model, err_str[:80])
                 _rotate_groq_key()
                 time.sleep(1)
 
     raise AIEnrichmentError(
-        f"❌ {operation_name} FAILED after {total_attempts} attempts.\n"
+        f"❌ {operation_name} FAILED: All candidate models failed or rate-limited.\n"
         f"   Last error: {last_error[:200] if last_error else '?'}"
     )
 
