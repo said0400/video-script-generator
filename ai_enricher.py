@@ -1,7 +1,7 @@
 """
-🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.5
+🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.6
 
-Changes from v7.3:
+Changes from v7.5:
   ✅ 1. _fix_trailing_comma_in_string() — فاصلة داخل string
   ✅ 2. _fix_multiline_strings() — multiline strings في JSON
   ✅ 3. _fix_unclosed_quotes() — quotes غير مغلقة
@@ -9,6 +9,21 @@ Changes from v7.3:
   ✅ 5. _parse_json_response() — 5 محاولات موحّدة
   ✅ 6. generate_hashtags() — prompt أصرم + temperature=0.5
   ✅ 7. generate_captions() — prompt أصرم مع ONE line rule
+
+Changes in v7.6 (NEW):
+  ✅ 8.  REASONING_MODELS + REASONING_TOKEN_MULTIPLIER —
+         نضاعف max_tokens تلقائياً لموديلات التفكير (reasoning
+         models مثل qwen) عشان ما ينقطع الرد أثناء <think>.
+  ✅ 9.  اكتشاف القطع أثناء التفكير (finish_reason == "length"
+         و <think> بدون </think>) في _call_groq → نبدّل الموديل
+         فوراً بدل ما نرجع رد فاسد.
+  ✅ 10. MODELS_PRIORITY أعيد ترتيبها: موديلات non-reasoning
+         أولاً، وqwen (reasoning) في آخر القائمة كحل أخير.
+  ✅ 11. generate_pattern_interrupts() — try/except + fallback
+         بدل ما يوقف الفيديو كامل.
+  ✅ 12. generate_engagement_questions() — try/except + fallback.
+  ✅ 13. generate_hashtags() — try/except + fallback.
+  ✅ 14. generate_captions() — try/except + fallback.
 """
 
 from __future__ import annotations
@@ -37,12 +52,27 @@ log = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════
 
 # ✅ v7.6 — قائمة موديلات مع Auto Fallback
+# ملاحظة مهمة: qwen/qwen3.6-27b هو "reasoning model" (يفكر قبل
+# ما يجاوب بـ <think>...</think>) وهذا يستهلك توكنز كثيرة، فلو
+# انقطع الرد أثناء التفكير ما توصل JSON صالحة أبداً. لذلك حطيناه
+# آخر خيار (fallback أخير) بدل ثاني خيار، وموديلات non-reasoning
+# الأسرع والأأمن قبله.
 MODELS_PRIORITY = [
     "allam-2-7b",           # 7,000 طلب/يوم (الأعلى حصة والأفضل)
-    "qwen/qwen3.6-27b",     # 1,000 طلب/يوم (جودة فائقة في JSON)
-    "openai/gpt-oss-120b",  # 1,000 طلب/يوم (نموذج قوي جداً)
-    "openai/gpt-oss-20b",   # 1,000 طلب/يوم (سريع واحتياطي)
+    "openai/gpt-oss-20b",   # 1,000 طلب/يوم (سريع، بدون thinking — احتياطي أول)
+    "openai/gpt-oss-120b",  # 1,000 طلب/يوم (نموذج قوي جداً، بدون thinking)
+    "qwen/qwen3.6-27b",     # 1,000 طلب/يوم (جودة عالية لكنه reasoning model — آخر خيار)
 ]
+
+# ✅ v7.6 — موديلات التفكير (reasoning) التي تحتاج توكنز إضافية
+REASONING_MODELS: set[str] = {
+    "qwen/qwen3.6-27b",
+}
+# نضاعف max_tokens لهذي الموديلات عشان يكفي وقت "للتفكير"
+# قبل ما يبدأ يكتب الـ JSON الفعلي.
+REASONING_TOKEN_MULTIPLIER = 3.0
+# حد أقصى لتفادي طلبات ضخمة جداً بدون داعي
+REASONING_TOKEN_CAP = 8000
 
 
 MAX_RETRIES_PER_KEY  = 3
@@ -269,6 +299,48 @@ _STREET_FALLBACK: dict[str, str] = {
     "ar": "شاهد الفيديو كاملاً! 🔥",
     "fr": "Regarde la vidéo complète ! 🔥",
     "en": "Watch the full video! 🔥",
+}
+
+# ✅ v7.6 — fallback ثابت لعمليات bilingual لما الـ AI يفشل
+# نستخدمهم بدل ما نوقف الفيديو كامل.
+_PATTERN_INTERRUPTS_FALLBACK: dict[str, list[str]] = {
+    "ar": ["ثواني...", "لا تفوّت هذا!", "تخيل بس"],
+    "fr": ["Attends...", "Incroyable !", "Regarde ça"],
+    "en": ["Wait...", "No way!", "Listen up"],
+}
+
+_ENGAGEMENT_QUESTIONS_FALLBACK: dict[str, list[str]] = {
+    "ar": [
+        "شو رأيك بهذا؟ 🤔",
+        "صار معك قبل؟ 😮",
+        "تحس إنك تتفق؟ 💭",
+    ],
+    "fr": [
+        "Qu'en penses-tu ? 🤔",
+        "Ça t'est déjà arrivé ? 😮",
+        "Tu es d'accord ? 💭",
+    ],
+    "en": [
+        "What do you think? 🤔",
+        "Has this happened to you? 😮",
+        "Can you relate? 💭",
+    ],
+}
+
+_HASHTAGS_FALLBACK_EN: list[str] = [
+    "#viral", "#fyp", "#foryou", "#trending",
+    "#motivation", "#psychology",
+]
+_HASHTAGS_FALLBACK_AR: list[str] = [
+    "#فيروسي", "#ترند", "#تحفيز", "#سيكولوجيا",
+]
+_HASHTAGS_FALLBACK_FR: list[str] = [
+    "#viral", "#tendance", "#motivation", "#psychologie",
+]
+_HASHTAGS_FALLBACK_BY_LANG: dict[str, list[str]] = {
+    "ar": _HASHTAGS_FALLBACK_AR,
+    "fr": _HASHTAGS_FALLBACK_FR,
+    "en": _HASHTAGS_FALLBACK_EN,
 }
 
 
@@ -904,6 +976,28 @@ def _set_cached_analysis(
 # CORE GROQ CALLER
 # ═══════════════════════════════════════════════════
 
+def _looks_like_truncated_thinking(content: str) -> bool:
+    """
+    ✅ v7.6 — يكتشف إذا الرد انقطع أثناء "تفكير" الموديل
+    (مثل qwen) قبل ما يوصل لإنتاج الـ JSON الفعلي.
+
+    الحالة: فيه <think> بدون </think> مقابلة، وما فيه أي
+    مؤشر JSON حقيقي ({ أو [) بعد آخر ظهور لـ <think>.
+    """
+    if "<think>" not in content:
+        return False
+    if "</think>" in content:
+        return False
+    # فيه <think> مفتوح بدون إغلاق — تحقق هل فيه JSON فعلي بعده
+    idx = content.rfind("<think>")
+    tail = content[idx:]
+    if "{" in tail or "[" in tail:
+        # ممكن يكون بدأ يكتب JSON فعلاً رغم عدم إغلاق الوسم —
+        # نعطيه فرصة، الفشل الفعلي سيُكتشف لاحقاً في parsing
+        return False
+    return True
+
+
 def _call_groq(
     prompt:         str,
     max_tokens:     int   = 800,
@@ -931,6 +1025,16 @@ def _call_groq(
 
         client = _get_client(key)
 
+        # ✅ v7.6 — زيادة التوكنز تلقائياً لموديلات التفكير
+        # (reasoning models) عشان "يكفيها" تفكر ثم تكتب الـ JSON
+        # بدون ما ينقطع الرد في منتصف <think>.
+        effective_max_tokens = max_tokens
+        if current_model in REASONING_MODELS:
+            effective_max_tokens = min(
+                int(max_tokens * REASONING_TOKEN_MULTIPLIER),
+                REASONING_TOKEN_CAP,
+            )
+
         try:
             log.info(
                 "  🤖 %s [key#%d/%d attempt %d model=%s]...",
@@ -944,13 +1048,16 @@ def _call_groq(
                 model       = current_model,
                 messages    = [{"role": "user", "content": prompt}],
                 temperature = temperature,
-                max_tokens  = max_tokens,
+                max_tokens  = effective_max_tokens,
             )
 
             if not resp.choices:
                 raise ValueError("Groq returned empty choices")
 
-            content = resp.choices[0].message.content or ""
+            choice       = resp.choices[0]
+            content      = choice.message.content or ""
+            finish_reason = getattr(choice, "finish_reason", None)
+
             if not content.strip():
                 if len(models_to_try) > 1:
                     old = models_to_try.pop(0)
@@ -958,6 +1065,30 @@ def _call_groq(
                     log.warning("  🔄 Empty response from '%s' → trying '%s'", old, current_model)
                     continue
                 raise ValueError("Empty response from Groq")
+
+            # ✅ v7.6 — اكتشاف القطع أثناء التفكير (reasoning
+            # truncation): الرد انتهى بسبب "length" وفيه <think>
+            # بدون إغلاق ولا أثر JSON → لا فائدة من محاولة parsing،
+            # بدّل الموديل فوراً بدل ما نرجّع رد فاسد للمتصل.
+            if (
+                finish_reason == "length"
+                and _looks_like_truncated_thinking(content)
+            ):
+                if len(models_to_try) > 1:
+                    old = models_to_try.pop(0)
+                    current_model = models_to_try[0]
+                    log.warning(
+                        "  🔄 Truncated mid-thinking on '%s' "
+                        "(finish_reason=length) → switching to '%s'",
+                        old, current_model,
+                    )
+                    continue
+                else:
+                    log.warning(
+                        "  ⚠️  Truncated mid-thinking and no more "
+                        "models to try — returning content as-is "
+                        "(caller will attempt JSON recovery)."
+                    )
 
             return content.strip()
 
@@ -1778,6 +1909,20 @@ def _build_list_prompt(
 # 5️⃣ PATTERN INTERRUPTS
 # ═══════════════════════════════════════════════════
 
+def _pattern_interrupts_fallback(lang: str) -> dict[str, list[str]]:
+    """✅ v7.6 — fallback جاهز لو فشلت كل محاولات الـ AI."""
+    fb: dict[str, list[str]] = {
+        "en": list(_PATTERN_INTERRUPTS_FALLBACK["en"])
+    }
+    if lang != "en":
+        fb[lang] = list(
+            _PATTERN_INTERRUPTS_FALLBACK.get(
+                lang, _PATTERN_INTERRUPTS_FALLBACK["en"]
+            )
+        )
+    return fb
+
+
 def generate_pattern_interrupts(
     title:   str,
     content: str,
@@ -1810,20 +1955,44 @@ def generate_pattern_interrupts(
             '{"en": [Wait..., No way!, Real talk]}'
         ),
     )
-    return _generate_bilingual_content(
-        operation_name = "Pattern Interrupts",
-        prompt         = prompt,
-        max_tokens     = 800,
-        temperature    = 0.7,
-        lang           = lang,
-        count          = count,
-        min_count      = 3,
-    )
+
+    # ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
+    try:
+        return _generate_bilingual_content(
+            operation_name = "Pattern Interrupts",
+            prompt         = prompt,
+            max_tokens     = 800,
+            temperature    = 0.7,
+            lang           = lang,
+            count          = count,
+            min_count      = 3,
+        )
+    except Exception as e:
+        log.warning(
+            "  ⚠️  Pattern Interrupts failed: %s "
+            "— using fallback",
+            e,
+        )
+        return _pattern_interrupts_fallback(lang)
 
 
 # ═══════════════════════════════════════════════════
 # 6️⃣ ENGAGEMENT QUESTIONS
 # ═══════════════════════════════════════════════════
+
+def _engagement_questions_fallback(lang: str) -> dict[str, list[str]]:
+    """✅ v7.6 — fallback جاهز لو فشلت كل محاولات الـ AI."""
+    fb: dict[str, list[str]] = {
+        "en": list(_ENGAGEMENT_QUESTIONS_FALLBACK["en"])
+    }
+    if lang != "en":
+        fb[lang] = list(
+            _ENGAGEMENT_QUESTIONS_FALLBACK.get(
+                lang, _ENGAGEMENT_QUESTIONS_FALLBACK["en"]
+            )
+        )
+    return fb
+
 
 def generate_engagement_questions(
     title:   str,
@@ -1863,15 +2032,25 @@ def generate_engagement_questions(
             'Have you felt this]}'
         ),
     )
-    return _generate_bilingual_content(
-        operation_name = "Engagement Questions",
-        prompt         = prompt,
-        max_tokens     = 800,
-        temperature    = 0.7,
-        lang           = lang,
-        count          = count,
-        min_count      = 3,
-    )
+
+    # ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
+    try:
+        return _generate_bilingual_content(
+            operation_name = "Engagement Questions",
+            prompt         = prompt,
+            max_tokens     = 800,
+            temperature    = 0.7,
+            lang           = lang,
+            count          = count,
+            min_count      = 3,
+        )
+    except Exception as e:
+        log.warning(
+            "  ⚠️  Engagement Questions failed: %s "
+            "— using fallback",
+            e,
+        )
+        return _engagement_questions_fallback(lang)
 
 
 # ═══════════════════════════════════════════════════
@@ -1890,6 +2069,26 @@ def _clean_hashtags(tags: list) -> list[str]:
     return result
 
 
+def _hashtags_fallback(
+    lang:         str,
+    content_type: str,
+) -> dict[str, list[str]]:
+    """✅ v7.6 — fallback جاهز لو فشلت كل محاولات الـ AI."""
+    en_tags = list(_HASHTAGS_FALLBACK_EN)
+    ct_tag  = "#" + re.sub(r"\s+", "_", content_type.strip())
+    if ct_tag not in en_tags and len(ct_tag) > 1:
+        en_tags.append(ct_tag)
+
+    fb: dict[str, list[str]] = {"en": en_tags}
+    if lang != "en":
+        fb[lang] = list(
+            _HASHTAGS_FALLBACK_BY_LANG.get(
+                lang, _HASHTAGS_FALLBACK_EN
+            )
+        )
+    return fb
+
+
 def generate_hashtags(
     title:   str,
     content: str,
@@ -1899,6 +2098,7 @@ def generate_hashtags(
 ) -> dict[str, list[str]]:
     """
     ✅ v7.5 — prompt أصرم + temperature=0.5
+    ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
     """
     content_type     = context.get(
         "content_type", "general"
@@ -1930,54 +2130,62 @@ def generate_hashtags(
         f"{json_format}"
     )
 
-    raw  = _call_groq(
-        prompt,
-        max_tokens     = 700,
-        temperature    = 0.5,  # ✅ أقل من 0.6
-        operation_name = "Hashtags",
-    )
-    data = _parse_json_response(raw, dict, "Hashtags")
+    try:
+        raw  = _call_groq(
+            prompt,
+            max_tokens     = 700,
+            temperature    = 0.5,  # ✅ أقل من 0.6
+            operation_name = "Hashtags",
+        )
+        data = _parse_json_response(raw, dict, "Hashtags")
 
-    if lang == "en":
-        en_values = _extract_en_value(
+        if lang == "en":
+            en_values = _extract_en_value(
+                data, "Hashtags", 5
+            )
+            result    = {
+                "en": _clean_hashtags(en_values[:count])
+            }
+            if len(result["en"]) < 5:
+                raise AIEnrichmentError(
+                    "❌ Hashtags: not enough EN tags"
+                )
+            log.info(
+                "  ✅ Hashtags: EN(%d)",
+                len(result['en']),
+            )
+            return result
+
+        lang_values = _extract_lang_value(
+            data, lang, "Hashtags", 5
+        )
+        en_values   = _extract_en_value(
             data, "Hashtags", 5
         )
-        result    = {
-            "en": _clean_hashtags(en_values[:count])
+        result = {
+            lang: _clean_hashtags(lang_values[:count]),
+            "en": _clean_hashtags(en_values[:count]),
         }
-        if len(result["en"]) < 5:
+        if (
+            len(result[lang]) < 5 or
+            len(result["en"]) < 5
+        ):
             raise AIEnrichmentError(
-                "❌ Hashtags: not enough EN tags"
+                "❌ Hashtags: not enough tags"
             )
         log.info(
-            "  ✅ Hashtags: EN(%d)",
+            "  ✅ Hashtags: %s(%d) | EN(%d)",
+            lang.upper(), len(result[lang]),
             len(result['en']),
         )
         return result
 
-    lang_values = _extract_lang_value(
-        data, lang, "Hashtags", 5
-    )
-    en_values   = _extract_en_value(
-        data, "Hashtags", 5
-    )
-    result = {
-        lang: _clean_hashtags(lang_values[:count]),
-        "en": _clean_hashtags(en_values[:count]),
-    }
-    if (
-        len(result[lang]) < 5 or
-        len(result["en"]) < 5
-    ):
-        raise AIEnrichmentError(
-            "❌ Hashtags: not enough tags"
+    except Exception as e:
+        log.warning(
+            "  ⚠️  Hashtags failed: %s — using fallback",
+            e,
         )
-    log.info(
-        "  ✅ Hashtags: %s(%d) | EN(%d)",
-        lang.upper(), len(result[lang]),
-        len(result['en']),
-    )
-    return result
+        return _hashtags_fallback(lang, content_type)
 
 
 # ═══════════════════════════════════════════════════
@@ -2019,6 +2227,37 @@ def _append_hashtags_to_caption(
     return f"{caption}\n.\n.\n.\n{tags_str}"
 
 
+def _captions_fallback(
+    title:    str,
+    context:  dict,
+    hashtags: dict[str, list[str]],
+    lang:     str,
+) -> dict[str, str]:
+    """✅ v7.6 — fallback جاهز لو فشلت كل محاولات الـ AI."""
+    cta = _STREET_FALLBACK.get(lang, _STREET_FALLBACK["en"])
+    base_caption = f"{title}\n\n{cta}"
+
+    if lang == "en":
+        en_tags = hashtags.get("en", [])
+        caption = _append_hashtags_to_caption(
+            base_caption, en_tags
+        )
+        return {"en": caption[:CAPTION_MAX_LENGTH]}
+
+    lang_tags = hashtags.get(lang, hashtags.get("en", []))
+    en_tags   = hashtags.get("en", [])
+    lang_cap  = _append_hashtags_to_caption(
+        base_caption, lang_tags
+    )
+    en_cap    = _append_hashtags_to_caption(
+        f"{title}\n\n{_STREET_FALLBACK['en']}", en_tags
+    )
+    return {
+        lang: lang_cap[:CAPTION_MAX_LENGTH],
+        "en": en_cap[:CAPTION_MAX_LENGTH],
+    }
+
+
 def generate_captions(
     title:    str,
     content:  str,
@@ -2028,6 +2267,7 @@ def generate_captions(
 ) -> dict[str, str]:
     """
     ✅ v7.5 — prompt أصرم مع ONE line rule
+    ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
     """
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     safe_title   = _safe_title(
@@ -2074,64 +2314,74 @@ def generate_captions(
         f"{json_format}"
     )
 
-    raw  = _call_groq(
-        prompt,
-        max_tokens     = 800,
-        temperature    = 0.6,  # ✅ أقل من 0.7
-        operation_name = "Captions",
-    )
-    data = _parse_json_response(raw, dict, "Captions")
-
-    lang_caption = _extract_caption(data, lang)
-    en_caption   = (
-        data["en"].strip()
-        if (
-            "en" in data and
-            isinstance(data["en"], str)
+    try:
+        raw  = _call_groq(
+            prompt,
+            max_tokens     = 800,
+            temperature    = 0.6,  # ✅ أقل من 0.7
+            operation_name = "Captions",
         )
-        else ""
-    )
+        data = _parse_json_response(raw, dict, "Captions")
 
-    if not lang_caption:
-        raise AIEnrichmentError(
-            f"❌ Captions: missing {lang} caption"
+        lang_caption = _extract_caption(data, lang)
+        en_caption   = (
+            data["en"].strip()
+            if (
+                "en" in data and
+                isinstance(data["en"], str)
+            )
+            else ""
         )
 
-    if not en_caption:
-        en_caption = lang_caption
+        if not lang_caption:
+            raise AIEnrichmentError(
+                f"❌ Captions: missing {lang} caption"
+            )
 
-    if lang == "en":
-        en_tags = hashtags.get("en", [])
-        caption = _append_hashtags_to_caption(
-            lang_caption, en_tags
+        if not en_caption:
+            en_caption = lang_caption
+
+        if lang == "en":
+            en_tags = hashtags.get("en", [])
+            caption = _append_hashtags_to_caption(
+                lang_caption, en_tags
+            )
+            result  = {"en": caption[:CAPTION_MAX_LENGTH]}
+            log.info(
+                "  ✅ Captions: EN(%d)",
+                len(result['en']),
+            )
+            return result
+
+        lang_tags    = hashtags.get(
+            lang, hashtags.get("en", [])
         )
-        result  = {"en": caption[:CAPTION_MAX_LENGTH]}
+        en_tags      = hashtags.get("en", [])
+        lang_caption = _append_hashtags_to_caption(
+            lang_caption, lang_tags
+        )
+        en_caption   = _append_hashtags_to_caption(
+            en_caption, en_tags
+        )
+        result = {
+            lang: lang_caption[:CAPTION_MAX_LENGTH],
+            "en": en_caption[:CAPTION_MAX_LENGTH],
+        }
         log.info(
-            "  ✅ Captions: EN(%d)",
+            "  ✅ Captions: %s(%d) | EN(%d)",
+            lang.upper(), len(result[lang]),
             len(result['en']),
         )
         return result
 
-    lang_tags    = hashtags.get(
-        lang, hashtags.get("en", [])
-    )
-    en_tags      = hashtags.get("en", [])
-    lang_caption = _append_hashtags_to_caption(
-        lang_caption, lang_tags
-    )
-    en_caption   = _append_hashtags_to_caption(
-        en_caption, en_tags
-    )
-    result = {
-        lang: lang_caption[:CAPTION_MAX_LENGTH],
-        "en": en_caption[:CAPTION_MAX_LENGTH],
-    }
-    log.info(
-        "  ✅ Captions: %s(%d) | EN(%d)",
-        lang.upper(), len(result[lang]),
-        len(result['en']),
-    )
-    return result
+    except Exception as e:
+        log.warning(
+            "  ⚠️  Captions failed: %s — using fallback",
+            e,
+        )
+        return _captions_fallback(
+            title, context, hashtags, lang
+        )
 
 
 # ═══════════════════════════════════════════════════
@@ -2549,9 +2799,9 @@ def enrich_record(
     content_mode: str                  = "short",
 ) -> dict:
     """
-    الدالة الرئيسية للإثراء بالـ AI — v7.5
+    الدالة الرئيسية للإثراء بالـ AI — v7.6
 
-    ✅ الإصلاحات الجديدة:
+    ✅ الإصلاحات (v7.5):
       - _fix_multiline_strings()
       - _fix_trailing_comma_in_string()
       - _fix_unclosed_quotes()
@@ -2559,6 +2809,14 @@ def enrich_record(
       - _parse_json_response() — 5 محاولات موحّدة
       - generate_hashtags() — temperature=0.5
       - generate_captions() — ONE line rule
+
+    ✅ الإصلاحات الجديدة (v7.6):
+      - موديلات reasoning (qwen) تاخذ توكنز أكبر تلقائياً
+      - اكتشاف القطع أثناء التفكير وتبديل الموديل فوراً
+      - MODELS_PRIORITY معاد ترتيبها (non-reasoning أولاً)
+      - Pattern Interrupts / Engagement Questions / Hashtags /
+        Captions كلها صارت "graceful" — تفشل بهدوء مع fallback
+        بدل ما توقف الفيديو كامل
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
