@@ -622,6 +622,10 @@ def _clean_json(raw: str) -> str:
         return ""
 
     text = raw.strip()
+
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<reasoning>.*?</reasoning>', '', text, flags=re.DOTALL) 
+  
     text = re.sub(r"^```(?:json|JSON)?\s*\n?", "", text)
     text = re.sub(r"\n?\s*```\s*$",            "", text)
     text = text.strip()
@@ -1137,19 +1141,20 @@ def analyze_content(
         f"and return JSON ONLY.\n\n"
         f"TITLE: {safe_title}\n\n"
         f"CONTENT:\n{safe_content}\n\n"
-        f"Return ONLY this JSON "
+        f"Allowed values:\n"
+        f"- content_type: psychology, relationships, business, lifestyle, motivation, education, health, spirituality, finance, social_skills\n"
+        f"- primary_emotion: curiosity, fear, desire, anger, hope, sadness, joy, awe, surprise\n"
+        f"- tone: energetic, calm, emotional, inspirational, mysterious, urgent\n"
+        f"- intensity: integer between 1 and 10\n\n"
+        f"Return ONLY a JSON object matching this structure "
         f"(no markdown, no explanation):\n"
-        f'{{"content_type":"<psychology|relationships|'
-        f'business|lifestyle|motivation|education|health|'
-        f'spirituality|finance|social_skills>",'
-        f'"primary_emotion":"<curiosity|fear|desire|anger|'
-        f'hope|sadness|joy|awe|surprise>",'
-        f'"secondary_emotions":["emotion1","emotion2"],'
-        f'"intensity":<1-10>,'
-        f'"audience":"<short>",'
-        f'"tone":"<energetic|calm|emotional|'
-        f'inspirational|mysterious|urgent>",'
-        f'"topic_summary":"<one sentence in {lang_name}>"}}'
+        f'{{"content_type":"psychology",'
+        f'"primary_emotion":"curiosity",'
+        f'"secondary_emotions":["hope","awe"],'
+        f'"intensity":7,'
+        f'"audience":"short",'
+        f'"tone":"energetic",'
+        f'"topic_summary":"one sentence in {lang_name}"}}'
     )
 
     raw  = _call_groq(
@@ -1169,12 +1174,18 @@ def analyze_content(
                 f"{field}"
             )
 
-    data["intensity"] = max(
-        1,
-        min(10, int(data.get(
-            "intensity", DEFAULT_INTENSITY
-        ))),
-    )
+    # معالجة استخراج الرقم للحقل intensity بشكل محصن ضد أي خطأ
+    raw_intensity = data.get("intensity", DEFAULT_INTENSITY)
+    try:
+        if isinstance(raw_intensity, (int, float)):
+            val = int(raw_intensity)
+        else:
+            digits = re.findall(r"\d+", str(raw_intensity))
+            val = int(digits[0]) if digits else DEFAULT_INTENSITY
+    except Exception:
+        val = DEFAULT_INTENSITY
+
+    data["intensity"] = max(1, min(10, val))
 
     _set_cached_analysis(title, content, lang, data)
 
