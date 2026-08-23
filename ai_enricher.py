@@ -38,12 +38,12 @@ log = logging.getLogger(__name__)
 
 # ✅ v7.6 — قائمة موديلات مع Auto Fallback
 MODELS_PRIORITY = [
-    "groq/compound",          # الموديل الرئيسي
-    "allam-2-7b",             # النموذج العربي المتميز حصة يومية مستقلة
-    "groq/compound-mini",     # نموذج سريع
-    "openai/gpt-oss-120b",    # قوي ومستقل الحصة
-    "qwen/qwen3.6-27b",       # جودة عالية جداً
+    "allam-2-7b",           # 7,000 طلب/يوم (الأعلى حصة والأفضل)
+    "qwen/qwen3.6-27b",     # 1,000 طلب/يوم (جودة فائقة في JSON)
+    "openai/gpt-oss-120b",  # 1,000 طلب/يوم (نموذج قوي جداً)
+    "openai/gpt-oss-20b",   # 1,000 طلب/يوم (سريع واحتياطي)
 ]
+
 
 MAX_RETRIES_PER_KEY  = 3
 RATE_LIMIT_WAIT      = 3.0
@@ -909,23 +909,17 @@ def _call_groq(
     _ensure_keys_loaded()
 
     if not _groq_keys:
-        raise AIEnrichmentError(
-            "GROQ_API_KEY not found in environment."
-        )
+        raise AIEnrichmentError("GROQ_API_KEY not found in environment.")
 
     with _groq_lock:
         n_keys = len(_groq_keys)
 
-    total_attempts            = n_keys * MAX_RETRIES_PER_KEY
-    last_error: Optional[str] = None
-    models_to_try             = list(MODELS_PRIORITY)
-    current_model             = models_to_try[0]
-    model_switches            = 0
-    max_model_switches        = len(MODELS_PRIORITY)
+    total_attempts     = n_keys * MAX_RETRIES_PER_KEY
+    last_error         = None
+    models_to_try      = list(MODELS_PRIORITY)
+    current_model      = models_to_try[0]
 
-    for attempt in range(
-        total_attempts + max_model_switches
-    ):
+    for attempt in range(total_attempts + len(MODELS_PRIORITY) * 3):
         with _groq_lock:
             n_keys  = len(_groq_keys)
             cur_idx = _groq_index % n_keys
@@ -935,8 +929,7 @@ def _call_groq(
 
         try:
             log.info(
-                "  🤖 %s [key#%d/%d attempt %d"
-                " model=%s]...",
+                "  🤖 %s [key#%d/%d attempt %d model=%s]...",
                 operation_name,
                 cur_idx + 1, n_keys,
                 attempt + 1,
@@ -945,38 +938,22 @@ def _call_groq(
 
             resp = client.chat.completions.create(
                 model       = current_model,
-                messages    = [
-                    {
-                        "role":    "user",
-                        "content": prompt,
-                    }
-                ],
+                messages    = [{"role": "user", "content": prompt}],
                 temperature = temperature,
                 max_tokens  = max_tokens,
             )
 
             if not resp.choices:
-                raise ValueError(
-                    "Groq returned empty choices"
-                )
+                raise ValueError("Groq returned empty choices")
 
-            content = (
-                resp.choices[0].message.content or ""
-            )
+            content = resp.choices[0].message.content or ""
             if not content.strip():
-                # ✅ Empty response → try next model
                 if len(models_to_try) > 1:
                     old = models_to_try.pop(0)
                     current_model = models_to_try[0]
-                    log.warning(
-                        "  🔄 Empty response from '%s'"
-                        " → trying '%s'",
-                        old, current_model,
-                    )
+                    log.warning("  🔄 Empty response from '%s' → trying '%s'", old, current_model)
                     continue
-                raise ValueError(
-                    "Empty response from Groq"
-                )
+                raise ValueError("Empty response from Groq")
 
             return content.strip()
 
@@ -984,78 +961,48 @@ def _call_groq(
             err_str    = str(e)
             last_error = err_str
 
-            # 404 = model not found → switch MODEL
+            # 🟢 إذا كان الخطأ بسبب الموديل غير موجود (404) أو بسبب انتهاء الحصة (429/413/RPD):
+            # نقوم بالانتقال للموديل التالي فوراً دون الانتظار وتكرار الفشل!
             if (
-                "404" in err_str or
-                "model_not_found" in err_str or
-                "does not exist" in err_str
+                "404" in err_str or 
+                "model_not_found" in err_str or 
+                "does not exist" in err_str or
+                "429" in err_str or
+                "rate limit" in err_str.lower() or
+                "rate_limit" in err_str.lower() or
+                "requests per day" in err_str.lower() or
+                "rpd" in err_str.lower() or
+                "413" in err_str or
+                "payload too large" in err_str.lower()
             ):
-                model_switches += 1
                 if len(models_to_try) > 1:
                     old = models_to_try.pop(0)
                     current_model = models_to_try[0]
                     log.warning(
-                        "  🔄 Model '%s' not available"
-                        " → trying '%s'"
-                        " (%d/%d)",
-                        old, current_model,
-                        model_switches,
-                        max_model_switches,
+                        "  🔄 Quota/Error on model '%s' → Switching immediately to '%s'!",
+                        old, current_model
                     )
+                    _rotate_groq_key()
                     continue
                 else:
-                    raise AIEnrichmentError(
-                        "❌ No available Groq models!\n"
-                        "   Tried: "
-                        + str(MODELS_PRIORITY)
-                    )
+                    log.warning("  🛑 Rate limit on all models — rotating key...")
+                    _rotate_groq_key()
+                    time.sleep(2)
 
-            # 429 = rate limit → switch KEY
-            elif _is_rate_limit_error(err_str):
-                wait = min(
-                    RATE_LIMIT_WAIT * (2 ** attempt),
-                    RATE_LIMIT_WAIT_MAX,
-                )
-                log.warning(
-                    "  🛑 Rate limit [key#%d]"
-                    " — waiting %.1fs...",
-                    cur_idx + 1, wait,
-                )
-                _rotate_groq_key()
-                time.sleep(wait)
-
-            # 401/403 = auth → switch KEY
-            elif (
-                "401" in err_str or
-                "403" in err_str
-            ):
-                log.warning(
-                    "  🔑 Auth error [key#%d]"
-                    " — rotating...",
-                    cur_idx + 1,
-                )
+            elif "401" in err_str or "403" in err_str:
+                log.warning("  🔑 Auth error [key#%d] — rotating...", cur_idx + 1)
                 _rotate_groq_key()
                 time.sleep(1)
 
-            # Other → rotate + retry
-            elif attempt < (
-                total_attempts + max_model_switches - 1
-            ):
-                log.warning(
-                    "  ⚠️  Error: %s"
-                    " — rotating key...",
-                    err_str[:80],
-                )
+            else:
+                log.warning("  ⚠️  Error: %s — retrying...", err_str[:80])
                 _rotate_groq_key()
-                time.sleep(2)
+                time.sleep(1)
 
     raise AIEnrichmentError(
-        f"❌ {operation_name} FAILED after "
-        f"{attempt + 1} attempts.\n"
-        f"   Last error: "
-        f"{last_error[:200] if last_error else '?'}"
+        f"❌ {operation_name} FAILED after {attempt + 1} attempts.\n"
+        f"   Last error: {last_error[:200] if last_error else '?'}"
     )
-
 
 # ═══════════════════════════════════════════════════
 # DATA EXTRACTION HELPERS
