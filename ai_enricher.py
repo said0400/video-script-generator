@@ -171,6 +171,39 @@ ABSTRACT_WORDS: frozenset[str] = frozenset({
 
 
 # ═══════════════════════════════════════════════════
+# ✅ v7.7 — PLACEHOLDER KEYWORD DETECTION
+# ═══════════════════════════════════════════════════
+# المشكلة: أحياناً الموديل (خصوصاً qwen بعد قطع تفكيره) يرجّع
+# نفس الـ placeholder المكتوب كمثال بالبرومبت حرفياً بدل ما
+# يستبدله بكلمة بحث حقيقية، مثلاً: ["kw1","kw2","kw3"].
+# الـ JSON يكون صحيح تقنياً فما يُكتشف كخطأ، لكن الفيديو يبحث
+# فعلياً في Pexels عن الكلمة الحرفية "kw1" فيرجع نتيجة عشوائية.
+
+_PLACEHOLDER_KEYWORD_RE = re.compile(
+    r'^\s*kw\s*\d*\s*$', re.IGNORECASE
+)
+_PLACEHOLDER_KEYWORD_LITERALS: frozenset[str] = frozenset({
+    "kw1", "kw2", "kw3", "kw4", "kw5",
+    "keyword1", "keyword2", "keyword3",
+    "item1", "item2", "item3",
+    "example", "example1", "example2",
+    "placeholder", "n/a", "na", "none", "null",
+})
+
+
+def _is_placeholder_keyword(kw: str) -> bool:
+    """✅ v7.7 — يكشف كلمات placeholder وهمية زي 'kw1'."""
+    normalized = kw.strip().lower()
+    if not normalized:
+        return True
+    if normalized in _PLACEHOLDER_KEYWORD_LITERALS:
+        return True
+    if _PLACEHOLDER_KEYWORD_RE.match(normalized):
+        return True
+    return False
+
+
+# ═══════════════════════════════════════════════════
 # VISUAL KEYWORDS EXAMPLES
 # ═══════════════════════════════════════════════════
 
@@ -1651,6 +1684,13 @@ def _generate_visual_keywords_batch(
                     str(k).strip()
                     for k in data[i][:5]
                     if str(k).strip()
+                ]
+                # ✅ v7.7 — استبعد placeholders وهمية (kw1, kw2...)
+                # قبل ما تدخل فلترة الكلمات المجردة، عشان ما
+                # توصل حرفياً لبحث Pexels عن "kw1".
+                raw_kws = [
+                    k for k in raw_kws
+                    if not _is_placeholder_keyword(k)
                 ]
                 kws = _filter_abstract_keywords(raw_kws)
                 while len(kws) < 3:
