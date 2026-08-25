@@ -1014,8 +1014,8 @@ def save_pre_generated(
     # Path logic
     if content_mode == "long":
         # Long: separate paths (YT=landscape, FB=portrait)
-        final_yt_path = yt_path or output_path
-        final_fb_path = fb_path  # NO fallback to landscape!
+        final_yt = yt_path or existing_yt or output_path
+        final_fb = fb_path or existing_fb or output_path
 
         if not final_fb_path:
             log.debug(
