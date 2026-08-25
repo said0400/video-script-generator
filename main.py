@@ -281,7 +281,7 @@ def _should_publish_fb(
         return False
     if args.platform not in ("fb", "both"):
         return False
-    return args.publish_fb or fb_credentials_available()
+    return args.publish_fb or fb_credentials_available(lang)
 
 
 # ═══════════════════════════════════════════════════
@@ -2895,7 +2895,7 @@ def main() -> None:
 
     if will_publish_fb:
         log.info("\n📘 Checking Facebook...")
-        if not fb_check_credentials():
+        if not fb_check_credentials(lang):
             log.warning(
                 "  ⚠️  FB credentials invalid — disabled"
             )
