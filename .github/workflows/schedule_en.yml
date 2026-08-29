@@ -176,10 +176,10 @@ jobs:
           VIDEO_NUMBER="${INPUT_VIDEO_NUMBER:-}"
 
           if [ "$MODE" = "long" ]; then
-            INPUT_FILE="scripts/videos_en_long.xlsx"
+            INPUT_FILE="scripts/en_long.xlsx"
             OUTPUT_DIR="output_long"
           else
-            INPUT_FILE="scripts/videos_en.xlsx"
+            INPUT_FILE="scripts/en_short.xlsx"
             OUTPUT_DIR="output"
           fi
 
