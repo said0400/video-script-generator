@@ -194,10 +194,10 @@ jobs:
 
           # ── تحديد الملفات حسب MODE ──────────────────────────
           if [ "$MODE" = "long" ]; then
-            INPUT_FILE="scripts/videos_ar_long.xlsx"
+            INPUT_FILE="scripts/ar_long.xlsx"
             OUTPUT_DIR="output_long"
           else
-            INPUT_FILE="scripts/videos_ar.xlsx"
+            INPUT_FILE="scripts/ar_short.xlsx"
             OUTPUT_DIR="output"
           fi
 
