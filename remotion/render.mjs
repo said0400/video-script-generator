@@ -751,14 +751,14 @@ function processBackground(
     );
 
     const r = runFFmpeg([
-      "-y", "-i", effectsInput,
-      "-t", srcNeeded.toFixed(3),
-      "-vf", vfParts.join(","),
-      "-r", String(FPS),
-      "-c:v", "libx264", "-preset", "fast",
-      "-crf", isHookClip ? "16" : "18",
-      "-pix_fmt", "yuv420p", "-an",
-      stage1,
+     "-y", "-i", effectsInput,
+     "-t", d.toFixed(3),        // ✅ بدل srcNeeded
+     "-vf", vfParts.join(","),
+     "-r", String(FPS),
+     "-c:v", "libx264", "-preset", "fast",
+     "-crf", isHookClip ? "16" : "18",
+     "-pix_fmt", "yuv420p", "-an",
+     stage1,
     ], `effects[${idx}]`);
 
     if (r.status !== 0 || !existsSync(stage1)) {
@@ -892,13 +892,13 @@ function buildLongBgVideo(
       ].join(",");
 
       const rEffects = runFFmpeg([
-        "-y", "-i", normOut,
-        "-t", srcNeeded.toFixed(3),
-        "-vf", vf, "-r", String(FPS),
-        "-c:v", "libx264", "-preset", "fast",
-        "-crf", "20",
-        "-pix_fmt", "yuv420p", "-an",
-        effectsOut,
+       "-y", "-i", normOut,
+       "-t", d.toFixed(3),        // ✅ بدل srcNeeded
+       "-vf", vf, "-r", String(FPS),
+       "-c:v", "libx264", "-preset", "fast",
+       "-crf", "20",
+       "-pix_fmt", "yuv420p", "-an",
+       effectsOut,
       ], `long-effects[${i}]`);
 
       const useFile = (
