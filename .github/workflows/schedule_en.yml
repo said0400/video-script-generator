@@ -55,6 +55,7 @@ env:
   PYTHON_VERSION: "3.11"
   NODE_VERSION: "20"
   TORCH_VERSION: "2.5.1"
+  PLAYWRIGHT_VERSION: "1.50.0"
 
 jobs:
   generate:
@@ -82,7 +83,11 @@ jobs:
       - name: 🔧 Install system dependencies
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y ffmpeg libsndfile1 xvfb fonts-noto fonts-noto-core fonts-hosny-amiri fonts-sil-scheherazade
+          sudo apt-get install -y \
+            ffmpeg libsndfile1 libgomp1 xvfb \
+            fonts-noto fonts-noto-core \
+            fonts-hosny-amiri fonts-sil-scheherazade \
+            libglib2.0-0 libgbm1
           sudo fc-cache -fv
 
       - name: 💾 Cache stable-ts models
@@ -95,6 +100,17 @@ jobs:
             ~/.cache/whisper
           key: stable-ts-models-v2-${{ runner.os }}
           restore-keys: stable-ts-models-
+
+      - name: 💾 Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            remotion/node_modules/playwright/.local-browsers
+            remotion/node_modules/playwright-core/.local-browsers
+          key: "playwright-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}"
+          restore-keys: |
+            playwright-${{ runner.os }}-
 
       - name: 🔥 Install PyTorch ${{ env.TORCH_VERSION }} (CPU)
         run: |
@@ -128,8 +144,18 @@ jobs:
             npm install
           fi
 
-      - name: 🌐 Install Playwright Chromium
-        run: python -m playwright install chromium --with-deps
+      - name: 🌐 Install Playwright Chromium (Python + Node.js)
+        run: |
+          echo "🐍 Installing for Python Playwright..."
+          python -m playwright install chromium --with-deps
+          echo "✅ Python Playwright: OK"
+
+          echo ""
+          echo "🟢 Installing for Node.js Playwright..."
+          cd remotion
+          npx playwright install chromium --with-deps
+          cd ..
+          echo "✅ Node.js Playwright: OK"
 
       - name: 📥 Restore DB
         uses: dawidd6/action-download-artifact@v6
@@ -137,6 +163,7 @@ jobs:
           name: vsg-database-en
           if_no_artifact_found: ignore
           search_artifacts: true
+          branch: ${{ github.ref_name }}
 
       - name: 🇺🇸 Generate + Publish English
         env:
@@ -190,10 +217,10 @@ jobs:
           VIDEO_NUMBER="${INPUT_VIDEO_NUMBER:-}"
 
           if [ "$MODE" = "long" ]; then
-            INPUT_FILE="scripts/fr_long.xlsx"
+            INPUT_FILE="scripts/en_long.xlsx"
             OUTPUT_DIR="output_long"
           else
-            INPUT_FILE="scripts/fr_short.xlsx"
+            INPUT_FILE="scripts/en_short.xlsx"
             OUTPUT_DIR="output"
           fi
 
