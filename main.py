@@ -274,8 +274,8 @@ def _should_publish_yt(
 
 
 def _should_publish_fb(
-    args:         argparse.Namespace,
-    content_mode: str,
+    args: argparse.Namespace,
+    lang: str,
 ) -> bool:
     if args.no_publish or args.script_only or args.no_video:
         return False
