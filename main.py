@@ -2821,7 +2821,7 @@ def main() -> None:
     lang            = args.lang
     will_publish_yt = _should_publish_yt(args, lang)
     will_publish_fb = _should_publish_fb(
-        args, content_mode
+        args, lang
     )
 
     log.info("\n%s", "═" * 62)
