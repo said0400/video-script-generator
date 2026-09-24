@@ -210,7 +210,7 @@ jobs:
           # ── تحديد MODE ──────────────────────────────────────
           MODE="short"
           HOUR=$(date -u +"%H")
-          [ "$HOUR" = "22" ] && MODE="long"
+          [ "$HOUR" = "17" ] && MODE="long"
 
           # ✅ override من workflow_dispatch
           INPUT_MODE="${{ github.event.inputs.content_mode }}"
