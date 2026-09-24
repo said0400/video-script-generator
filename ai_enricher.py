@@ -582,9 +582,10 @@ def _fix_trailing_comma_in_string(text: str) -> str:
     )
 
     # Pattern 3: "text1""text2" → "text1", "text2"
-    # items ملتصقة بـ ""
+    # items ملتصقة بـ "" — لكن نتجنب كسر string فارغ شرعي
+    # نطابق فقط عندما يوجد محتوى غير فراغ قبل وبعد الاقتباسين المتلاصقين
     text = re.sub(
-        r'"(\s*)"',
+        r'(?<=[^\s,:\[{])"(\s*)"(?=[^\s,\]}])',
         r'", "',
         text,
     )
