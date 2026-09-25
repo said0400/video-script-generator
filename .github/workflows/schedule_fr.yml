@@ -224,8 +224,8 @@ jobs:
             OUTPUT_DIR="output"
           fi
 
-          FLAGS=(--lang fr --content-mode "$MODE" --auto-next)
-
+          FLAGS=(--lang fr --content-mode "$MODE" --auto-next --platform both)
+          
           [ "$FORCE" = "true" ]      && FLAGS+=(--force)
           [ "$FORCE_AI" = "true" ]   && FLAGS+=(--force-ai)
           [ "$PUBLISH_FB" = "true" ] && FLAGS+=(--publish-fb)
