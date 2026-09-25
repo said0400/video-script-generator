@@ -121,12 +121,12 @@ REQUIRED_DIRS: dict[str, str] = {
 }
 
 REQUIRED_SCRIPTS: list[str] = [
-    "scripts/videos_ar.xlsx",
-    "scripts/videos_fr.xlsx",
-    "scripts/videos_en.xlsx",
-    "scripts/videos_ar_long.xlsx",
-    "scripts/videos_fr_long.xlsx",
-    "scripts/videos_en_long.xlsx",
+    "scripts/ar_short.xlsx",
+    "scripts/fr_short.xlsx",
+    "scripts/en_short.xlsx",
+    "scripts/ar_long.xlsx",
+    "scripts/fr_long.xlsx",
+    "scripts/en_long.xlsx",
 ]
 
 # Output folders to monitor
