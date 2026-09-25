@@ -18,6 +18,7 @@ import re
 import subprocess
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from pathlib import Path
 from typing import Optional
@@ -1682,12 +1683,18 @@ def fetch_videos_for_script(
     max_workers:           int                  = 3,
 ) -> list[Path]:
     """
-    ✅ v5.1 — جلب فيديو واحد لكل chunk.
+    ✅ v5.2 — جلب الفيديوهات بالتوازي الفعلي (ThreadPoolExecutor).
 
-    content_mode values:
-        "short"        → Portrait (9:16)
-        "long"         → Landscape (16:9) YT
-        "long_portrait" → Portrait (9:16) FB Long
+    ملاحظات التصميم:
+      - IO-bound بالكامل (requests + subprocess ffprobe/ffmpeg)
+        لذلك ThreadPoolExecutor فعّال جداً هنا (الـ GIL يُحرَّر
+        أثناء الشبكة و subprocess).
+      - session_used محمي بالفعل بـ session_lock، وتدوير مفاتيح
+        الـ API محمي بـ _key_lock — آمن للاستخدام من عدة threads.
+      - قيد "تجنب نفس فيديو المقطع السابق مباشرة" (last_used_id)
+        أصبح "أفضل محاولة" (best-effort) بدل ضمان صارم، لأن
+        المقاطع تُنفَّذ بالتوازي فعلياً؛ لا يزال يمنع التكرار عبر
+        session_used + قاعدة البيانات (mark_video_used) بشكل مضمون.
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -1696,19 +1703,23 @@ def fetch_videos_for_script(
     session_lock : threading.Lock       = threading.Lock()
     results      : list[Optional[Path]] = [None] * n
 
+    if n == 0:
+        return []
+
     pexels_keys  = _load_keys_for("PEXELS_API_KEY")
     pixabay_keys = _load_keys_for("PIXABAY_API_KEY")
 
-    # ✅ Orientation display صحيح
     orientation = (
         "portrait"
         if _is_portrait_mode(content_mode)
         else "landscape"
     )
 
+    effective_workers = max(1, min(max_workers, n))
+
     log.info(
-        "\n  📹 Fetching %d videos [%s]",
-        n, content_mode.upper(),
+        "\n  📹 Fetching %d videos [%s] (workers=%d)",
+        n, content_mode.upper(), effective_workers,
     )
     log.info("     Orientation : %s", orientation)
     log.info(
@@ -1718,11 +1729,8 @@ def fetch_videos_for_script(
     log.info(
         "     Quality     : HD enforced (Large priority)"
     )
-
     if topic:
-        log.info(
-            "     Topic       : %s", topic[:50]
-        )
+        log.info("     Topic       : %s", topic[:50])
 
     def _get_tag(i: int) -> str:
         if aligned and i < len(aligned):
@@ -1731,10 +1739,11 @@ def fetch_videos_for_script(
             )
         return "information"
 
-    last_used_path: Optional[Path] = None
-    last_used_id:   Optional[str]  = None
+    # ✅ last_used_id مشترك بين الخيوط — best-effort فقط
+    last_used_holder: dict = {"id": None}
+    last_used_lock = threading.Lock()
 
-    for i in range(n):
+    def _fetch_one_chunk(i: int) -> tuple[int, Optional[Path]]:
         kws = keywords_per_sentence[i]
         tag = _get_tag(i)
         dur = (
@@ -1743,15 +1752,13 @@ def fetch_videos_for_script(
             else 3.0
         )
 
+        with last_used_lock:
+            avoid_id = last_used_holder["id"]
+
         log.info(
             "\n  🎞️  Chunk [%d/%d] (%.2fs) [%s]",
             i + 1, n, dur, tag,
         )
-
-        if last_used_id:
-            log.debug(
-                "    🚫 Avoiding ID: %s", last_used_id
-            )
 
         path = _try_fetch_one(
             keywords     = kws,
@@ -1762,28 +1769,53 @@ def fetch_videos_for_script(
             content_mode = content_mode,
             topic        = topic,
             tag          = tag,
-            last_used_id = last_used_id,
+            last_used_id = avoid_id,
         )
 
         if not path:
             path = _get_fallback_video(
                 output_dir, i,
-                last_used    = last_used_path,
+                last_used    = None,
                 session_used = session_used,
             )
 
-        if path:
-            results[i]     = path
-            last_used_path = path
-            last_used_id   = _extract_video_id(path)
-            log.info(
-                "  [%d/%d] ✅ %s (id=%s)",
-                i + 1, n, path.name, last_used_id,
-            )
-        else:
-            log.warning(
-                "  [%d/%d] ❌ not found", i + 1, n
-            )
+        vid_id = _extract_video_id(path) if path else None
+        if vid_id:
+            with last_used_lock:
+                last_used_holder["id"] = vid_id
+
+        return i, path
+
+    with ThreadPoolExecutor(
+        max_workers=effective_workers
+    ) as executor:
+        futures = {
+            executor.submit(_fetch_one_chunk, i): i
+            for i in range(n)
+        }
+        for future in as_completed(futures):
+            i = futures[future]
+            try:
+                idx, path = future.result()
+            except Exception as e:
+                log.error(
+                    "  ❌ Chunk [%d/%d] crashed: %s",
+                    i + 1, n, e,
+                )
+                idx, path = i, None
+
+            results[idx] = path
+
+            if path:
+                vid_id = _extract_video_id(path)
+                log.info(
+                    "  [%d/%d] ✅ %s (id=%s)",
+                    idx + 1, n, path.name, vid_id,
+                )
+            else:
+                log.warning(
+                    "  [%d/%d] ❌ not found", idx + 1, n
+                )
 
     final = _fill_gaps(results, output_dir, session_used)
 
