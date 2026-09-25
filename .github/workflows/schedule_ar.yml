@@ -228,7 +228,7 @@ jobs:
           echo "🚀 Mode: $MODE | Input: $INPUT_FILE | Output: $OUTPUT_DIR"
 
           # ── بناء FLAGS ──────────────────────────────────────
-          FLAGS="--lang ar --content-mode $MODE --auto-next"
+          FLAGS="--lang ar --content-mode $MODE --auto-next --platform both"
 
           # force
           [ "${{ github.event.inputs.force }}" = "true" ] && \
