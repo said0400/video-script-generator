@@ -1128,8 +1128,12 @@ def produce_mixed_audio(
         mixed_dur = get_audio_duration(str(final_audio))
 
         if abs(mixed_dur - voice_dur) > AUDIO_SYNC_TOLERANCE:
+            # ✅ بعد إصلاح audio_manager.mix_audio() (تجهيز
+            # الموسيقى مسبقاً بدل stream_loop+amix)، هذا التحذير
+            # يجب أن يصبح نادراً جداً. إذا استمر ظهوره بكثرة،
+            # افحص مساحة القرص/صلاحيات الكتابة في TEMP_DIR.
             log.warning(
-                "  ⚠️  Audio mismatch: "
+                "  ⚠️  Audio mismatch (should be rare now): "
                 "voice=%.1fs vs mixed=%.1fs",
                 voice_dur, mixed_dur,
             )
