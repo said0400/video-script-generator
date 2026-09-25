@@ -80,12 +80,12 @@ LIST_SEPARATOR   = 60
 
 # Script files mapping (absolute paths)
 SCRIPT_FILES: dict[tuple[str, str], str] = {
-    ("ar", "short"): str(SCRIPTS_DIR / "videos_ar.xlsx"),
-    ("fr", "short"): str(SCRIPTS_DIR / "videos_fr.xlsx"),
-    ("en", "short"): str(SCRIPTS_DIR / "videos_en.xlsx"),
-    ("ar", "long"):  str(SCRIPTS_DIR / "videos_ar_long.xlsx"),
-    ("fr", "long"):  str(SCRIPTS_DIR / "videos_fr_long.xlsx"),
-    ("en", "long"):  str(SCRIPTS_DIR / "videos_en_long.xlsx"),
+    ("ar", "short"): str(SCRIPTS_DIR / "ar_short.xlsx"),
+    ("fr", "short"): str(SCRIPTS_DIR / "fr_short.xlsx"),
+    ("en", "short"): str(SCRIPTS_DIR / "en_short.xlsx"),
+    ("ar", "long"):  str(SCRIPTS_DIR / "ar_long.xlsx"),
+    ("fr", "long"):  str(SCRIPTS_DIR / "fr_long.xlsx"),
+    ("en", "long"):  str(SCRIPTS_DIR / "en_long.xlsx"),
 }
 
 
