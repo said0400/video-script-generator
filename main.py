@@ -2828,17 +2828,34 @@ def _try_publish_existing(
         "lang":   lang,
     }
 
+    suffix_yt = (
+        "_short_yt" if content_mode == "short" else "_long_yt"
+    )
+    suffix_fb = (
+        "_short_yt" if content_mode == "short" else "_long_fb"
+    )
+    thumb_yt_existing = f"{out_base}{suffix_yt}_thumbnail.png"
+    thumb_fb_existing = f"{out_base}{suffix_fb}_thumbnail.png"
+
     _do_publish(
-        video_path_yt     = yt_path,
-        video_path_fb     = fb_path,
-        record            = record_for_publish,
-        ai_data           = ai_data,
-        lang              = lang,
-        video_number      = num,
-        content_mode      = content_mode,
-        platform          = platform,
-        should_publish_yt = will_publish_yt,
-        should_publish_fb = will_publish_fb,
+        video_path_yt      = yt_path,
+        video_path_fb      = fb_path,
+        record             = record_for_publish,
+        ai_data            = ai_data,
+        lang               = lang,
+        video_number       = num,
+        content_mode       = content_mode,
+        platform           = platform,
+        should_publish_yt  = will_publish_yt,
+        should_publish_fb  = will_publish_fb,
+        thumbnail_path_yt  = (
+            thumb_yt_existing
+            if Path(thumb_yt_existing).exists() else ""
+        ),
+        thumbnail_path_fb  = (
+            thumb_fb_existing
+            if Path(thumb_fb_existing).exists() else ""
+        ),
     )
 
 
