@@ -66,16 +66,16 @@ OUTPUT_DIR  = BASE_DIR / "output"
 # Content files (absolute paths — matches retry_publisher.py)
 CONTENT_FILES: dict[str, dict[str, Path]] = {
     "ar": {
-        "short": SCRIPTS_DIR / "videos_ar.xlsx",
-        "long":  SCRIPTS_DIR / "videos_ar_long.xlsx",
+        "short": SCRIPTS_DIR / "ar_short.xlsx",
+        "long":  SCRIPTS_DIR / "ar_long.xlsx",
     },
     "fr": {
-        "short": SCRIPTS_DIR / "videos_fr.xlsx",
-        "long":  SCRIPTS_DIR / "videos_fr_long.xlsx",
+        "short": SCRIPTS_DIR / "fr_short.xlsx",
+        "long":  SCRIPTS_DIR / "fr_long.xlsx",
     },
     "en": {
-        "short": SCRIPTS_DIR / "videos_en.xlsx",
-        "long":  SCRIPTS_DIR / "videos_en_long.xlsx",
+        "short": SCRIPTS_DIR / "en_short.xlsx",
+        "long":  SCRIPTS_DIR / "en_long.xlsx",
     },
 }
 
