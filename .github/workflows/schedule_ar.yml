@@ -3,13 +3,13 @@ name: 🇸🇦 Arabic Videos (Short + Long)
 on:
   schedule:
     # ── Short videos: 5 مرات يومياً ──────────────────────────
-    - cron: "0 9  * * *"   # Short #1
-    - cron: "0 11 * * *"   # Short #2
-    - cron: "0 14 * * *"   # Short #3
-    - cron: "0 22 * * *"   # Short #4
-    - cron: "0 20 * * *"   # Short #5
+    - cron: "0 9  * * *"   # Short #1 (09:00 UTC)
+    - cron: "0 11 * * *"   # Short #2 (11:00 UTC)
+    - cron: "0 14 * * *"   # Short #3 (14:00 UTC)
+    - cron: "0 20 * * *"   # Short #4 (20:00 UTC)
+    - cron: "0 22 * * *"   # Short #5 (22:00 UTC)
     # ── Long video: مرة واحدة يومياً ─────────────────────────
-    - cron: "0 17 * * *"   # Long
+    - cron: "0 17 * * *"   # Long     (17:00 UTC)
 
   workflow_dispatch:
     inputs:
@@ -240,10 +240,10 @@ jobs:
 
           # publish flags
           PUBLISH_FB="${{ github.event.inputs.publish_fb }}"
-          PUBLISH_YT="${{ github.event.inputs.publish_yt }}"
+          PUBLISH_FB="${PUBLISH_FB:-true}"
 
-          [ "$PUBLISH_FB" = "true" ] && FLAGS="$FLAGS --publish-fb"
-          [ "$PUBLISH_YT" = "true" ] && FLAGS="$FLAGS --publish-yt"
+          PUBLISH_YT="${{ github.event.inputs.publish_yt }}"
+          PUBLISH_YT="${PUBLISH_YT:-true}"
 
           # no-publish إذا كلاهما false
           if [ "$PUBLISH_FB" = "false" ] && [ "$PUBLISH_YT" = "false" ]; then
