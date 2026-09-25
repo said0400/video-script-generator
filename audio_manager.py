@@ -889,6 +889,79 @@ def _mix_with_filter(
     return success
 
 
+def _prerender_looped_track(
+    audio_path:  str,
+    target_dur:  float,
+    output_path: str,
+) -> Optional[Path]:
+    """
+    ✅ FIX (السبب الجذري لقِصَر الصوت الممزوج):
+
+    نُجهّز (نُجسّد) مسار الموسيقى مُكرَّراً بمدة دقيقة = target_dur
+    في تمريرة ffmpeg منفصلة ومستقلة، قبل أن يدخل filter_complex
+    الذي يحتوي amix. هذا يتفادى الخلل المعروف في ffmpeg حين يُجمع
+    -stream_loop مع amix/filter_complex، حيث تُسبّب نقاط اللف
+    قفزات PTS قد تُنهي الترميز قبل الوصول لـ -t الكاملة.
+
+    Returns:
+        Path للملف الجاهز، أو None عند الفشل الكامل.
+    """
+    src_dur    = get_audio_duration(audio_path)
+    needs_loop = src_dur <= 0 or src_dur < target_dur
+
+    args: list[str] = ["ffmpeg", "-y"]
+    if needs_loop:
+        args += ["-stream_loop", "-1"]
+    args += [
+        "-i", audio_path,
+        "-t", f"{target_dur:.3f}",
+        "-c:a", "pcm_s16le",
+        "-ar", "44100",
+        output_path,
+    ]
+
+    success, err = _run_ffmpeg(args, timeout=FFMPEG_TIMEOUT)
+
+    if not success or not Path(output_path).exists():
+        log.warning(
+            "  ⚠️  Pre-render music loop failed: %s",
+            err[:200] if err else "unknown",
+        )
+        return None
+
+    out_dur = get_audio_duration(output_path)
+
+    if out_dur < target_dur - 0.3:
+        log.warning(
+            "  ⚠️  Pre-rendered music short: %.2fs vs "
+            "target %.2fs — padding with apad",
+            out_dur, target_dur,
+        )
+        padded = output_path + "_pad.wav"
+        ok, _ = _run_ffmpeg([
+            "ffmpeg", "-y", "-i", output_path,
+            "-af", f"apad=whole_dur={target_dur:.3f}",
+            "-t", f"{target_dur:.3f}",
+            "-c:a", "pcm_s16le",
+            padded,
+        ])
+        if ok and Path(padded).exists():
+            _safe_unlink(output_path)
+            Path(padded).rename(output_path)
+        else:
+            _safe_unlink(padded)
+
+    final_dur = get_audio_duration(output_path)
+    if final_dur < target_dur - 0.5:
+        log.warning(
+            "  ⚠️  Pre-render still short after pad: "
+            "%.2fs vs %.2fs",
+            final_dur, target_dur,
+        )
+        return None
+
+    return Path(output_path)
+
 def mix_audio(
     voice_path:      str,
     music_path:      str,
@@ -900,7 +973,7 @@ def mix_audio(
     aligned:         Optional[list[dict]] = None,
     big_transitions: Optional[list[dict]] = None,
 ) -> Path:
-    """Mix صوت مع موسيقى مع ducking ذكي."""
+    """Mix صوت مع موسيقى مع ducking ذكي — ✅ FIX جذري لمشكلة القِصَر."""
     voice_dur   = _safe_duration(voice_path)
     fade_out_st = max(0.0, voice_dur - fade_out)
 
@@ -912,6 +985,19 @@ def mix_audio(
         lang.upper()
     )
 
+    # ── ✅ FIX: تجهيز الموسيقى بمدة دقيقة قبل amix ──────────
+    prerender_target = voice_dur + fade_out + 0.5
+    prerender_path   = (
+        f"{output_path}_music_prerender.wav"
+    )
+    music_fixed = _prerender_looped_track(
+        music_path, prerender_target, prerender_path
+    )
+    used_prerender = music_fixed is not None
+    music_input    = (
+        str(music_fixed) if used_prerender else music_path
+    )
+
     # 🦆 Smart Ducking
     duck_filter = _build_ducking_filter(
         aligned          = aligned or [],
@@ -921,16 +1007,51 @@ def mix_audio(
         big_transitions  = big_transitions,
     )
 
-    # Attempt 1: with ducking
     music_filter = _build_music_filter(
         duck_filter, fade_in, fade_out_st,
         fade_out, voice_dur,
     )
 
-    if _mix_with_filter(
-        voice_path, music_path, output_path,
-        music_filter, voice_dur,
-    ):
+    # ✅ لا نستخدم -stream_loop هنا إذا نجح التجهيز المسبق —
+    # هذا هو الإصلاح الجذري (تفادي تعارض stream_loop + amix)
+    loop_args = [] if used_prerender else ["-stream_loop", "-1"]
+
+    filter_complex = (
+        f"[1:a]{music_filter}[music];"
+        f"[0:a][music]amix=inputs=2:"
+        f"duration=longest:normalize=0[out]"
+    )
+
+    success, _ = _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i", voice_path,
+        *loop_args,
+        "-i", music_input,
+        "-filter_complex", filter_complex,
+        "-map", "[out]",
+        "-c:a", "aac", "-b:a", "192k",
+        "-t", f"{voice_dur:.3f}",
+        output_path,
+    ])
+
+    if used_prerender:
+        _safe_unlink(prerender_path)
+
+    if success and Path(output_path).exists():
+        out_dur = get_audio_duration(output_path)
+
+        if out_dur < voice_dur - 0.3:
+            log.warning(
+                "  ⚠️  Mix STILL short after root-cause fix: "
+                "%.2fs vs %.2fs — check music file / disk space",
+                out_dur, voice_dur,
+            )
+        else:
+            log.info(
+                "  ✅ Mix duration OK: %.2fs (target %.2fs)",
+                out_dur, voice_dur,
+            )
+
         if aligned:
             log.info(
                 "  🦆 Ducking: %d sentences",
@@ -947,7 +1068,7 @@ def mix_audio(
         )
         return Path(output_path)
 
-    # Attempt 2: simple mix (no ducking)
+    # ── Attempt 2: simple mix (بدون ducking) ────────────────
     log.warning(
         "  ⚠️  Audio mix failed — trying simple mix..."
     )
@@ -960,10 +1081,28 @@ def mix_audio(
         f"atrim=0:{voice_dur:.3f}"
     )
 
-    if _mix_with_filter(
-        voice_path, music_path, output_path,
-        simple_filter, voice_dur,
-    ):
+    fallback_music = music_input if used_prerender else music_path
+    fallback_loop  = [] if used_prerender else ["-stream_loop", "-1"]
+
+    filter_complex_simple = (
+        f"[1:a]{simple_filter}[music];"
+        f"[0:a][music]amix=inputs=2:"
+        f"duration=longest:normalize=0[out]"
+    )
+
+    success2, _ = _run_ffmpeg([
+        "ffmpeg", "-y",
+        "-i", voice_path,
+        *fallback_loop,
+        "-i", fallback_music,
+        "-filter_complex", filter_complex_simple,
+        "-map", "[out]",
+        "-c:a", "aac", "-b:a", "192k",
+        "-t", f"{voice_dur:.3f}",
+        output_path,
+    ])
+
+    if success2 and Path(output_path).exists():
         log.info(
             "  ✅ Mixed (simple) → %s",
             Path(output_path).name
@@ -1571,6 +1710,7 @@ def mix_voice_music_sfx(
 ) -> Path:
     """🎬 FULL PROFESSIONAL AUDIO PIPELINE."""
     temp_files: list[str] = []
+    voice_dur = _safe_duration(voice_path)
     sfx_tracks: list[str] = []
 
     try:
@@ -1662,8 +1802,33 @@ def mix_voice_music_sfx(
             log.warning("  ⚠️  Music mix failed")
             return Path(voice_path)
 
-        current   = str(mixed)
-        total_dur = _safe_duration(current)
+current = str(mixed)
+# ✅ FIX: نستخدم voice_dur (المدة المضمونة والمقصودة) بدل
+# إعادة قياس مدة الملف الوسيط، الذي قد يكون أقصر بسبب مشاكل
+# ترميز سابقة (خصوصاً في الفيديوهات الطويلة). كل مسارات الـ SFX
+# التالية ستُبنى الآن بالمدة الصحيحة فعلياً بدل توريث الخطأ.
+target_dur = voice_dur
+total_dur  = target_dur
+
+mixed_actual_dur = _safe_duration(current)
+if mixed_actual_dur < target_dur - 0.3:
+    log.warning(
+        "  ⚠️  Mixed track (%.2fs) shorter than voice "
+        "(%.2fs) even after fix — padding before SFX build",
+        mixed_actual_dur, target_dur,
+    )
+    padded_mixed = f"{current}_padfix.aac"
+    ok, _ = _run_ffmpeg([
+        "ffmpeg", "-y", "-i", current,
+        "-af", f"apad=whole_dur={target_dur:.3f}",
+        "-t", f"{target_dur:.3f}",
+        "-c:a", "aac", "-b:a", "192k",
+        padded_mixed,
+    ])
+    if ok and Path(padded_mixed).exists():
+        _safe_unlink(current)
+        current = padded_mixed
+        temp_files.append(current)
 
         # ─────────────────────────────────────────
         # STEP 5: Build SFX tracks
