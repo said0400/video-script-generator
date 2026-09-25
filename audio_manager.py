@@ -1802,33 +1802,36 @@ def mix_voice_music_sfx(
             log.warning("  ⚠️  Music mix failed")
             return Path(voice_path)
 
-current = str(mixed)
-# ✅ FIX: نستخدم voice_dur (المدة المضمونة والمقصودة) بدل
-# إعادة قياس مدة الملف الوسيط، الذي قد يكون أقصر بسبب مشاكل
-# ترميز سابقة (خصوصاً في الفيديوهات الطويلة). كل مسارات الـ SFX
-# التالية ستُبنى الآن بالمدة الصحيحة فعلياً بدل توريث الخطأ.
-target_dur = voice_dur
-total_dur  = target_dur
+        # ─────────────────────────────────────────
+        # STEP 4.5: Validate mixed duration
+        # ─────────────────────────────────────────
+        current = str(mixed)
+        # ✅ FIX: نستخدم voice_dur (المدة المضمونة والمقصودة) بدل
+        # إعادة قياس مدة الملف الوسيط، الذي قد يكون أقصر بسبب مشاكل
+        # ترميز سابقة (خصوصاً في الفيديوهات الطويلة). كل مسارات الـ SFX
+        # التالية ستُبنى الآن بالمدة الصحيحة فعلياً بدل توريث الخطأ.
+        target_dur = voice_dur
+        total_dur  = target_dur
 
-mixed_actual_dur = _safe_duration(current)
-if mixed_actual_dur < target_dur - 0.3:
-    log.warning(
-        "  ⚠️  Mixed track (%.2fs) shorter than voice "
-        "(%.2fs) even after fix — padding before SFX build",
-        mixed_actual_dur, target_dur,
-    )
-    padded_mixed = f"{current}_padfix.aac"
-    ok, _ = _run_ffmpeg([
-        "ffmpeg", "-y", "-i", current,
-        "-af", f"apad=whole_dur={target_dur:.3f}",
-        "-t", f"{target_dur:.3f}",
-        "-c:a", "aac", "-b:a", "192k",
-        padded_mixed,
-    ])
-    if ok and Path(padded_mixed).exists():
-        _safe_unlink(current)
-        current = padded_mixed
-        temp_files.append(current)
+        mixed_actual_dur = _safe_duration(current)
+        if mixed_actual_dur < target_dur - 0.3:
+            log.warning(
+                "  ⚠️  Mixed track (%.2fs) shorter than voice "
+                "(%.2fs) even after fix — padding before SFX build",
+                mixed_actual_dur, target_dur,
+            )
+            padded_mixed = f"{current}_padfix.aac"
+            ok, _ = _run_ffmpeg([
+                "ffmpeg", "-y", "-i", current,
+                "-af", f"apad=whole_dur={target_dur:.3f}",
+                "-t", f"{target_dur:.3f}",
+                "-c:a", "aac", "-b:a", "192k",
+                padded_mixed,
+            ])
+            if ok and Path(padded_mixed).exists():
+                _safe_unlink(current)
+                current = padded_mixed
+                temp_files.append(current)
 
         # ─────────────────────────────────────────
         # STEP 5: Build SFX tracks
