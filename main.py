@@ -1768,13 +1768,14 @@ def _rebuild_text_with_tag(
 # ═══════════════════════════════════════════════════
 
 def _publish_to_platform(
-    platform_name: str,
-    video_path:    str,
-    record:        dict,
-    ai_data:       dict,
-    lang:          str,
-    video_number:  str,
-    content_mode:  str,
+    platform_name:  str,
+    video_path:     str,
+    record:         dict,
+    ai_data:        dict,
+    lang:           str,
+    video_number:   str,
+    content_mode:   str,
+    thumbnail_path: str = "",
 ) -> bool:
     is_pub = (
         is_published_youtube
@@ -1807,15 +1808,17 @@ def _publish_to_platform(
                 lang               = lang,
                 street_description = street_desc,
                 content_mode       = content_mode,
+                thumbnail_path     = thumbnail_path,
             )
         else:
             publish_to_facebook(
-                video_path   = video_path,
-                record       = record,
-                lang         = lang,
-                as_reel      = True,
-                ai_caption   = street_desc or title,
-                content_mode = content_mode,
+                video_path     = video_path,
+                record         = record,
+                lang           = lang,
+                as_reel        = True,
+                ai_caption     = street_desc or title,
+                content_mode   = content_mode,
+                thumbnail_path = thumbnail_path,
             )
 
         mark_video_published_for_lang(
@@ -1852,6 +1855,8 @@ def _do_publish(
     platform:          str,
     should_publish_yt: bool,
     should_publish_fb: bool,
+    thumbnail_path_yt: str = "",
+    thumbnail_path_fb: str = "",
 ) -> None:
     if should_publish_yt and platform in ("yt", "both"):
         if video_path_yt:
@@ -1859,6 +1864,7 @@ def _do_publish(
                 "youtube", video_path_yt,
                 record, ai_data, lang,
                 video_number, content_mode,
+                thumbnail_path = thumbnail_path_yt,
             )
         else:
             log.warning("  ⚠️  YouTube: no video path")
@@ -1869,6 +1875,7 @@ def _do_publish(
                 "facebook", video_path_fb,
                 record, ai_data, lang,
                 video_number, content_mode,
+                thumbnail_path = thumbnail_path_fb,
             )
         else:
             log.warning("  ⚠️  Facebook: no video path")
@@ -2208,17 +2215,29 @@ def _run_long_pipeline(
         else platforms_to_run[0]
     )
 
+    thumb_yt = _generate_video_thumbnail(
+        record, lang, out_base, content_mode,
+        "yt", "", result.get("video_paths_yt", []),
+    ) if yt_path_final else ""
+
+    thumb_fb = _generate_video_thumbnail(
+        record, lang, out_base, content_mode,
+        "fb", "", result.get("video_paths_fb", []),
+    ) if fb_path_final else ""
+
     _do_publish(
-        video_path_yt     = yt_path_final,
-        video_path_fb     = fb_path_final,
-        record            = record,
-        ai_data           = ai_data,
-        lang              = lang,
-        video_number      = num,
-        content_mode      = content_mode,
-        platform          = platform_arg,
-        should_publish_yt = should_publish_yt,
-        should_publish_fb = should_publish_fb,
+        video_path_yt      = yt_path_final,
+        video_path_fb      = fb_path_final,
+        record             = record,
+        ai_data            = ai_data,
+        lang               = lang,
+        video_number       = num,
+        content_mode       = content_mode,
+        platform           = platform_arg,
+        should_publish_yt  = should_publish_yt,
+        should_publish_fb  = should_publish_fb,
+        thumbnail_path_yt  = thumb_yt,
+        thumbnail_path_fb  = thumb_fb,
     )
 
     log.info("\n%s", "─" * 65)
@@ -2395,17 +2414,29 @@ def _run_short_pipeline(
         platform.upper(),
     )
 
+    thumb_path = _generate_video_thumbnail(
+        record       = record,
+        lang         = lang,
+        out_base     = out_base,
+        content_mode = content_mode,
+        platform     = "yt",
+        hook_keyword = script_data.get("hook_keyword", ""),
+        video_paths  = result["video_paths"],
+    )
+
     _do_publish(
-        video_path_yt     = str(published),
-        video_path_fb     = str(published),
-        record            = record,
-        ai_data           = ai_data,
-        lang              = lang,
-        video_number      = num,
-        content_mode      = content_mode,
-        platform          = platform,
-        should_publish_yt = should_publish_yt,
-        should_publish_fb = should_publish_fb,
+        video_path_yt      = str(published),
+        video_path_fb      = str(published),
+        record             = record,
+        ai_data            = ai_data,
+        lang               = lang,
+        video_number       = num,
+        content_mode       = content_mode,
+        platform           = platform,
+        should_publish_yt  = should_publish_yt,
+        should_publish_fb  = should_publish_fb,
+        thumbnail_path_yt  = thumb_path,
+        thumbnail_path_fb  = thumb_path,
     )
 
     log.info("\n%s", "─" * 65)
@@ -2660,11 +2691,63 @@ def _generate_thumbnails(
             render_thumbnails_batch(
                 items        = thumbnail_queue,
                 content_mode = content_mode,
+                lang         = args.lang,
             )
         except Exception as e:
             log.error(
                 "  ⚠️  Thumbnail render error: %s", e
             )
+
+
+def _generate_video_thumbnail(
+    record:       dict,
+    lang:         str,
+    out_base:     str,
+    content_mode: str,
+    platform:     str,
+    hook_keyword: str,
+    video_paths:  list,
+) -> str:
+    """
+    ✅ يولّد thumbnail PNG لفيديو واحد قبل النشر مباشرة،
+    عشان ينضم فعلياً مع الفيديو عند النشر الفوري
+    (بدل انتظار _generate_thumbnails بعد كل الـ loop).
+    Returns: مسار PNG أو "" عند الفشل.
+    """
+    suffix = (
+        "_short_yt"
+        if content_mode == "short"
+        else f"_long_{platform}"
+    )
+    html_path = f"{out_base}{suffix}_thumbnail.html"
+    png_path  = f"{out_base}{suffix}_thumbnail.png"
+
+    if Path(png_path).exists():
+        return png_path
+
+    try:
+        generate_thumbnail_html(
+            title        = record["title"],
+            lang         = lang,
+            output_path  = html_path,
+            keyword      = hook_keyword or record["title"],
+            video_paths  = video_paths,
+            content_mode = content_mode,
+        )
+        render_thumbnails_batch(
+            items        = [(html_path, png_path)],
+            content_mode = content_mode,
+            lang         = lang,
+        )
+        if Path(png_path).exists():
+            return png_path
+    except Exception as e:
+        log.warning("  ⚠️  Pre-publish thumbnail error: %s", e)
+
+    return ""
+
+
+
 
 
 # ═══════════════════════════════════════════════════
@@ -2920,8 +3003,14 @@ def main() -> None:
 
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
+        auto_next_platforms = (
+            ("youtube", "facebook") if platform == "both"
+            else ("facebook",) if platform == "fb"
+            else ("youtube",)
+        )
         next_num  = get_next_video_number(
-            lang, available, content_mode
+            lang, available, content_mode,
+            platforms=auto_next_platforms,
         )
         if next_num is None:
             log.info(
