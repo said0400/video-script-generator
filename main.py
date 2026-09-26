@@ -440,11 +440,31 @@ _TAG_RE = re.compile(r"\[[a-zA-Z_]+\]")
 def _is_cache_stale(
     cached:  dict,
     content: str,
+    tagged:  list[dict] | None = None,
 ) -> bool:
     cached_tagged = cached.get("tagged") or []
     if not cached_tagged:
         log.info("  🔄 Cache stale: no tagged data")
         return True
+
+    # ✅ مقارنة النص الفعلي كلمة بكلمة، ماشي فقط عدد الجمل/tags
+    if tagged:
+        current_text = " ".join(
+            (s.get("text") or "").strip()
+            for s in tagged
+        ).strip()
+        cached_text = " ".join(
+            (s.get("text") or "").strip()
+            for s in cached_tagged
+        ).strip()
+        if current_text != cached_text:
+            log.info(
+                "  🔄 Cache stale: نص السكريبت تغيّر فعلياً"
+            )
+            return True
+        return False
+
+    # fallback القديم (لو ماكانش tagged متوفر لأي سبب)
     tag_positions      = _TAG_RE.findall(content)
     expected_sentences = max(1, len(tag_positions))
     actual_sentences   = len(cached_tagged)
@@ -1614,7 +1634,7 @@ def get_or_create_ai_data(
             cached.get("hook_keyword") is not None
         ):
             if content and _is_cache_stale(
-                cached, content
+                cached, content, tagged
             ):
                 log.info(
                     "\n  🔄 Invalidating stale cache "
