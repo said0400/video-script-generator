@@ -3024,9 +3024,13 @@ def main() -> None:
 
     if args.auto_next:
         available = [str(s["number"]) for s in valid]
+        # ✅ التقدّم يعتمد على يوتيوب فقط (منصة قائدة موثوقة)
+        # عشان فشل فيسبوك المستمر (توكن منتهي، ID فارغ...) لا يوقف
+        # الطابور كامل على نفس الفيديو إلى الأبد.
+        # فيسبوك يُعاد نشره لاحقاً بشكل منفصل عبر retry_publisher.py
+        # بدون التأثير على تقدّم auto-next.
         auto_next_platforms = (
-            ("youtube", "facebook") if platform == "both"
-            else ("facebook",) if platform == "fb"
+            ("facebook",) if platform == "fb"
             else ("youtube",)
         )
         next_num  = get_next_video_number(
