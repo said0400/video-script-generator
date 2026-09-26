@@ -3022,7 +3022,20 @@ def main() -> None:
 
     print_scripts_summary(valid)
 
-    if args.auto_next:
+    if args.video_number:
+        valid = [
+            s for s in valid
+            if str(s["number"]) == str(
+                args.video_number
+            )
+        ]
+        if not valid:
+            log.error(
+                "❌  #%s not found", args.video_number
+            )
+            sys.exit(1)
+
+    elif args.auto_next:
         available = [str(s["number"]) for s in valid]
         # ✅ التقدّم يعتمد على يوتيوب فقط (منصة قائدة موثوقة)
         # عشان فشل فيسبوك المستمر (توكن منتهي، ID فارغ...) لا يوقف
@@ -3055,19 +3068,6 @@ def main() -> None:
             s for s in valid
             if str(s["number"]) == next_num
         ]
-
-    elif args.video_number:
-        valid = [
-            s for s in valid
-            if str(s["number"]) == str(
-                args.video_number
-            )
-        ]
-        if not valid:
-            log.error(
-                "❌  #%s not found", args.video_number
-            )
-            sys.exit(1)
 
     Path(args.output_dir).mkdir(
         parents=True, exist_ok=True
