@@ -2,14 +2,15 @@ name: 🇸🇦 Arabic Videos (Short + Long)
 
 on:
   schedule:
-    # ── Short videos: 5 مرات يومياً ──────────────────────────
-    - cron: "0 9  * * *"   # Short #1 (09:00 UTC)
-    - cron: "0 11 * * *"   # Short #2 (11:00 UTC)
-    - cron: "0 14 * * *"   # Short #3 (14:00 UTC)
-    - cron: "0 20 * * *"   # Short #4 (20:00 UTC)
-    - cron: "0 22 * * *"   # Short #5 (22:00 UTC)
-    # ── Long video: مرة واحدة يومياً ─────────────────────────
-    - cron: "0 17 * * *"   # Long     (17:00 UTC)
+    # ── Shorts (UTC = توقيت مكة − 3 ساعات) ──────────────────
+    - cron: "0 14 * * 0"   # الأحد    05:00 PM مكة (14:00 UTC)
+    - cron: "0 15 * * 1"   # الإثنين  06:00 PM مكة (15:00 UTC)
+    - cron: "0 16 * * 2"   # الثلاثاء 07:00 PM مكة (16:00 UTC)
+    - cron: "0 15 * * 3"   # الأربعاء 06:00 PM مكة (15:00 UTC)
+    - cron: "0 13 * * 4"   # الخميس   04:00 PM مكة (13:00 UTC)
+    - cron: "0 17 * * 6"   # السبت    08:00 PM مكة (17:00 UTC)
+    # ── Long video: الجمعة ───────────────────────────────────
+    - cron: "0 11 * * 5"   # الجمعة   02:00 PM مكة (11:00 UTC)
 
   workflow_dispatch:
     inputs:
@@ -208,9 +209,9 @@ jobs:
 
         run: |
           # ── تحديد MODE ──────────────────────────────────────
+          # الجمعة 11:00 UTC (02:00 PM مكة) = فيديو طويل، الباقي Shorts
           MODE="short"
-          HOUR=$(date -u +"%H")
-          [ "$HOUR" = "17" ] && MODE="long"
+          [ "${{ github.event.schedule }}" = "0 11 * * 5" ] && MODE="long"
 
           # ✅ override من workflow_dispatch
           INPUT_MODE="${{ github.event.inputs.content_mode }}"
