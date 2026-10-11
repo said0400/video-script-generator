@@ -2,12 +2,10 @@ name: 🇺🇸 English Videos (Short + Long)
 
 on:
   schedule:
-    - cron: "0 13 * * *"
-    - cron: "0 15 * * *"
-    - cron: "0 17 * * *"
-    - cron: "30 19 * * *"
-    - cron: "0 22 * * *"
-    - cron: "0 23 * * *"
+    # ── Shorts: الإثنين → السبت 01:00 PM EST (18:00 UTC) ─────
+    - cron: "0 18 * * 1-6"
+    # ── Long: الأحد 11:00 AM EST (16:00 UTC) ─────────────────
+    - cron: "0 16 * * 0"
 
   workflow_dispatch:
     inputs:
@@ -203,11 +201,14 @@ jobs:
           INPUT_FORCE_AI:     ${{ github.event.inputs.force_ai }}
           INPUT_PUBLISH_FB:   ${{ github.event.inputs.publish_fb }}
           INPUT_PUBLISH_YT:   ${{ github.event.inputs.publish_yt }}
+          # نص الـ cron الذي شغّل الـ workflow (فارغ في التشغيل اليدوي)
+          EVENT_SCHEDULE:     ${{ github.event.schedule }}
 
         run: |
+          # ── تحديد MODE ──────────────────────────────────────
+          # الأحد 16:00 UTC (11:00 AM EST) = فيديو طويل، الباقي Shorts
           MODE="short"
-          HOUR=$(date -u +"%H")
-          [ "$HOUR" = "23" ] && MODE="long"
+          [ "$EVENT_SCHEDULE" = "0 16 * * 0" ] && MODE="long"
           [ -n "$INPUT_CONTENT_MODE" ] && MODE="$INPUT_CONTENT_MODE"
 
           FORCE="${INPUT_FORCE:-false}"
