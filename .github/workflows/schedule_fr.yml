@@ -2,12 +2,10 @@ name: 🇫🇷 French Videos (Short + Long)
 
 on:
   schedule:
-    - cron: "0 10 * * *"
-    - cron: "5 12 * * *"
-    - cron: "30 16 * * *"
-    - cron: "0 18 * * *"
-    - cron: "0 21 * * *"
-    - cron: "30 22 * * *"
+    # ── Shorts: الإثنين → السبت 04:00 PM فرنسا (15:00 UTC) ───
+    - cron: "0 15 * * 1-6"
+    # ── Long: الأحد 02:00 PM فرنسا (13:00 UTC) ───────────────
+    - cron: "0 13 * * 0"
 
   workflow_dispatch:
     inputs:
@@ -202,12 +200,14 @@ jobs:
           INPUT_FORCE_AI:        ${{ github.event.inputs.force_ai }}
           INPUT_PUBLISH_FB:      ${{ github.event.inputs.publish_fb }}
           INPUT_PUBLISH_YT:      ${{ github.event.inputs.publish_yt }}
+          # نص الـ cron الذي شغّل الـ workflow (فارغ في التشغيل اليدوي)
+          EVENT_SCHEDULE:        ${{ github.event.schedule }}
 
         run: |
+          # ── تحديد MODE ──────────────────────────────────────
+          # الأحد 13:00 UTC (02:00 PM فرنسا) = فيديو طويل، الباقي Shorts
           MODE="short"
-          HOUR=$(date -u +"%H")
-          MINUTE=$(date -u +"%M")
-          if [ "$HOUR" = "22" ] && [ "$MINUTE" -ge 30 ]; then MODE="long"; fi
+          [ "$EVENT_SCHEDULE" = "0 13 * * 0" ] && MODE="long"
           [ -n "$INPUT_CONTENT_MODE" ] && MODE="$INPUT_CONTENT_MODE"
 
           FORCE="${INPUT_FORCE:-false}"
