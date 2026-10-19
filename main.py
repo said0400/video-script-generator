@@ -2723,6 +2723,137 @@ def _generate_thumbnails(
             )
 
 
+# ═══════════════════════════════════════════════════
+# CUSTOM THUMBNAIL URL (Long فقط) — من عمود thumbnail_url
+# ═══════════════════════════════════════════════════
+
+import os
+import urllib.request
+
+_MAX_THUMB_BYTES    = 15 * 1024 * 1024
+_YT_THUMB_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _normalize_thumb_url(url: str) -> str:
+    """يحوّل روابط Google Drive العادية إلى رابط تحميل مباشر."""
+    url = url.strip()
+    m = (
+        re.search(r"drive\.google\.com/file/d/([\w-]+)", url) or
+        re.search(r"drive\.google\.com/open\?id=([\w-]+)", url)
+    )
+    if m:
+        return (
+            "https://drive.google.com/uc?export=download"
+            f"&id={m.group(1)}"
+        )
+    return url
+
+
+def _looks_like_image(head: bytes) -> bool:
+    return (
+        head.startswith(b"\x89PNG\r\n\x1a\n") or
+        head.startswith(b"\xff\xd8\xff") or
+        head.startswith(b"GIF8") or
+        (head[:4] == b"RIFF" and head[8:12] == b"WEBP")
+    )
+
+
+def _fetch_bytes(url: str) -> bytes:
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0"}
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read(_MAX_THUMB_BYTES + 1)
+
+
+def _extract_og_image(html_bytes: bytes) -> str:
+    """يستخرج رابط الصورة المباشر من صفحة عرض (مثل ibb.co)."""
+    html = html_bytes[:300_000].decode("utf-8", errors="ignore")
+    for pat in (
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+    ):
+        m = re.search(pat, html, re.IGNORECASE)
+        if m:
+            return m.group(1).replace("&amp;", "&").strip()
+    return ""
+
+
+def _download_custom_thumbnail(url: str, png_path: str) -> bool:
+    """
+    يحمّل الصورة من الرابط (مباشر أو صفحة عرض مثل ibb.co)
+    ويحوّلها إلى PNG بمقاس 1280×720 في png_path.
+    يُرجع False عند أي فشل (ولا يترك ملفاً ناقصاً).
+    """
+    url = _normalize_thumb_url(url)
+    if not url.lower().startswith(("http://", "https://")):
+        log.warning("  ⚠️  Thumbnail URL غير صالح: %s", url[:80])
+        return False
+
+    raw_path = f"{png_path}.download"
+    tmp_png  = f"{png_path}.tmp.png"
+    try:
+        data = _fetch_bytes(url)
+
+        # صفحة عرض (مثل https://ibb.co/xxxx) → نستخرج الرابط المباشر
+        if not _looks_like_image(data[:16]):
+            direct = _extract_og_image(data)
+            if not direct.lower().startswith(("http://", "https://")):
+                log.warning(
+                    "  ⚠️  الرابط ليس صورة ولا صفحة عرض: %s",
+                    url[:80],
+                )
+                return False
+            log.info("  🔗 Direct image: %s", direct[:90])
+            data = _fetch_bytes(direct)
+
+        if len(data) > _MAX_THUMB_BYTES:
+            log.warning("  ⚠️  Thumbnail أكبر من 15MB")
+            return False
+        if not _looks_like_image(data[:16]):
+            log.warning("  ⚠️  الملف المحمّل ليس صورة")
+            return False
+
+        Path(raw_path).write_bytes(data)
+
+        # تحويل إلى PNG بمقاس 1280×720 (16:9) مع قص الزوائد
+        ok, _ = _run_ffmpeg(
+            ["ffmpeg", "-y", "-i", raw_path, "-frames:v", "1",
+             "-vf",
+             "scale=1280:720:force_original_aspect_ratio=increase,"
+             "crop=1280:720",
+             tmp_png],
+            timeout=60,
+        )
+        if not ok or _file_size_bytes(tmp_png) <= 1024:
+            log.warning("  ⚠️  فشل تحويل الصورة")
+            return False
+
+        # يوتيوب يقبل صورة مصغرة حتى 2MB فقط → نصغّر عند الحاجة
+        for width in (1024, 854):
+            if _file_size_bytes(tmp_png) <= _YT_THUMB_MAX_BYTES:
+                break
+            small_png = f"{png_path}.small.png"
+            ok, _ = _run_ffmpeg(
+                ["ffmpeg", "-y", "-i", tmp_png,
+                 "-vf", f"scale={width}:-2", small_png],
+                timeout=60,
+            )
+            if ok and _file_size_bytes(small_png) > 1024:
+                os.replace(small_png, tmp_png)
+            _safe_unlink(small_png)
+
+        os.replace(tmp_png, png_path)
+        return True
+
+    except Exception as e:
+        log.warning("  ⚠️  Thumbnail download error: %s", e)
+        return False
+    finally:
+        _safe_unlink(raw_path)
+        _safe_unlink(tmp_png)
+
+
 def _generate_video_thumbnail(
     record:       dict,
     lang:         str,
@@ -2745,6 +2876,20 @@ def _generate_video_thumbnail(
     )
     html_path = f"{out_base}{suffix}_thumbnail.html"
     png_path  = f"{out_base}{suffix}_thumbnail.png"
+
+    # ✅ صورة مصغرة مخصصة من عمود الإكسل (Long فقط)
+    custom_url = (
+        (record.get("thumbnail_url") or "").strip()
+        if content_mode == "long"
+        else ""
+    )
+    if custom_url:
+        if _download_custom_thumbnail(custom_url, png_path):
+            log.info("  🖼️  Custom thumbnail ✅")
+            return png_path
+        log.warning(
+            "  ⚠️  Custom thumbnail failed — generating automatically"
+        )
 
     if Path(png_path).exists():
         return png_path
