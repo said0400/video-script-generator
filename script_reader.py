@@ -108,6 +108,10 @@ COLUMN_ALIASES: dict[str, list[str]] = {
         "content", "text", "script",
         "محتوى", "النص", "texte", "contenu",
     ],
+    "thumbnail_url": [
+        "thumbnail_url", "thumbnail", "thumb_url", "thumb",
+        "رابط_الصورة_المصغرة", "الصورة_المصغرة",
+    ],
 }
 
 LANG_CONTENT_KEYS = ("ar_content", "en_content", "fr_content")
