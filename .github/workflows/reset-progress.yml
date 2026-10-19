@@ -1,0 +1,99 @@
+name: 🔄 Reset Progress (Restart from #1)
+
+on:
+  workflow_dispatch:
+    inputs:
+      lang:
+        description: "اللغة"
+        required: true
+        default: "ar"
+        type: choice
+        options: ["ar", "fr", "en"]
+      content_mode:
+        description: "نوع المحتوى (short / long / both)"
+        required: true
+        default: "short"
+        type: choice
+        options: ["short", "long", "both"]
+      confirm:
+        description: "اكتب RESET للتأكيد"
+        required: true
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+# نفس مجموعة workflow التوليد لنفس اللغة: لا يعمل أثناء توليد جارٍ
+concurrency:
+  group: video-${{ github.event.inputs.lang }}
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    name: 🔄 Reset publish progress
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+
+      - name: ✅ Check confirmation
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "RESET" ]; then
+            echo "❌ Confirmation text must be exactly: RESET"
+            exit 1
+          fi
+
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 📥 Restore DB
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: vsg-database-${{ github.event.inputs.lang }}
+          if_no_artifact_found: ignore
+          search_artifacts: true
+          branch: ${{ github.ref_name }}
+
+      - name: 🔄 Reset publish progress
+        env:
+          LANG_INPUT: ${{ github.event.inputs.lang }}
+          MODE_INPUT: ${{ github.event.inputs.content_mode }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from db import init_db, reset_published_for_lang, close_thread_conn, _conn
+
+          lang  = os.environ["LANG_INPUT"]
+          mode  = os.environ["MODE_INPUT"]
+          modes = ["short", "long"] if mode == "both" else [mode]
+
+          init_db()
+
+          def count(m):
+              return _conn().execute(
+                  "SELECT COUNT(*) FROM publish_tracker "
+                  "WHERE lang=? AND content_mode=?",
+                  (lang, m),
+              ).fetchone()[0]
+
+          for m in modes:
+              print(f"📊 {lang}/{m}: {count(m)} published record(s) before reset")
+              reset_published_for_lang(lang, m)
+              print(f"✅ {lang}/{m}: {count(m)} published record(s) after reset")
+
+          _conn().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+          close_thread_conn()
+          print("🎉 Done. The next run will start from #1.")
+          PY
+
+      - name: 💾 Save Database
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsg-database-${{ github.event.inputs.lang }}
+          path: vsg.db
+          retention-days: 90
+          overwrite: true
