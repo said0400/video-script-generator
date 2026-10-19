@@ -2,10 +2,29 @@ name: 🇫🇷 French Videos (Short + Long)
 
 on:
   schedule:
-    # ── Shorts: الإثنين → السبت 04:00 PM فرنسا (15:00 UTC) ───
-    - cron: "0 15 * * 1-6"
-    # ── Long: الأحد 02:00 PM فرنسا (13:00 UTC) ───────────────
-    - cron: "0 13 * * 0"
+    # ══════════════════════════════════════════════════════════
+    # التوقيت المحلي: فرنسا/بلجيكا (Europe/Paris)
+    #   الصيف  (UTC+2): من آخر أحد في مارس إلى آخر أحد في أكتوبر
+    #   الشتاء (UTC+1): من آخر أحد في أكتوبر إلى آخر أحد في مارس
+    # GitHub يقرأ الـ cron بتوقيت UTC فقط، لذلك نضع وقت الموسمين معًا،
+    # و job "check" يوقف التشغيل الذي لا يطابق الموسم الحالي.
+    # ══════════════════════════════════════════════════════════
+
+    # ── 11:30 فرنسا — كل الأيام (Short) ──────────────────────
+    - cron: "30 9 * * *"             # صيف  : 09:30 UTC = 11:30 فرنسا
+    - cron: "30 10 * * *"            # شتاء : 10:30 UTC = 11:30 فرنسا
+
+    # ── 16:00 فرنسا — كل الأيام (Short) ──────────────────────
+    - cron: "0 14 * * *"             # صيف  : 14:00 UTC = 16:00 فرنسا
+    - cron: "0 15 * * *"             # شتاء : 15:00 UTC = 16:00 فرنسا
+
+    # ── 21:00 فرنسا — الأحد/الاثنين/الأربعاء/الخميس/السبت (Short) ──
+    - cron: "0 19 * * 0,1,3,4,6"     # صيف  : 19:00 UTC = 21:00 فرنسا
+    - cron: "0 20 * * 0,1,3,4,6"     # شتاء : 20:00 UTC = 21:00 فرنسا
+
+    # ── 19:00 فرنسا — الثلاثاء والجمعة (Long) ────────────────
+    - cron: "0 17 * * 2,5"           # صيف  : 17:00 UTC = 19:00 فرنسا
+    - cron: "0 18 * * 2,5"           # شتاء : 18:00 UTC = 19:00 فرنسا
 
   workflow_dispatch:
     inputs:
@@ -45,10 +64,6 @@ on:
         type: choice
         options: ["true", "false"]
 
-concurrency:
-  group: video-fr
-  cancel-in-progress: false
-
 env:
   PYTHON_VERSION: "3.11"
   NODE_VERSION: "20"
@@ -56,10 +71,65 @@ env:
   PLAYWRIGHT_VERSION: "1.50.0"
 
 jobs:
+  # ══════════════════════════════════════════════════════════
+  # 🕐 فحص التوقيت الصيفي/الشتوي (Europe/Paris)
+  # التشغيل اليدوي يمر دائمًا، والتشغيل المجدول يمر فقط إذا
+  # طابق الـ cron الموسم الحالي في فرنسا.
+  # ══════════════════════════════════════════════════════════
+  check:
+    name: 🕐 Check Paris time (DST)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      proceed: ${{ steps.dst.outputs.proceed }}
+    steps:
+      - name: 🕐 DST guard
+        id: dst
+        env:
+          EVENT_NAME:     ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "▶️ Manual run → proceed"
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # الإزاحة الحالية لباريس: +0200 (صيف) أو +0100 (شتاء)
+          PARIS_OFFSET=$(TZ=Europe/Paris date +%z)
+
+          # الإزاحة التي صُمم لها الـ cron الذي شغّل الـ workflow
+          case "$EVENT_SCHEDULE" in
+            "30 9 * * *"|"0 14 * * *"|"0 19 * * 0,1,3,4,6"|"0 17 * * 2,5")
+              CRON_OFFSET="+0200" ;;
+            "30 10 * * *"|"0 15 * * *"|"0 20 * * 0,1,3,4,6"|"0 18 * * 2,5")
+              CRON_OFFSET="+0100" ;;
+            *)
+              CRON_OFFSET="unknown" ;;
+          esac
+
+          echo "🕐 Paris now : $(TZ=Europe/Paris date '+%Y-%m-%d %H:%M %Z (%z)')"
+          echo "📅 Cron      : $EVENT_SCHEDULE (designed for $CRON_OFFSET)"
+
+          if [ "$PARIS_OFFSET" = "$CRON_OFFSET" ]; then
+            echo "✅ Season matches → proceed"
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "⏭️ Wrong season for this cron → skip"
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   generate:
     name: 🇫🇷 Generate French Video
+    needs: check
+    if: needs.check.outputs.proceed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    # ✅ concurrency على مستوى الـ job: التشغيلات المتجاوزة (الموسم الخاطئ)
+    #    لا تدخل الطابور ولا تلغي التشغيلات الصحيحة المنتظرة
+    concurrency:
+      group: video-fr
+      cancel-in-progress: false
 
     steps:
 
@@ -205,9 +275,12 @@ jobs:
 
         run: |
           # ── تحديد MODE ──────────────────────────────────────
-          # الأحد 13:00 UTC (02:00 PM فرنسا) = فيديو طويل، الباقي Shorts
+          # الثلاثاء والجمعة 19:00 فرنسا (17:00 UTC صيفًا / 18:00 UTC شتاءً)
+          # = فيديو طويل، الباقي Shorts
           MODE="short"
-          [ "$EVENT_SCHEDULE" = "0 13 * * 0" ] && MODE="long"
+          case "$EVENT_SCHEDULE" in
+            "0 17 * * 2,5"|"0 18 * * 2,5") MODE="long" ;;
+          esac
           [ -n "$INPUT_CONTENT_MODE" ] && MODE="$INPUT_CONTENT_MODE"
 
           FORCE="${INPUT_FORCE:-false}"
