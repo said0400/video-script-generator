@@ -1,5 +1,5 @@
 """
-🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.6
+🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.8
 
 Changes from v7.5:
   ✅ 1. _fix_trailing_comma_in_string() — فاصلة داخل string
@@ -10,7 +10,7 @@ Changes from v7.5:
   ✅ 6. generate_hashtags() — prompt أصرم + temperature=0.5
   ✅ 7. generate_captions() — prompt أصرم مع ONE line rule
 
-Changes in v7.6 (NEW):
+Changes in v7.6:
   ✅ 8.  REASONING_MODELS + REASONING_TOKEN_MULTIPLIER —
          نضاعف max_tokens تلقائياً لموديلات التفكير (reasoning
          models مثل qwen) عشان ما ينقطع الرد أثناء <think>.
@@ -24,6 +24,25 @@ Changes in v7.6 (NEW):
   ✅ 12. generate_engagement_questions() — try/except + fallback.
   ✅ 13. generate_hashtags() — try/except + fallback.
   ✅ 14. generate_captions() — try/except + fallback.
+
+Changes in v7.8 (NEW):
+  ✅ 15. _call_groq_best() — "تصعيد الجودة": إذا رجع الموديل الأول
+         ناتجاً غير صالح/ضعيفاً (JSON معطوب، placeholders، لغة
+         ناقصة...) نكرر الطلب بالموديل التالي (حتى
+         MAX_QUALITY_ESCALATIONS مرات) قبل اللجوء للقيم الافتراضية.
+         (allam-2-7b يبقى الأول لأن حصته الأعلى، لكن لم يعد
+         الفشل الصامت يمر.)
+  ✅ 16. Visual Keywords: مثال البرومبت لم يعد "kw1,kw2,kw3" (كان
+         الموديل ينسخه حرفياً فتُحذف الكلمات وتصير كل اللقطات
+         "person serious face talking camera")، مع كشف نسخ المثال
+         وتصعيد الموديل عند فشل أكثر من 20% من الجمل.
+  ✅ 17. JSON repair: _fix_dangling_item_quotes() (علامة اقتباس
+         ختامية ناقصة: "text 🤔,) + _balance_brackets() (] ناقصة
+         قبل }) — الحالتان اللتان سببتا فشل Engagement Questions.
+  ✅ 18. _extract_string_list() متسامحة (نص بدل قائمة، قوائم
+         متداخلة) + Hashtags تقبل 3 وسوم كحد أدنى.
+  ✅ 19. Accent Colors: تطبيع (#RGB، hex بدون #، أسماء ألوان،
+         dict) بدل رفض كل شيء → "only 0 valid".
 """
 
 from __future__ import annotations
@@ -35,7 +54,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from groq import Groq
 
@@ -73,6 +92,15 @@ REASONING_MODELS: set[str] = {
 REASONING_TOKEN_MULTIPLIER = 3.0
 # حد أقصى لتفادي طلبات ضخمة جداً بدون داعي
 REASONING_TOKEN_CAP = 8000
+
+# ✅ v7.8 — تصعيد الجودة: عدد المحاولات الإضافية بموديلات
+# أقوى عندما يكون ناتج الموديل الحالي غير صالح أو ضعيفاً.
+# (2 = allam → gpt-oss-20b → gpt-oss-120b؛ qwen يبقى للأخطاء فقط)
+MAX_QUALITY_ESCALATIONS = 2
+# نسبة الجمل التي يجب أن تحصل على كلمات حقيقية في Visual Keywords
+VISUAL_KEYWORDS_GOOD_SCORE = 0.8
+# الحد الأدنى لعدد الهاشتاغات المقبولة لكل لغة
+HASHTAGS_MIN_COUNT = 3
 
 
 MAX_RETRIES_PER_KEY  = 3
@@ -271,6 +299,31 @@ def _get_topic_examples(content_type: str) -> list[str]:
         content_type,
         VISUAL_KEYWORDS_EXAMPLES["default"],
     )
+
+
+# ✅ v7.8 — مثال تنسيق الإخراج في برومبت Visual Keywords.
+# كان سابقاً [["kw1","kw2","kw3"],...] فينسخه الموديل الضعيف
+# حرفياً. الآن أمثلة حقيقية من موضوع مختلف تماماً + كشف نسخها.
+_VISUAL_FORMAT_EXAMPLE_ROWS: list[list[str]] = [
+    [
+        "person closing laptop tired night",
+        "hands rubbing eyes desk lamp",
+        "man staring window thinking",
+    ],
+    [
+        "woman laughing friends cafe",
+        "two friends hugging outdoor",
+        "person smiling reading phone message",
+    ],
+]
+_VISUAL_FORMAT_EXAMPLE_JSON = json.dumps(
+    _VISUAL_FORMAT_EXAMPLE_ROWS, ensure_ascii=False
+)
+_VISUAL_EXAMPLE_PHRASES: frozenset[str] = frozenset(
+    kw.lower()
+    for row in _VISUAL_FORMAT_EXAMPLE_ROWS
+    for kw in row
+)
 
 
 # ═══════════════════════════════════════════════════
@@ -504,6 +557,115 @@ def _fix_quotes(text: str) -> str:
     return text
 
 
+_DANGLING_ITEM_RE = re.compile(r'^(\s*)"([^"\n]*?)\s*(,?)\s*$')
+
+
+def _fix_dangling_item_quotes(text: str) -> str:
+    """
+    ✅ v7.8 — إصلاح عنصر قائمة بدون علامة اقتباس ختامية.
+
+    المشكلة (سبب فشل Engagement Questions في السجلات):
+        "Do you often feel guilty? 🤔,      ← لا يوجد " قبل الفاصلة
+        "Do you hesitate to confront? 😮,
+        "Have you set boundaries? 💭
+
+    السطر الذي يبدأ بـ " ويحتوي " واحدة فقط هو عنصر ناقص
+    الإغلاق. نغلقه (والفاصلة تخرج خارج الاقتباس):
+        "Do you often feel guilty? 🤔",
+
+    ⚠️ يجب أن يعمل قبل _fix_multiline_strings، لأن الأخيرة
+    تعتبر أي سطر بعدد فردي من " بداية string متعدد الأسطر
+    فتدمج كل الأسطر التالية في عنصر واحد.
+    """
+    out: list[str] = []
+    for line in text.split("\n"):
+        if line.count('"') == 1:
+            m = _DANGLING_ITEM_RE.match(line)
+            if m and m.group(2).strip():
+                out.append(
+                    f'{m.group(1)}"{m.group(2).rstrip()}"'
+                    f'{m.group(3)}'
+                )
+                continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def _balance_brackets(text: str) -> str:
+    """
+    ✅ v7.8 — موازنة الأقواس في أول قيمة JSON.
+
+    المشكلة (سبب فشل Engagement Questions في EN #30):
+        {"en": ["a","b","c"}        ← ] ناقصة قبل }
+
+    الإصلاح: عند } بينما القائمة مفتوحة نُدرج ] أولاً، وعند
+    نهاية النص نغلق كل ما بقي مفتوحاً، ونقطع أي ذيل زائد بعد
+    اكتمال القيمة الأولى.
+    """
+    start = -1
+    for i, ch in enumerate(text):
+        if ch in "{[":
+            start = i
+            break
+    if start == -1:
+        return text
+
+    stack:  list[str] = []
+    out:    list[str] = []
+    in_str            = False
+    i                 = start
+    n                 = len(text)
+
+    while i < n:
+        ch = text[i]
+
+        if in_str:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_str = False
+            i += 1
+            continue
+
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+            out.append(ch)
+        elif ch in "}]":
+            if not stack:
+                break
+            if ch == stack[-1]:
+                stack.pop()
+                out.append(ch)
+            else:
+                # إغلاق لا يطابق المفتوح: نغلق الأقواس
+                # المفتوحة حتى نصل للمطابق
+                while stack and stack[-1] != ch:
+                    out.append(stack.pop())
+                if not stack:
+                    break
+                stack.pop()
+                out.append(ch)
+            if not stack:
+                i += 1
+                break
+        else:
+            out.append(ch)
+        i += 1
+
+    if in_str:
+        out.append('"')
+    while stack:
+        out.append(stack.pop())
+
+    return text[:start] + "".join(out)
+
+
 def _fix_multiline_strings(text: str) -> str:
     """
     ✅ v7.5 — إصلاح multiline strings في JSON.
@@ -708,17 +870,22 @@ def _apply_all_fixes(text: str) -> str:
     ✅ v7.5 — تطبيق كل الإصلاحات بالترتيب الصحيح.
 
     الترتيب مهم:
-    1. multiline أولاً (قبل أي شيء)
+    0. dangling quotes أولاً (v7.8 — قبل multiline وإلا دمجت
+       الأسطر التالية في عنصر واحد)
+    1. multiline
     2. trailing comma
     3. unclosed quotes
     4. unquoted array values
-    5. double quotes زائدة أخيراً
+    5. double quotes زائدة
+    6. موازنة الأقواس أخيراً (v7.8)
     """
+    text = _fix_dangling_item_quotes(text)
     text = _fix_multiline_strings(text)
     text = _fix_trailing_comma_in_string(text)
     text = _fix_unclosed_quotes(text)
     text = _fix_unquoted_array_values(text)
     text = _fix_quotes(text)
+    text = _balance_brackets(text)
     return text
 
 
@@ -1034,9 +1201,10 @@ def _looks_like_truncated_thinking(content: str) -> bool:
 
 def _call_groq(
     prompt:         str,
-    max_tokens:     int   = 800,
-    temperature:    float = 0.7,
-    operation_name: str   = "AI call",
+    max_tokens:     int                  = 800,
+    temperature:    float                = 0.7,
+    operation_name: str                  = "AI call",
+    models:         Optional[list[str]]  = None,
 ) -> str:
     _ensure_keys_loaded()
 
@@ -1048,7 +1216,9 @@ def _call_groq(
 
     total_attempts     = n_keys * MAX_RETRIES_PER_KEY
     last_error         = None
-    models_to_try      = list(MODELS_PRIORITY)
+    # ✅ v7.8 — models: ترتيب مخصص لهذا الاستدعاء (يُستعمل في
+    # تصعيد الجودة ليبدأ بموديل أقوى). الافتراضي MODELS_PRIORITY.
+    models_to_try      = list(models) if models else list(MODELS_PRIORITY)
     current_model      = models_to_try[0]
 
     for attempt in range(total_attempts + len(MODELS_PRIORITY) * 3):
@@ -1173,20 +1343,148 @@ def _call_groq(
         f"   Last error: {last_error[:200] if last_error else '?'}"
     )
 
+
+def _call_groq_best(
+    prompt:         str,
+    parse_fn:       Callable[[str], tuple[Any, float]],
+    max_tokens:     int   = 800,
+    temperature:    float = 0.7,
+    operation_name: str   = "AI call",
+    good_score:     float = 1.0,
+) -> Any:
+    """
+    ✅ v7.8 — استدعاء Groq مع "تصعيد الجودة".
+
+    المشكلة: allam-2-7b (الأول لأن حصته الأعلى) يرجع أحياناً JSON
+    معطوباً أو placeholders أو لغة ناقصة. هذا لا يُعتبر "خطأ"
+    في _call_groq فلا يتبدّل الموديل، والمتصل يلجأ للقيم
+    الافتراضية بصمت (هاشتاغات عامة، لقطات متشابهة...).
+
+    الحل: parse_fn(raw) -> (result, score) يتحقق من الناتج
+    (يرمي استثناءً عند الفشل الصلب، أو يعطي score بين 0 و1).
+    إذا لم يبلغ score القيمة good_score نكرر الطلب بالموديل التالي
+    في MODELS_PRIORITY (حتى MAX_QUALITY_ESCALATIONS مرات)
+    ونعيد أفضل نتيجة. إذا فشلت كل المحاولات نرمي آخر استثناء
+    ليتولى المتصل fallback الخاص به.
+    """
+    best_result: Any   = None
+    best_score:  float = -1.0
+    last_error:  Optional[Exception] = None
+
+    max_steps = min(
+        len(MODELS_PRIORITY), 1 + MAX_QUALITY_ESCALATIONS
+    )
+
+    for step in range(max_steps):
+        models = MODELS_PRIORITY[step:]
+        label  = (
+            operation_name if step == 0
+            else f"{operation_name} [retry → {models[0]}]"
+        )
+
+        raw = _call_groq(
+            prompt,
+            max_tokens     = max_tokens,
+            temperature    = temperature,
+            operation_name = label,
+            models         = models,
+        )
+
+        try:
+            result, score = parse_fn(raw)
+        except Exception as e:
+            last_error = e
+            if step + 1 < max_steps:
+                log.warning(
+                    "  ⚠️  %s: output of '%s' unusable (%s) "
+                    "→ trying stronger model",
+                    operation_name, models[0],
+                    str(e).split("\n")[0][:80],
+                )
+            continue
+
+        if score > best_score:
+            best_result, best_score = result, score
+
+        if score >= good_score:
+            break
+
+        if step + 1 < max_steps:
+            log.warning(
+                "  ⚠️  %s: quality %.0f%% from '%s' "
+                "→ trying stronger model",
+                operation_name, score * 100, models[0],
+            )
+
+    if best_result is None:
+        if last_error is not None:
+            raise last_error
+        raise AIEnrichmentError(
+            f"❌ {operation_name}: no usable output"
+        )
+
+    return best_result
+
+
 # ═══════════════════════════════════════════════════
 # DATA EXTRACTION HELPERS
 # ═══════════════════════════════════════════════════
+
+def _split_loose_string(text: str) -> list[str]:
+    """
+    ✅ v7.8 — موديل يرجّع نصاً واحداً بدل قائمة:
+        "#a #b #c"        → ["#a","#b","#c"]
+        "q1\\nq2\\nq3"     → ["q1","q2","q3"]
+        "w1, w2, w3"      → ["w1","w2","w3"]
+    """
+    text = text.strip()
+    if not text:
+        return []
+
+    if "#" in text:
+        tags = re.findall(r"#[^\s#,،;|]+", text)
+        if tags:
+            return tags
+
+    parts = re.split(r"[\n;|]+", text)
+    if len(parts) == 1:
+        parts = re.split(r"\s*[,،]\s*", text)
+
+    return [
+        p.strip().strip('"').strip()
+        for p in parts if p.strip()
+    ]
+
 
 def _extract_string_list(
     data:      Any,
     min_count: int,
 ) -> Optional[list[str]]:
+    # ✅ v7.8 — نص بدل قائمة
+    if isinstance(data, str):
+        data = _split_loose_string(data)
+
     if not isinstance(data, list):
         return None
-    values = [
-        str(x).strip() for x in data
-        if str(x).strip()
-    ]
+
+    values: list[str] = []
+    for x in data:
+        # ✅ v7.8 — قوائم متداخلة / dict بدل نص
+        if isinstance(x, (list, tuple)):
+            values.extend(
+                str(y).strip() for y in x
+                if str(y).strip()
+            )
+        elif isinstance(x, dict):
+            for v in x.values():
+                if isinstance(v, str) and v.strip():
+                    values.append(v.strip())
+                    break
+        else:
+            sx = str(x).strip()
+            if sx:
+                values.append(sx)
+
     if len(values) >= min_count:
         return values
     return None
@@ -1273,6 +1571,22 @@ def _extract_en_value(
     )
 
 
+def _lang_score(
+    lang:        str,
+    lang_values: list[str],
+    en_values:   list[str],
+) -> float:
+    """
+    ✅ v7.8 — جودة نتيجة ثنائية اللغة: إذا كانت قائمة اللغة
+    المطلوبة مطابقة تماماً للإنجليزية فهذا يعني أن
+    _extract_lang_value لجأ لـ 'en' (الموديل لم يكتب اللغة
+    المطلوبة) → جودة منخفضة تستحق إعادة المحاولة بموديل أقوى.
+    """
+    if lang != "en" and lang_values == en_values:
+        return 0.5
+    return 1.0
+
+
 # ═══════════════════════════════════════════════════
 # 1️⃣ CONTENT ANALYSIS
 # ═══════════════════════════════════════════════════
@@ -1322,22 +1636,25 @@ def analyze_content(
         f'"topic_summary":"one sentence in {lang_name}"}}'
     )
 
-    raw  = _call_groq(
+    def _parse_analysis(raw: str) -> tuple[dict, float]:
+        parsed = _parse_json_response(
+            raw, dict, "Content Analysis"
+        )
+        for field in REQUIRED_ANALYSIS_FIELDS:
+            if field not in parsed:
+                raise AIEnrichmentError(
+                    f"❌ Content Analysis missing field: "
+                    f"{field}"
+                )
+        return parsed, 1.0
+
+    data = _call_groq_best(
         prompt,
+        _parse_analysis,
         max_tokens     = 800,
         temperature    = 0.3,
         operation_name = "Content Analysis",
     )
-    data = _parse_json_response(
-        raw, dict, "Content Analysis"
-    )
-
-    for field in REQUIRED_ANALYSIS_FIELDS:
-        if field not in data:
-            raise AIEnrichmentError(
-                f"❌ Content Analysis missing field: "
-                f"{field}"
-            )
 
     # معالجة استخراج الرقم للحقل intensity بشكل محصن ضد أي خطأ
     raw_intensity = data.get("intensity", DEFAULT_INTENSITY)
@@ -1542,23 +1859,26 @@ def generate_power_words(
         f'Example: ["word1","word2","word3"]'
     )
 
-    raw    = _call_groq(
+    def _parse_power_words(raw: str) -> tuple[list[str], float]:
+        words  = _parse_json_response(
+            raw, list, "Power Words"
+        )
+        filtered = _filter_power_words(words, count)
+        if len(filtered) < 3:
+            raise AIEnrichmentError(
+                f"❌ Power Words: only {len(filtered)} valid"
+            )
+        return filtered, 1.0
+
+    result = _call_groq_best(
         prompt,
+        _parse_power_words,
         max_tokens     = 300,
         temperature    = 0.6,
         operation_name = (
             f"Power Words ({lang.upper()})"
         ),
     )
-    words  = _parse_json_response(
-        raw, list, "Power Words"
-    )
-    result = _filter_power_words(words, count)
-
-    if len(result) < 3:
-        raise AIEnrichmentError(
-            f"❌ Power Words: only {len(result)} valid"
-        )
 
     log.info(
         "  ✅ Power Words (%s): %d words",
@@ -1570,6 +1890,27 @@ def generate_power_words(
 # ═══════════════════════════════════════════════════
 # 4️⃣ VISUAL KEYWORDS
 # ═══════════════════════════════════════════════════
+
+def _clean_keyword_row(raw_row: Any) -> list[str]:
+    """
+    ✅ v7.8 — ينظّف صف كلمات جملة واحدة:
+    يحذف placeholders (kw1...) ونسخ مثال التنسيق والكلمات
+    المجرّدة. الصف الفارغ = الموديل لم يعطِ كلمات حقيقية.
+    """
+    if not isinstance(raw_row, list):
+        return []
+    kws = [
+        str(k).strip()
+        for k in raw_row[:5]
+        if str(k).strip()
+    ]
+    kws = [
+        k for k in kws
+        if not _is_placeholder_keyword(k)
+        and k.lower() not in _VISUAL_EXAMPLE_PHRASES
+    ]
+    return _filter_abstract_keywords(kws)
+
 
 def _generate_visual_keywords_batch(
     sentences: list[str],
@@ -1644,9 +1985,14 @@ def _generate_visual_keywords_batch(
         f"=== SENTENCES ({n} total) ===\n"
         f"{sentences_text}"
         f"=== OUTPUT (CRITICAL) ===\n"
-        f"Return ONLY a JSON array of {n} arrays "
-        f"(no markdown):\n"
-        f'[["kw1","kw2","kw3"],["kw1","kw2","kw3"]]'
+        f"Return ONLY a JSON array of EXACTLY {n} arrays "
+        f"(no markdown) — one array per sentence, each with "
+        f"3 DIFFERENT real search phrases written for THAT "
+        f"sentence. NEVER copy the example below and NEVER "
+        f"write placeholders like kw1.\n"
+        f"FORMAT EXAMPLE (a different video, only for "
+        f"the format):\n"
+        f"{_VISUAL_FORMAT_EXAMPLE_JSON}"
     )
 
     fallbacks = [
@@ -1655,19 +2001,33 @@ def _generate_visual_keywords_batch(
         "confident person speaking direct",
     ]
 
+    def _parse_keywords(raw: str) -> tuple[list[list[str]], float]:
+        """يرجع (الصفوف المنظّفة، نسبة الجمل التي حصلت على كلمات حقيقية)."""
+        data = _parse_json_response(
+            raw, list, "Visual Keywords"
+        )
+        rows = [
+            _clean_keyword_row(
+                data[i] if i < len(data) else None
+            )
+            for i in range(n)
+        ]
+        good  = sum(1 for r in rows if r)
+        score = good / n if n else 0.0
+        return rows, score
+
     raw = ""
     try:
-        raw  = _call_groq(
+        rows = _call_groq_best(
             prompt,
+            _parse_keywords,
             max_tokens     = calculated_tokens,
             temperature    = 0.3,
             operation_name = (
                 f"Visual Keywords "
                 f"(batch {batch_num}, {n} sentences)"
             ),
-        )
-        data = _parse_json_response(
-            raw, list, "Visual Keywords"
+            good_score     = VISUAL_KEYWORDS_GOOD_SCORE,
         )
         result: list[list[str]] = []
 
@@ -1677,23 +2037,8 @@ def _generate_visual_keywords_batch(
                 else "information"
             )
 
-            if (
-                i < len(data) and
-                isinstance(data[i], list)
-            ):
-                raw_kws = [
-                    str(k).strip()
-                    for k in data[i][:5]
-                    if str(k).strip()
-                ]
-                # ✅ v7.7 — استبعد placeholders وهمية (kw1, kw2...)
-                # قبل ما تدخل فلترة الكلمات المجردة، عشان ما
-                # توصل حرفياً لبحث Pexels عن "kw1".
-                raw_kws = [
-                    k for k in raw_kws
-                    if not _is_placeholder_keyword(k)
-                ]
-                kws = _filter_abstract_keywords(raw_kws)
+            kws = list(rows[i]) if rows[i] else []
+            if kws:
                 while len(kws) < 3:
                     fb = fallbacks[len(kws) % 3]
                     if fb not in kws:
@@ -1713,6 +2058,14 @@ def _generate_visual_keywords_batch(
             log.info(
                 "     [%d/%d] [%s] → %s",
                 i + 1, n, tag, kws[:3],
+            )
+
+        n_fallback = sum(1 for r in rows if not r)
+        if n_fallback:
+            log.warning(
+                "  ⚠️  Visual Keywords: %d/%d sentences "
+                "still use generic fallback keywords",
+                n_fallback, n,
             )
 
         return result
@@ -1840,48 +2193,61 @@ def _generate_bilingual_content(
     count:          int,
     min_count:      int,
 ) -> dict[str, list[str]]:
-    raw  = _call_groq(
+
+    def _parse_bilingual(
+        raw: str,
+    ) -> tuple[dict[str, list[str]], float]:
+        data = _parse_json_response(
+            raw, dict, operation_name
+        )
+
+        if lang == "en":
+            en_values = _extract_en_value(
+                data, operation_name, min_count,
+            )
+            parsed = {"en": en_values[:count]}
+            if len(parsed["en"]) < min_count:
+                raise AIEnrichmentError(
+                    f"❌ {operation_name}: not enough data"
+                )
+            return parsed, 1.0
+
+        lang_values = _extract_lang_value(
+            data, lang, operation_name, min_count,
+        )
+        en_values   = _extract_en_value(
+            data, operation_name, min_count,
+        )
+        parsed = {
+            lang: lang_values[:count],
+            "en": en_values[:count],
+        }
+        if (
+            len(parsed[lang]) < min_count or
+            len(parsed["en"]) < min_count
+        ):
+            raise AIEnrichmentError(
+                f"❌ {operation_name}: not enough data"
+            )
+        return parsed, _lang_score(
+            lang, lang_values, en_values
+        )
+
+    result = _call_groq_best(
         prompt,
+        _parse_bilingual,
         max_tokens     = max_tokens,
         temperature    = temperature,
         operation_name = operation_name,
     )
-    data = _parse_json_response(
-        raw, dict, operation_name
-    )
 
     if lang == "en":
-        en_values = _extract_en_value(
-            data, operation_name, min_count,
-        )
-        result = {"en": en_values[:count]}
-        if len(result["en"]) < min_count:
-            raise AIEnrichmentError(
-                f"❌ {operation_name}: not enough data"
-            )
         log.info(
             "  ✅ %s: EN(%d)",
             operation_name, len(result['en']),
         )
         return result
 
-    lang_values = _extract_lang_value(
-        data, lang, operation_name, min_count,
-    )
-    en_values   = _extract_en_value(
-        data, operation_name, min_count,
-    )
-    result = {
-        lang: lang_values[:count],
-        "en": en_values[:count],
-    }
-    if (
-        len(result[lang]) < min_count or
-        len(result["en"]) < min_count
-    ):
-        raise AIEnrichmentError(
-            f"❌ {operation_name}: not enough data"
-        )
     log.info(
         "  ✅ %s: %s(%d) | EN(%d)",
         operation_name,
@@ -2140,6 +2506,7 @@ def generate_hashtags(
     """
     ✅ v7.5 — prompt أصرم + temperature=0.5
     ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
+    ✅ v7.8 — تصعيد الجودة + قبول 3 وسوم كحد أدنى + نص بدل قائمة
     """
     content_type     = context.get(
         "content_type", "general"
@@ -2171,54 +2538,65 @@ def generate_hashtags(
         f"{json_format}"
     )
 
-    try:
-        raw  = _call_groq(
-            prompt,
-            max_tokens     = 700,
-            temperature    = 0.5,  # ✅ أقل من 0.6
-            operation_name = "Hashtags",
-        )
+    def _parse_hashtags(
+        raw: str,
+    ) -> tuple[dict[str, list[str]], float]:
         data = _parse_json_response(raw, dict, "Hashtags")
 
         if lang == "en":
             en_values = _extract_en_value(
-                data, "Hashtags", 5
+                data, "Hashtags", HASHTAGS_MIN_COUNT
             )
-            result    = {
+            parsed    = {
                 "en": _clean_hashtags(en_values[:count])
             }
-            if len(result["en"]) < 5:
+            if len(parsed["en"]) < HASHTAGS_MIN_COUNT:
                 raise AIEnrichmentError(
                     "❌ Hashtags: not enough EN tags"
                 )
-            log.info(
-                "  ✅ Hashtags: EN(%d)",
-                len(result['en']),
-            )
-            return result
+            return parsed, 1.0
 
         lang_values = _extract_lang_value(
-            data, lang, "Hashtags", 5
+            data, lang, "Hashtags", HASHTAGS_MIN_COUNT
         )
         en_values   = _extract_en_value(
-            data, "Hashtags", 5
+            data, "Hashtags", HASHTAGS_MIN_COUNT
         )
-        result = {
+        parsed = {
             lang: _clean_hashtags(lang_values[:count]),
             "en": _clean_hashtags(en_values[:count]),
         }
         if (
-            len(result[lang]) < 5 or
-            len(result["en"]) < 5
+            len(parsed[lang]) < HASHTAGS_MIN_COUNT or
+            len(parsed["en"]) < HASHTAGS_MIN_COUNT
         ):
             raise AIEnrichmentError(
                 "❌ Hashtags: not enough tags"
             )
-        log.info(
-            "  ✅ Hashtags: %s(%d) | EN(%d)",
-            lang.upper(), len(result[lang]),
-            len(result['en']),
+        return parsed, _lang_score(
+            lang, lang_values, en_values
         )
+
+    try:
+        result = _call_groq_best(
+            prompt,
+            _parse_hashtags,
+            max_tokens     = 700,
+            temperature    = 0.5,  # ✅ أقل من 0.6
+            operation_name = "Hashtags",
+        )
+
+        if lang == "en":
+            log.info(
+                "  ✅ Hashtags: EN(%d)",
+                len(result['en']),
+            )
+        else:
+            log.info(
+                "  ✅ Hashtags: %s(%d) | EN(%d)",
+                lang.upper(), len(result[lang]),
+                len(result['en']),
+            )
         return result
 
     except Exception as e:
@@ -2309,6 +2687,7 @@ def generate_captions(
     """
     ✅ v7.5 — prompt أصرم مع ONE line rule
     ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
+    ✅ v7.8 — تصعيد الجودة عند غياب كابشن اللغة المطلوبة
     """
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     safe_title   = _safe_title(
@@ -2355,17 +2734,18 @@ def generate_captions(
         f"{json_format}"
     )
 
-    try:
-        raw  = _call_groq(
-            prompt,
-            max_tokens     = 800,
-            temperature    = 0.6,  # ✅ أقل من 0.7
-            operation_name = "Captions",
-        )
+    def _parse_captions(
+        raw: str,
+    ) -> tuple[tuple[str, str], float]:
         data = _parse_json_response(raw, dict, "Captions")
 
-        lang_caption = _extract_caption(data, lang)
-        en_caption   = (
+        has_own_lang = (
+            lang in data
+            and isinstance(data[lang], str)
+            and bool(data[lang].strip())
+        )
+        parsed_lang  = _extract_caption(data, lang)
+        parsed_en    = (
             data["en"].strip()
             if (
                 "en" in data and
@@ -2374,13 +2754,25 @@ def generate_captions(
             else ""
         )
 
-        if not lang_caption:
+        if not parsed_lang:
             raise AIEnrichmentError(
                 f"❌ Captions: missing {lang} caption"
             )
 
-        if not en_caption:
-            en_caption = lang_caption
+        if not parsed_en:
+            parsed_en = parsed_lang
+
+        score = 1.0 if (lang == "en" or has_own_lang) else 0.6
+        return (parsed_lang, parsed_en), score
+
+    try:
+        lang_caption, en_caption = _call_groq_best(
+            prompt,
+            _parse_captions,
+            max_tokens     = 800,
+            temperature    = 0.6,  # ✅ أقل من 0.7
+            operation_name = "Captions",
+        )
 
         if lang == "en":
             en_tags = hashtags.get("en", [])
@@ -2508,15 +2900,69 @@ def generate_street_description(
 # 🔟 ACCENT COLORS
 # ═══════════════════════════════════════════════════
 
+# ✅ v7.8 — أسماء ألوان شائعة → HEX (الموديل أحياناً يرجّع
+# ["red","gold","cyan"] بدل HEX فكانت كل القيم تُرفض)
+_COLOR_NAMES: dict[str, str] = {
+    "red":        "#FF003C",
+    "crimson":    "#DC143C",
+    "gold":       "#FFD700",
+    "yellow":     "#FFD700",
+    "cyan":       "#00FFFF",
+    "aqua":       "#00FFFF",
+    "turquoise":  "#40E0D0",
+    "green":      "#39FF14",
+    "lime":       "#39FF14",
+    "neon green": "#39FF14",
+    "blue":       "#1E90FF",
+    "magenta":    "#FF00FF",
+    "pink":       "#FF1493",
+    "orange":     "#FF8C00",
+    "purple":     "#9B30FF",
+    "white":      "#FFFFFF",
+}
+
+
+def _normalize_color(color: Any) -> Optional[str]:
+    """
+    ✅ v7.8 — يحوّل أي تمثيل لون إلى #RRGGBB أو None:
+    "#ff003c" / "FF003C" / "#f03" / {"hex": "#..."} / "red".
+    """
+    if isinstance(color, dict):
+        for key in ("hex", "color", "code", "value"):
+            if key in color:
+                return _normalize_color(color[key])
+        return None
+
+    s = str(color).strip()
+    if not s:
+        return None
+
+    if re.fullmatch(r"#?[0-9A-Fa-f]{6}", s):
+        return "#" + s.lstrip("#").upper()
+
+    m = re.search(r"#[0-9A-Fa-f]{6}\b", s)
+    if m:
+        return m.group(0).upper()
+
+    m = re.search(r"#([0-9A-Fa-f]{3})\b", s)
+    if m:
+        r, g, b = m.group(1)
+        return f"#{r}{r}{g}{g}{b}{b}".upper()
+
+    return _COLOR_NAMES.get(s.lower())
+
+
 def _validate_hex_colors(
     colors: list,
     limit:  int = 4,
 ) -> list[str]:
     valid: list[str] = []
-    for color in colors[:limit]:
-        color = str(color).strip().upper()
-        if _HEX_PATTERN.match(color):
-            valid.append(color)
+    for color in colors[: limit * 2]:
+        normalized = _normalize_color(color)
+        if normalized and normalized not in valid:
+            valid.append(normalized)
+        if len(valid) >= limit:
+            break
     return valid
 
 
@@ -2840,7 +3286,7 @@ def enrich_record(
     content_mode: str                  = "short",
 ) -> dict:
     """
-    الدالة الرئيسية للإثراء بالـ AI — v7.6
+    الدالة الرئيسية للإثراء بالـ AI — v7.8
 
     ✅ الإصلاحات (v7.5):
       - _fix_multiline_strings()
@@ -2851,13 +3297,21 @@ def enrich_record(
       - generate_hashtags() — temperature=0.5
       - generate_captions() — ONE line rule
 
-    ✅ الإصلاحات الجديدة (v7.6):
+    ✅ الإصلاحات (v7.6):
       - موديلات reasoning (qwen) تاخذ توكنز أكبر تلقائياً
       - اكتشاف القطع أثناء التفكير وتبديل الموديل فوراً
       - MODELS_PRIORITY معاد ترتيبها (non-reasoning أولاً)
       - Pattern Interrupts / Engagement Questions / Hashtags /
         Captions كلها صارت "graceful" — تفشل بهدوء مع fallback
         بدل ما توقف الفيديو كامل
+
+    ✅ الإصلاحات الجديدة (v7.8):
+      - تصعيد الجودة (_call_groq_best): ناتج ضعيف/معطوب → إعادة
+        المحاولة بموديل أقوى قبل اللجوء للقيم الافتراضية
+      - Visual Keywords: مثال تنسيق حقيقي بدل kw1/kw2/kw3
+      - JSON repair: اقتباس ختامي ناقص + ] ناقصة
+      - Hashtags/Engagement تقبل نصاً بدل قائمة (حد أدنى 3 وسوم)
+      - Accent Colors: تطبيع الألوان بدل رفضها
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
