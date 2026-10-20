@@ -16,6 +16,8 @@ Features:
   ✅ Word timestamps sorted before remap
   ✅ total_duration=0 fallback protection
   ✅ ffprobe not found → -1.0 (distinct from 0.0)
+  ✅ NEW: exact duration for raw .aac (ADTS) files
+        (ffprobe format.duration is only an ESTIMATE for them)
 
 IMPORTANT:
   Audio passed = Audio that will play in final video
@@ -54,7 +56,12 @@ LANG_MAP: dict[str, str] = {
 }
 
 # Timeouts
-FFPROBE_TIMEOUT = 15
+FFPROBE_TIMEOUT         = 15
+FFPROBE_PACKETS_TIMEOUT = 60
+
+# Raw audio streams WITHOUT a duration header (duration must be measured,
+# not read): ADTS .aac is the one used by the audio pipeline.
+RAW_AAC_EXTENSIONS = (".aac",)
 
 # Validation thresholds
 MIN_REMAP_WORDS_RATIO = 0.15   # 15% tolerance (was 0.05)
@@ -107,14 +114,74 @@ class WordEntry:
 # AUDIO DURATION
 # ═════════════════════════════════════════════════════════════════════════════
 
+def _exact_duration_raw_aac(path: str) -> float:
+    """
+    مدة دقيقة لملف .aac الخام (ADTS).
+
+    المشكلة: ملف ADTS ليس له ترويسة مدة، فـ ffprobe يُقدّر
+    format.duration من حجم الملف ومعدل البت. القياسات أظهرت أخطاء
+    من -1.3 ثانية (بعد إضافة صمت) إلى +22 ثانية (ملف 15 دقيقة).
+
+    الحل: مدة الحزم نفسها. كل حزمة AAC = 1024 عينة، فآخر
+    pts_time + duration_time = المدة الحقيقية (دقة ~0.03 ثانية)،
+    وأسرع بكثير من فك الترميز الكامل.
+
+    Returns:
+        المدة بالثواني، أو 0.0 إذا تعذّر القياس.
+    """
+    try:
+        r = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a:0",
+                "-show_entries", "packet=pts_time,duration_time",
+                "-of", "csv=p=0",
+                path,
+            ],
+            capture_output = True,
+            text           = True,
+            timeout        = FFPROBE_PACKETS_TIMEOUT,
+        )
+
+        lines = r.stdout.strip().splitlines()
+        if not lines:
+            return 0.0
+
+        parts = lines[-1].split(",")
+        pts   = float(parts[0])
+        dur   = float(parts[1]) if len(parts) > 1 else 0.0
+
+        return pts + dur if pts > 0 else 0.0
+
+    except (ValueError, IndexError):
+        return 0.0
+    except FileNotFoundError:
+        return 0.0
+    except subprocess.TimeoutExpired:
+        log.warning("  ⚠️  ffprobe packets timeout")
+        return 0.0
+    except Exception as e:
+        log.debug("  ffprobe packets error: %s", e)
+        return 0.0
+
+
 def get_audio_duration(path: str) -> float:
     """
     الحصول على مدة ملف صوتي بالثواني.
+
+    ✅ ملفات .aac الخام: قياس دقيق عبر الحزم (انظر
+       _exact_duration_raw_aac) بدل تقدير ffprobe.
 
     Returns:
         المدة (موجبة) أو 0.0 عند الفشل
         -1.0 إذا ffprobe غير موجود
     """
+    if str(path).lower().endswith(RAW_AAC_EXTENSIONS):
+        exact = _exact_duration_raw_aac(str(path))
+        if exact > 0:
+            return exact
+        # فشل القياس الدقيق → نكمل بالطريقة العادية كاحتياط
+
     try:
         r = subprocess.run(
             [
