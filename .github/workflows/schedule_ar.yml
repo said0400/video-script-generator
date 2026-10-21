@@ -63,7 +63,7 @@ env:
 jobs:
   generate:
     name: 🇸🇦 Generate Arabic Video
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # ✅ 350 دقيقة — كافية لأي فيديو مهما كان طوله
     timeout-minutes: 350
 
