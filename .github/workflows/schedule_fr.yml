@@ -78,7 +78,7 @@ jobs:
   # ══════════════════════════════════════════════════════════
   check:
     name: 🕐 Check Paris time (DST)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 2
     outputs:
       proceed: ${{ steps.dst.outputs.proceed }}
@@ -123,7 +123,7 @@ jobs:
     name: 🇫🇷 Generate French Video
     needs: check
     if: needs.check.outputs.proceed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     # ✅ concurrency على مستوى الـ job: التشغيلات المتجاوزة (الموسم الخاطئ)
     #    لا تدخل الطابور ولا تلغي التشغيلات الصحيحة المنتظرة
