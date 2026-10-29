@@ -1,6 +1,8 @@
 """
 📅 scheduler.py — Daily Video Publisher v3.0
 
+Slots/time helpers now live in publish_timing.py (shared with main.py --wait-for-slot).
+
 Changes from v2.0:
   ✅ Slots now MATCH the GitHub workflows (ar.yml / fr.yml / en.yml):
        🇸🇦 AR : slots in Asia/Riyadh  (UTC+3, no DST)
@@ -94,105 +96,14 @@ VALID_LANGS     = ("ar", "fr", "en")
 VALID_MODES     = ("short", "long")
 VALID_PLATFORMS = ("yt", "fb", "both")
 
-# cron day-of-week: 0 = Sunday ... 6 = Saturday
-SUN, MON, TUE, WED, THU, FRI, SAT = range(7)
-_DAY_NAMES = ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
-EVERY_DAY  = None
-
-
-@dataclass(frozen=True)
-class Slot:
-    """
-    موعد نشر واحد.
-
-    hour/minute : بتوقيت SCHEDULE_TZ للغة
-    days        : أيام الأسبوع (cron: 0=Sun) أو None = كل يوم
-    """
-    hour:   int
-    minute: int
-    days:   Optional[frozenset[int]] = EVERY_DAY
-
-    def runs_on(self, cron_dow: int) -> bool:
-        return self.days is None or cron_dow in self.days
-
-    def days_label(self) -> str:
-        if self.days is None:
-            return "every day"
-        return ",".join(_DAY_NAMES[d] for d in sorted(self.days))
-
-
-def _days(*d: int) -> frozenset[int]:
-    return frozenset(d)
-
-
-# المنطقة الزمنية التي عُرّفت بها المواعيد (مطابقة لملفات الـ workflow)
-SCHEDULE_TZ: dict[str, str] = {
-    "ar": "Asia/Riyadh",    # UTC+3 ثابت
-    "fr": "Europe/Paris",   # صيفي/شتوي تلقائي
-    "en": "UTC",            # ثابت في الـ workflow (لا تأثير للصيفي)
-}
-
-# منطقة الجمهور (للعرض فقط)
-AUDIENCE_TZ: dict[str, str] = {
-    "ar": "Asia/Riyadh",
-    "fr": "Europe/Paris",
-    "en": "America/New_York",
-}
-LANG_TIMEZONES = AUDIENCE_TZ  # backward-compat alias
-
-PUBLISH_SCHEDULE: dict[str, dict[str, list[Slot]]] = {
-    # ── 🇸🇦 Arabic — يطابق ar.yml ───────────────────────────
-    #   10:00 UTC (كل يوم)            = 13:00 مكة
-    #   14:00 UTC (كل يوم)            = 17:00 مكة
-    #   18:00 UTC (أحد/اثنين/ثلاثاء/خميس/جمعة) = 21:00 مكة
-    #   16:00 UTC (أربعاء/سبت) Long   = 19:00 مكة
-    "ar": {
-        "short": [
-            Slot(13, 0),
-            Slot(17, 0),
-            Slot(21, 0, _days(SUN, MON, TUE, THU, FRI)),
-        ],
-        "long": [
-            Slot(19, 0, _days(WED, SAT)),
-        ],
-    },
-    # ── 🇫🇷 French — يطابق fr.yml ────────────────────────────
-    #   11:30 باريس (كل يوم)
-    #   16:00 باريس (كل يوم)
-    #   21:00 باريس (أحد/اثنين/أربعاء/خميس/سبت)
-    #   19:00 باريس (ثلاثاء/جمعة) Long
-    "fr": {
-        "short": [
-            Slot(11, 30),
-            Slot(16, 0),
-            Slot(21, 0, _days(SUN, MON, WED, THU, SAT)),
-        ],
-        "long": [
-            Slot(19, 0, _days(TUE, FRI)),
-        ],
-    },
-    # ── 🇺🇸 English — يطابق en.yml (UTC ثابت) ─────────────────
-    #   15:00 UTC (كل يوم)
-    #   19:00 UTC (كل يوم)
-    #   23:55 UTC (اثنين/ثلاثاء/أربعاء/جمعة/سبت)
-    #   22:30 UTC (خميس/أحد) Long
-    "en": {
-        "short": [
-            Slot(15, 0),
-            Slot(19, 0),
-            Slot(23, 55, _days(MON, TUE, WED, FRI, SAT)),
-        ],
-        "long": [
-            Slot(22, 30, _days(THU, SUN)),
-        ],
-    },
-}
-
-# GitHub cron قد يتأخر 15-60 دقيقة → نافذة أوسع من v2.0 (25)
-SCHEDULE_TOLERANCE_MINUTES = 60
-
-# Anti-duplicate: يجب أن يكون > tolerance وأقل من أصغر فاصل بين موعدين
-MIN_MINUTES_BETWEEN_PUBLISH = 65
+from publish_timing import (  # noqa: E402  (slots + time helpers shared with main.py)
+    SUN, MON, TUE, WED, THU, FRI, SAT,
+    Slot, PUBLISH_SCHEDULE, SCHEDULE_TZ, AUDIENCE_TZ, LANG_TIMEZONES,
+    SCHEDULE_TOLERANCE_MINUTES, MIN_MINUTES_BETWEEN_PUBLISH,
+    _now_utc, _local_time, _cron_dow, _schedule_tz, _slots_for_date,
+    _get_utc_slots, _is_slot_active, _is_publish_time,
+    _next_slot_in_minutes, _validate_schedule,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -224,103 +135,20 @@ def parse_args() -> argparse.Namespace:
 # TIME HELPERS (DST-safe, weekday-aware)
 # ═══════════════════════════════════════════════════════════════════
 
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
 
 
-def _local_time(lang: str) -> datetime:
-    """الوقت الحالي بتوقيت جمهور اللغة (للعرض)."""
-    return datetime.now(ZoneInfo(AUDIENCE_TZ.get(lang, "UTC")))
 
 
-def _cron_dow(d: date) -> int:
-    """Python weekday (Mon=0) → cron day-of-week (Sun=0)."""
-    return (d.weekday() + 1) % 7
 
 
-def _schedule_tz(lang: str) -> ZoneInfo:
-    return ZoneInfo(SCHEDULE_TZ.get(lang, "UTC"))
 
 
-def _slots_for_date(
-    lang: str,
-    mode: str,
-    d:    date,
-) -> list[tuple[Slot, datetime]]:
-    """
-    مواعيد يوم محدد (بتاريخ منطقة الجدولة) كـ (Slot, UTC datetime).
-    تراعي أيام الأسبوع والتوقيت الصيفي.
-    """
-    tz  = _schedule_tz(lang)
-    dow = _cron_dow(d)
-    out: list[tuple[Slot, datetime]] = []
-
-    for slot in PUBLISH_SCHEDULE.get(lang, {}).get(mode, []):
-        if not slot.runs_on(dow):
-            continue
-        try:
-            local_dt = datetime(
-                d.year, d.month, d.day,
-                slot.hour, slot.minute, 0,
-                tzinfo=tz,
-            )
-            out.append((slot, local_dt.astimezone(timezone.utc)))
-        except Exception as e:
-            log.warning(
-                "  ⚠️  Cannot build slot %02d:%02d for %s: %s",
-                slot.hour, slot.minute, lang, e,
-            )
-
-    out.sort(key=lambda x: x[1])
-    return out
 
 
-def _get_utc_slots(
-    lang:        str,
-    mode:        str,
-    now_utc:     Optional[datetime] = None,
-    day_offsets: tuple[int, ...]    = (0,),
-) -> list[datetime]:
-    """
-    مواعيد UTC لأيام (اليوم + offsets) بتاريخ منطقة الجدولة.
-    offset=-1 → أمس (مهم لموعد 23:55 UTC عند تأخر الـ runner).
-    """
-    now_utc = now_utc or _now_utc()
-    today   = now_utc.astimezone(_schedule_tz(lang)).date()
-
-    result: list[datetime] = []
-    for off in day_offsets:
-        result.extend(
-            dt for _, dt in _slots_for_date(
-                lang, mode, today + timedelta(days=off)
-            )
-        )
-    return sorted(result)
 
 
-def _is_slot_active(
-    slot_dt:   datetime,
-    now_utc:   datetime,
-    tolerance: int = SCHEDULE_TOLERANCE_MINUTES,
-) -> bool:
-    """هل الموعد فعّال الآن (ضمن tolerance بعد وقته)؟"""
-    diff = (now_utc - slot_dt).total_seconds()
-    return 0 <= diff <= tolerance * 60
 
 
-def _is_publish_time(
-    lang:      str,
-    mode:      str,
-    tolerance: int = SCHEDULE_TOLERANCE_MINUTES,
-) -> bool:
-    """هل أي موعد فعّال الآن؟ (يفحص أمس واليوم)."""
-    now_utc = _now_utc()
-    return any(
-        _is_slot_active(slot, now_utc, tolerance)
-        for slot in _get_utc_slots(
-            lang, mode, now_utc, day_offsets=(-1, 0)
-        )
-    )
 
 
 def _was_recently_published(
@@ -338,54 +166,8 @@ def _was_recently_published(
     return (_now_utc() - last).total_seconds() / 60 < min_minutes
 
 
-def _next_slot_in_minutes(lang: str, mode: str) -> Optional[int]:
-    """دقائق حتى أقرب موعد قادم (يبحث حتى 8 أيام للأمام)."""
-    now_utc = _now_utc()
-    future  = [
-        s for s in _get_utc_slots(
-            lang, mode, now_utc, day_offsets=tuple(range(0, 8))
-        )
-        if s > now_utc
-    ]
-    if not future:
-        return None
-    return int((future[0] - now_utc).total_seconds() / 60)
 
 
-def _validate_schedule() -> list[str]:
-    """
-    فحص منطقي: أصغر فاصل بين موعدين (نفس اللغة+النوع) يجب أن يكون
-    أكبر من MIN_MINUTES_BETWEEN_PUBLISH وإلا يُحجب موعد شرعي.
-    """
-    warnings: list[str] = []
-    base = date.today()
-
-    for lang in VALID_LANGS:
-        for mode in VALID_MODES:
-            slots: list[datetime] = []
-            for off in range(0, 8):
-                d = base + timedelta(days=off)
-                slots.extend(dt for _, dt in _slots_for_date(lang, mode, d))
-            slots.sort()
-
-            gaps = [
-                (b - a).total_seconds() / 60
-                for a, b in zip(slots, slots[1:])
-            ]
-            if not gaps:
-                continue
-            min_gap = min(gaps)
-            if min_gap <= MIN_MINUTES_BETWEEN_PUBLISH:
-                warnings.append(
-                    f"{lang.upper()}/{mode}: min gap {min_gap:.0f}min "
-                    f"<= anti-duplicate {MIN_MINUTES_BETWEEN_PUBLISH}min"
-                )
-    if SCHEDULE_TOLERANCE_MINUTES >= MIN_MINUTES_BETWEEN_PUBLISH:
-        warnings.append(
-            "SCHEDULE_TOLERANCE_MINUTES must be < "
-            "MIN_MINUTES_BETWEEN_PUBLISH"
-        )
-    return warnings
 
 
 # ═══════════════════════════════════════════════════════════════════
