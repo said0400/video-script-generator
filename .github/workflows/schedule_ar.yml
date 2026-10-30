@@ -2,15 +2,24 @@ name: 🇸🇦 Arabic Videos (Short + Long)
 
 on:
   schedule:
-    # ── Shorts: الأحد، الإثنين، الثلاثاء، الخميس، الجمعة (3 فيديوهات يوميًا) ──
+    # ══════════════════════════════════════════════════════════
+    # كل cron يبدأ قبل موعد النشر بـ 140 دقيقة:
+    # ينتج الفيديو ثم ينتظر main.py الموعد بالضبط (--wait-for-slot).
     # (UTC = توقيت مكة − 3 ساعات)
-    - cron: "0 10 * * 0,1,2,4,5"   # 01:00 PM مكة (10:00 UTC) — الظهيرة
-    - cron: "0 14 * * 0,1,2,4,5"   # 05:00 PM مكة (14:00 UTC) — بعد العصر
-    - cron: "0 18 * * 0,1,2,4,5"   # 09:00 PM مكة (18:00 UTC) — السهرة
-    # ── الأربعاء والسبت: Short + Short + Long ───────────────
-    - cron: "0 10 * * 3,6"         # 13:00 PM مكة (10:00 UTC) — Short
-    - cron: "0 14 * * 3,6"         # 05:00 PM مكة (14:00 UTC) — Short
-    - cron: "0 16 * * 3,6"         # 07:00 PM مكة (16:00 UTC) — Long
+    # يجب أن تطابق publish_timing.py (PUBLISH_SCHEDULE["ar"])
+    # ══════════════════════════════════════════════════════════
+
+    # ── نشر 13:00 مكة (10:00 UTC) — كل الأيام (Short) ────────
+    - cron: "40 7 * * *"
+
+    # ── نشر 17:00 مكة (14:00 UTC) — كل الأيام (Short) ────────
+    - cron: "40 11 * * *"
+
+    # ── نشر 21:00 مكة (18:00 UTC) — أحد/اثنين/ثلاثاء/خميس/جمعة (Short) ──
+    - cron: "40 15 * * 0,1,2,4,5"
+
+    # ── نشر 19:00 مكة (16:00 UTC) — الأربعاء والسبت (Long) ───
+    - cron: "40 13 * * 3,6"
 
   workflow_dispatch:
     inputs:
@@ -64,7 +73,7 @@ jobs:
   generate:
     name: 🇸🇦 Generate Arabic Video
     runs-on: ubuntu-24.04
-    # ✅ 350 دقيقة — كافية لأي فيديو مهما كان طوله
+    # ✅ 350 دقيقة — كافية لأي فيديو مهما كان طوله (يشمل الانتظار للموعد)
     timeout-minutes: 350
 
     steps:
@@ -207,15 +216,27 @@ jobs:
           TELEGRAM_CHAT_ID:      ${{ secrets.TELEGRAM_CHAT_ID }}
           CURRENT_LANG:          "ar"
 
+          INPUT_CONTENT_MODE: ${{ github.event.inputs.content_mode }}
+          INPUT_VIDEO_NUMBER: ${{ github.event.inputs.video_number }}
+          INPUT_FORCE:        ${{ github.event.inputs.force }}
+          INPUT_FORCE_AI:     ${{ github.event.inputs.force_ai }}
+          INPUT_PUBLISH_FB:   ${{ github.event.inputs.publish_fb }}
+          INPUT_PUBLISH_YT:   ${{ github.event.inputs.publish_yt }}
+          # نص الـ cron الذي شغّل الـ workflow (فارغ في التشغيل اليدوي)
+          EVENT_SCHEDULE:     ${{ github.event.schedule }}
+
         run: |
           # ── تحديد MODE ──────────────────────────────────────
-          # الأربعاء والسبت 16:00 UTC (07:00 PM مكة) = فيديو طويل، الباقي Shorts
+          # الأربعاء والسبت: cron "40 13" (نشر 16:00 UTC = 19:00 مكة) = فيديو طويل
           MODE="short"
-          [ "${{ github.event.schedule }}" = "0 16 * * 3,6" ] && MODE="long"
+          [ "$EVENT_SCHEDULE" = "40 13 * * 3,6" ] && MODE="long"
+          [ -n "$INPUT_CONTENT_MODE" ] && MODE="$INPUT_CONTENT_MODE"
 
-          # ✅ override من workflow_dispatch
-          INPUT_MODE="${{ github.event.inputs.content_mode }}"
-          [ -n "$INPUT_MODE" ] && MODE="$INPUT_MODE"
+          FORCE="${INPUT_FORCE:-false}"
+          FORCE_AI="${INPUT_FORCE_AI:-false}"
+          PUBLISH_FB="${INPUT_PUBLISH_FB:-true}"
+          PUBLISH_YT="${INPUT_PUBLISH_YT:-true}"
+          VIDEO_NUMBER="${INPUT_VIDEO_NUMBER:-}"
 
           # ── تحديد الملفات حسب MODE ──────────────────────────
           if [ "$MODE" = "long" ]; then
@@ -229,35 +250,21 @@ jobs:
           echo "🚀 Mode: $MODE | Input: $INPUT_FILE | Output: $OUTPUT_DIR"
 
           # ── بناء FLAGS ──────────────────────────────────────
-          FLAGS="--lang ar --content-mode $MODE --auto-next --platform both"
+          FLAGS=(--lang ar --content-mode "$MODE" --auto-next --platform both)
 
-          # force
-          [ "${{ github.event.inputs.force }}" = "true" ] && \
-            FLAGS="$FLAGS --force"
+          [ "$FORCE" = "true" ]      && FLAGS+=(--force)
+          [ "$FORCE_AI" = "true" ]   && FLAGS+=(--force-ai)
+          [ "$PUBLISH_FB" = "true" ] && FLAGS+=(--publish-fb)
+          [ "$PUBLISH_YT" = "true" ] && FLAGS+=(--publish-yt)
+          [ "$PUBLISH_FB" = "false" ] && [ "$PUBLISH_YT" = "false" ] && FLAGS+=(--no-publish)
+          [ -n "$VIDEO_NUMBER" ]     && FLAGS+=(--video-number "$VIDEO_NUMBER")
 
-          # force-ai
-          [ "${{ github.event.inputs.force_ai }}" = "true" ] && \
-            FLAGS="$FLAGS --force-ai"
+          # ⏰ تشغيل مجدول فقط: انتظر موعد النشر بالضبط (اليدوي ينشر فوراً)
+          [ -n "$EVENT_SCHEDULE" ]   && FLAGS+=(--wait-for-slot)
 
-          # publish flags
-          PUBLISH_FB="${{ github.event.inputs.publish_fb }}"
-          PUBLISH_FB="${PUBLISH_FB:-true}"
+          echo "🏁 FLAGS: ${FLAGS[*]}"
 
-          PUBLISH_YT="${{ github.event.inputs.publish_yt }}"
-          PUBLISH_YT="${PUBLISH_YT:-true}"
-
-          # no-publish إذا كلاهما false
-          if [ "$PUBLISH_FB" = "false" ] && [ "$PUBLISH_YT" = "false" ]; then
-            FLAGS="$FLAGS --no-publish"
-          fi
-
-          # video number
-          INPUT_VN="${{ github.event.inputs.video_number }}"
-          [ -n "$INPUT_VN" ] && FLAGS="$FLAGS --video-number $INPUT_VN"
-
-          echo "🏁 FLAGS: $FLAGS"
-
-          python main.py "$INPUT_FILE" --output-dir "$OUTPUT_DIR" $FLAGS
+          python main.py "$INPUT_FILE" --output-dir "$OUTPUT_DIR" "${FLAGS[@]}"
 
       # ── Upload Artifacts ─────────────────────────────────────
 
