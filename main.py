@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """
-🎬 Video Generator — Multi-Language Auto Publisher v3.2
+🎬 Video Generator — Multi-Language Auto Publisher v3.3
+
+Changes from v3.2:
+  ✅ 1. --wait-for-slot : ينتج الفيديو مبكراً ثم ينتظر موعد النشر بالضبط
+        (يستخدم publish_timing.py — ملف جديد بجانب main.py)
+  ✅ 2. فشل النشر لم يعد يظهر كنجاح: _do_publish ترجع نتيجة كل منصة،
+        والملخص يعرض publish-failed، و exit code = 1 إذا فشل نشر
+  ✅ 3. import os / urllib.request نُقلا إلى أعلى الملف
 
 Changes from v3.1:
   ✅ 1. produce_mixed_audio() — concat silence بدل apad
@@ -14,11 +21,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 import sys
 import traceback
+import urllib.request
 from pathlib import Path
 
 from db import (
@@ -62,6 +71,11 @@ from sync import (
     extract_transcript_from_audio,
 )
 from audio_manager import mix_voice_music_sfx
+from publish_timing import (
+    pick_target_slot,
+    wait_until_slot,
+    estimate_upload_lead,
+)
 from facebook import (
     publish_to_facebook,
     credentials_available as fb_credentials_available,
@@ -114,6 +128,9 @@ DURATION_LIMITS: dict[str, dict[str, int]] = {
 BACKGROUND_CHUNK_DUR = 6.0
 MAX_LONG_CHUNKS      = 80
 
+# ⏰ الموعد المستهدف للنشر (UTC) — يُضبط في main() عند --wait-for-slot
+_TARGET_PUBLISH_UTC = None
+
 
 # ═══════════════════════════════════════════════════
 # CLI
@@ -152,6 +169,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--publish-fb",     action="store_true")
     p.add_argument("--publish-yt",     action="store_true")
     p.add_argument("--no-publish",     action="store_true")
+    p.add_argument(
+        "--wait-for-slot", action="store_true",
+        help="انتظر موعد النشر المجدول بالضبط قبل الرفع",
+    )
     p.add_argument(
         "--show-ai-cache",
         type=str, nargs="?", const="all", default=None,
@@ -282,6 +303,11 @@ def _should_publish_fb(
     if args.platform not in ("fb", "both"):
         return False
     return args.publish_fb or fb_credentials_available(lang)
+
+
+def _has_publish_failure(outcome: dict | None) -> bool:
+    """هل فشلت أي منصة حاولنا النشر عليها؟"""
+    return any(not ok for ok in (outcome or {}).values())
 
 
 # ═══════════════════════════════════════════════════
@@ -1048,7 +1074,7 @@ def _pad_audio_with_silence(
     ok_silence, _ = _run_ffmpeg([
         "ffmpeg", "-y",
         "-f", "lavfi",
-        "-i", f"anullsrc=r=44100:cl=stereo",
+        "-i", "anullsrc=r=44100:cl=stereo",
         "-t", str(silence_dur),
         "-c:a", "aac", "-b:a", "192k",
         silence_path,
@@ -1821,6 +1847,14 @@ def _publish_to_platform(
         )
         return False
 
+    # ⏰ انتظر الموعد بالضبط (يبدأ الرفع قبله بزمن الرفع المقدّر)
+    if _TARGET_PUBLISH_UTC is not None:
+        wait_until_slot(
+            _TARGET_PUBLISH_UTC,
+            lead_seconds = estimate_upload_lead(video_path),
+            label        = platform_name,
+        )
+
     street_desc = ai_data.get("street_description", "")
     title       = record.get("title", "")
 
@@ -1881,10 +1915,17 @@ def _do_publish(
     should_publish_fb: bool,
     thumbnail_path_yt: str = "",
     thumbnail_path_fb: str = "",
-) -> None:
+) -> dict[str, bool]:
+    """
+    ينشر على المنصات المطلوبة ويُرجع نتيجة كل منصة حاولنا النشر عليها:
+        {"youtube": True/False, "facebook": True/False}
+    (منصة لم تُحاوَل لا تظهر في النتيجة)
+    """
+    outcome: dict[str, bool] = {}
+
     if should_publish_yt and platform in ("yt", "both"):
         if video_path_yt:
-            _publish_to_platform(
+            outcome["youtube"] = _publish_to_platform(
                 "youtube", video_path_yt,
                 record, ai_data, lang,
                 video_number, content_mode,
@@ -1892,10 +1933,11 @@ def _do_publish(
             )
         else:
             log.warning("  ⚠️  YouTube: no video path")
+            outcome["youtube"] = False
 
     if should_publish_fb and platform in ("fb", "both"):
         if video_path_fb:
-            _publish_to_platform(
+            outcome["facebook"] = _publish_to_platform(
                 "facebook", video_path_fb,
                 record, ai_data, lang,
                 video_number, content_mode,
@@ -1903,6 +1945,9 @@ def _do_publish(
             )
         else:
             log.warning("  ⚠️  Facebook: no video path")
+            outcome["facebook"] = False
+
+    return outcome
 
 
 # ═══════════════════════════════════════════════════
@@ -2249,7 +2294,7 @@ def _run_long_pipeline(
         "fb", "", result.get("video_paths_fb", []),
     ) if fb_path_final else ""
 
-    _do_publish(
+    result["publish"] = _do_publish(
         video_path_yt      = yt_path_final,
         video_path_fb      = fb_path_final,
         record             = record,
@@ -2448,7 +2493,7 @@ def _run_short_pipeline(
         video_paths  = result["video_paths"],
     )
 
-    _do_publish(
+    result["publish"] = _do_publish(
         video_path_yt      = str(published),
         video_path_fb      = str(published),
         record             = record,
@@ -2727,9 +2772,6 @@ def _generate_thumbnails(
 # CUSTOM THUMBNAIL URL (Long فقط) — من عمود thumbnail_url
 # ═══════════════════════════════════════════════════
 
-import os
-import urllib.request
-
 _MAX_THUMB_BYTES    = 15 * 1024 * 1024
 _YT_THUMB_MAX_BYTES = 2 * 1024 * 1024
 
@@ -2916,9 +2958,6 @@ def _generate_video_thumbnail(
     return ""
 
 
-
-
-
 # ═══════════════════════════════════════════════════
 # RESUME
 # ═══════════════════════════════════════════════════
@@ -2930,7 +2969,8 @@ def _try_publish_existing(
     platform:        str,
     will_publish_yt: bool,
     will_publish_fb: bool,
-) -> None:
+) -> dict[str, bool]:
+    """ينشر ملفاً منتجاً سابقاً. يُرجع نتيجة كل منصة (أو {} إن لم يُحاوَل)."""
     num      = str(record["number"])
     lang     = args.lang
     out_base = str(
@@ -2940,7 +2980,7 @@ def _try_publish_existing(
 
     if is_fully_published(num, lang, content_mode):
         log.info("  ⏭️  #%s fully published", num)
-        return
+        return {}
 
     ai_data = (
         get_ai_cache(
@@ -2961,7 +3001,7 @@ def _try_publish_existing(
                 "  ⚠️  Resume: not found: %s",
                 candidate,
             )
-            return
+            return {}
     else:
         platforms_check = (
             ["yt", "fb"]
@@ -2987,7 +3027,7 @@ def _try_publish_existing(
                 "#%s [%s/%s]",
                 num, content_mode, platform,
             )
-            return
+            return {}
 
     record_for_publish = {
         "number": num,
@@ -3006,7 +3046,7 @@ def _try_publish_existing(
     thumb_yt_existing = f"{out_base}{suffix_yt}_thumbnail.png"
     thumb_fb_existing = f"{out_base}{suffix_fb}_thumbnail.png"
 
-    _do_publish(
+    return _do_publish(
         video_path_yt      = yt_path,
         video_path_fb      = fb_path,
         record             = record_for_publish,
@@ -3066,6 +3106,8 @@ def _handle_management_commands(
 # ═══════════════════════════════════════════════════
 
 def main() -> None:
+    global _TARGET_PUBLISH_UTC
+
     logging.basicConfig(
         level   = logging.INFO,
         format  = (
@@ -3092,6 +3134,24 @@ def main() -> None:
     will_publish_fb = _should_publish_fb(
         args, lang
     )
+
+    # ⏰ الموعد المستهدف للنشر (تشغيل مجدول فقط)
+    if args.wait_for_slot and not args.no_publish:
+        _TARGET_PUBLISH_UTC = pick_target_slot(
+            lang, content_mode
+        )
+        if _TARGET_PUBLISH_UTC is None:
+            log.warning(
+                "  ⚠️  --wait-for-slot: no slot in window "
+                "— publishing immediately"
+            )
+        else:
+            log.info(
+                "  ⏰ Target publish slot: %s UTC",
+                _TARGET_PUBLISH_UTC.strftime(
+                    "%Y-%m-%d %H:%M"
+                ),
+            )
 
     log.info("\n%s", "═" * 62)
     log.info(
@@ -3147,6 +3207,10 @@ def main() -> None:
     log.info(
         "  Facebook     : %s",
         '✅' if will_publish_fb else '❌',
+    )
+    log.info(
+        "  Wait slot    : %s",
+        '⏰ YES' if args.wait_for_slot else 'NO',
     )
     log.info("")
     print_db_summary()
@@ -3240,6 +3304,7 @@ def main() -> None:
 
     success        = 0
     failed         = 0
+    publish_failed = 0
     video_results: dict = {}
 
     for i, record in enumerate(valid, 1):
@@ -3249,7 +3314,7 @@ def main() -> None:
             record["number"], lang,
             content_mode, platform,
         ):
-            _try_publish_existing(
+            outcome = _try_publish_existing(
                 record          = record,
                 args            = args,
                 content_mode    = content_mode,
@@ -3257,6 +3322,8 @@ def main() -> None:
                 will_publish_yt = will_publish_yt,
                 will_publish_fb = will_publish_fb,
             )
+            if _has_publish_failure(outcome):
+                publish_failed += 1
             continue
 
         try:
@@ -3274,6 +3341,16 @@ def main() -> None:
                     p_result
                 )
                 success += 1
+                if _has_publish_failure(
+                    p_result.get("publish")
+                ):
+                    publish_failed += 1
+                    log.error(
+                        "  ❌ Video #%s rendered but "
+                        "publish FAILED: %s",
+                        record['number'],
+                        p_result.get("publish"),
+                    )
             else:
                 failed += 1
                 log.error(
@@ -3301,15 +3378,23 @@ def main() -> None:
 
     log.info("\n%s", "═" * 62)
     log.info(
-        "  ✅  Done (%s) [%s/%s] — %d success | %d failed",
+        "  ✅  Done (%s) [%s/%s] — %d success | %d failed"
+        " | %d publish-failed",
         lang.upper(),
         content_mode.upper(), platform.upper(),
-        success, failed,
+        success, failed, publish_failed,
     )
     print_db_summary()
     log.info("%s\n", "═" * 62)
 
-    if failed > 0 and success == 0:
+    if publish_failed > 0:
+        log.error(
+            "  ❌ %d video(s) were produced but NOT published "
+            "(see errors above)",
+            publish_failed,
+        )
+
+    if (failed > 0 and success == 0) or publish_failed > 0:
         sys.exit(1)
 
 
