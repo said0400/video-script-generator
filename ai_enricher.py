@@ -1,48 +1,41 @@
 """
-🧠 Smart AI Assistant powered by Groq — Final Stable Version v7.8
+🧠 Smart AI Assistant — Provider-agnostic (OpenAI-compatible) — v8.0
 
-Changes from v7.5:
-  ✅ 1. _fix_trailing_comma_in_string() — فاصلة داخل string
-  ✅ 2. _fix_multiline_strings() — multiline strings في JSON
-  ✅ 3. _fix_unclosed_quotes() — quotes غير مغلقة
-  ✅ 4. _apply_all_fixes() — دالة موحّدة لكل الإصلاحات
-  ✅ 5. _parse_json_response() — 5 محاولات موحّدة
-  ✅ 6. generate_hashtags() — prompt أصرم + temperature=0.5
-  ✅ 7. generate_captions() — prompt أصرم مع ONE line rule
+الافتراضي (بدون أي إعداد): مزوّد Groq + الموديل qwen/qwen3.8-27b،
+وتُقرأ مفاتيحك الحالية GROQ_API_KEY / GROQ_API_KEY1..N كما هي — فلا حاجة
+لتغيير الـ workflows أو الـ secrets. ولتغيير المزوّد/الموديل لاحقاً تكفي
+متغيرات البيئة (LLM_*).
 
-Changes in v7.6:
-  ✅ 8.  REASONING_MODELS + REASONING_TOKEN_MULTIPLIER —
-         نضاعف max_tokens تلقائياً لموديلات التفكير (reasoning
-         models مثل qwen) عشان ما ينقطع الرد أثناء <think>.
-  ✅ 9.  اكتشاف القطع أثناء التفكير (finish_reason == "length"
-         و <think> بدون </think>) في _call_groq → نبدّل الموديل
-         فوراً بدل ما نرجع رد فاسد.
-  ✅ 10. MODELS_PRIORITY أعيد ترتيبها: موديلات non-reasoning
-         أولاً، وqwen (reasoning) في آخر القائمة كحل أخير.
-  ✅ 11. generate_pattern_interrupts() — try/except + fallback
-         بدل ما يوقف الفيديو كامل.
-  ✅ 12. generate_engagement_questions() — try/except + fallback.
-  ✅ 13. generate_hashtags() — try/except + fallback.
-  ✅ 14. generate_captions() — try/except + fallback.
+Changes from v7.8 (Groq):
+  ✅ 1. استبدال Groq بعميل HTTP متوافق مع OpenAI (requests) — يعمل مع أي
+        مزوّد يستضيف Qwen (OpenRouter / DashScope / Together / vLLM ...).
+        لا حاجة لحزمة groq ولا openai.
+  ✅ 2. الإعداد بمتغيرات البيئة:
+        LLM_BASE_URL         (إلزامي) مثال: https://openrouter.ai/api/v1
+        LLM_API_KEY, LLM_API_KEY1..N, LLM_API_KEY_1..N  (تدوير المفاتيح)
+        LLM_MODEL            الافتراضي: qwen3.8-27b (اكتب المعرّف كما يعرضه المزوّد)
+        LLM_FALLBACK_MODELS  اختياري: موديلات احتياطية مفصولة بفاصلة
+        LLM_IS_REASONING     1 (افتراضي) = موديل تفكير → توكنز أكبر
+        LLM_EXTRA_BODY       JSON يُدمج في الطلب (مثلاً لتعطيل التفكير)
+        LLM_TIMEOUT          ثوانٍ (افتراضي 90)
+  ✅ 3. تصنيف الأخطاء الصحيح (كان خطأ 404 يُعامل كـ Rate limit فيدور
+        18 محاولة بلا فائدة):
+          404 / model_not_found → الموديل التالي، أو خطأ واضح فوراً
+          401 / 403             → تدوير المفتاح
+          429                   → تدوير المفتاح + انتظار (يحترم Retry-After)
+          5xx / timeout         → إعادة المحاولة مع انتظار
+          400 / 413 / 422       → خطأ فوري واضح (لا فائدة من التكرار)
+  ✅ 4. رد فارغ أو مقطوع أثناء التفكير → مضاعفة التوكنز ثم إعادة المحاولة
+        (بدل التبديل الأعمى بين الموديلات).
+  ✅ 5. تصعيد الجودة (_call_llm_best) يعيد المحاولة بنفس الموديل مع رفع
+        درجة الحرارة (لا يوجد "موديل أقوى" عند استخدام موديل واحد).
+  ✅ 6. بقية المنطق (JSON repair، Visual Keywords، Hashtags، Captions ...)
+        كما في v7.8 دون تغيير.
 
-Changes in v7.8 (NEW):
-  ✅ 15. _call_groq_best() — "تصعيد الجودة": إذا رجع الموديل الأول
-         ناتجاً غير صالح/ضعيفاً (JSON معطوب، placeholders، لغة
-         ناقصة...) نكرر الطلب بالموديل التالي (حتى
-         MAX_QUALITY_ESCALATIONS مرات) قبل اللجوء للقيم الافتراضية.
-         (allam-2-7b يبقى الأول لأن حصته الأعلى، لكن لم يعد
-         الفشل الصامت يمر.)
-  ✅ 16. Visual Keywords: مثال البرومبت لم يعد "kw1,kw2,kw3" (كان
-         الموديل ينسخه حرفياً فتُحذف الكلمات وتصير كل اللقطات
-         "person serious face talking camera")، مع كشف نسخ المثال
-         وتصعيد الموديل عند فشل أكثر من 20% من الجمل.
-  ✅ 17. JSON repair: _fix_dangling_item_quotes() (علامة اقتباس
-         ختامية ناقصة: "text 🤔,) + _balance_brackets() (] ناقصة
-         قبل }) — الحالتان اللتان سببتا فشل Engagement Questions.
-  ✅ 18. _extract_string_list() متسامحة (نص بدل قائمة، قوائم
-         متداخلة) + Hashtags تقبل 3 وسوم كحد أدنى.
-  ✅ 19. Accent Colors: تطبيع (#RGB، hex بدون #، أسماء ألوان،
-         dict) بدل رفض كل شيء → "only 0 valid".
+أمثلة LLM_EXTRA_BODY لتعطيل التفكير (راجع وثائق مزوّدك):
+  DashScope : {"enable_thinking": false}
+  vLLM/Together-style : {"chat_template_kwargs": {"enable_thinking": false}}
+  OpenRouter: {"reasoning": {"enabled": false}}
 """
 
 from __future__ import annotations
@@ -56,7 +49,7 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-from groq import Groq
+import requests
 
 from tags_parser import (
     DEFAULT_TAG,
@@ -70,45 +63,76 @@ log = logging.getLogger(__name__)
 # CONFIG
 # ═══════════════════════════════════════════════════
 
-# ✅ v7.6 — قائمة موديلات مع Auto Fallback
-# ملاحظة مهمة: qwen/qwen3.6-27b هو "reasoning model" (يفكر قبل
-# ما يجاوب بـ <think>...</think>) وهذا يستهلك توكنز كثيرة، فلو
-# انقطع الرد أثناء التفكير ما توصل JSON صالحة أبداً. لذلك حطيناه
-# آخر خيار (fallback أخير) بدل ثاني خيار، وموديلات non-reasoning
-# الأسرع والأأمن قبله.
-MODELS_PRIORITY = [
-    "allam-2-7b",           # 7,000 طلب/يوم (الأعلى حصة والأفضل)
-    "openai/gpt-oss-20b",   # 1,000 طلب/يوم (سريع، بدون thinking — احتياطي أول)
-    "openai/gpt-oss-120b",  # 1,000 طلب/يوم (نموذج قوي جداً، بدون thinking)
-    "qwen/qwen3.6-27b",     # 1,000 طلب/يوم (جودة عالية لكنه reasoning model — آخر خيار)
+
+def _env_str(name: str, default: str = "") -> str:
+    return os.environ.get(name, default).strip()
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in ("1", "true", "yes", "on")
+
+
+def _env_json(name: str) -> dict:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        log.warning("  ⚠️  %s is not valid JSON — ignored", name)
+        return {}
+
+
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+# الافتراضي: Groq (متوافق مع OpenAI) — يُغيَّر بـ LLM_BASE_URL
+LLM_BASE_URL = (_env_str("LLM_BASE_URL") or GROQ_BASE_URL).rstrip("/")
+_IS_GROQ     = "api.groq.com" in LLM_BASE_URL
+LLM_MODEL    = _env_str("LLM_MODEL", "qwen/qwen3.8-27b")
+
+# موديلات احتياطية: على Groq افتراضياً gpt-oss-120b ثم llama-3.3-70b.
+# لتعطيلها اضبط LLM_FALLBACK_MODELS إلى قيمة فارغة.
+_fallback_raw = os.environ.get("LLM_FALLBACK_MODELS")
+if _fallback_raw is None:
+    _fallback_raw = (
+        "openai/gpt-oss-120b,llama-3.3-70b-versatile"
+        if _IS_GROQ else ""
+    )
+LLM_FALLBACK_MODELS = [
+    m.strip() for m in _fallback_raw.split(",") if m.strip()
+]
+MODELS_PRIORITY: list[str] = [LLM_MODEL] + [
+    m for m in LLM_FALLBACK_MODELS if m != LLM_MODEL
 ]
 
-# ✅ v7.6 — موديلات التفكير (reasoning) التي تحتاج توكنز إضافية
-REASONING_MODELS: set[str] = {
-    "qwen/qwen3.6-27b",
-}
-# نضاعف max_tokens لهذي الموديلات عشان يكفي وقت "للتفكير"
-# قبل ما يبدأ يكتب الـ JSON الفعلي.
-REASONING_TOKEN_MULTIPLIER = 3.0
-# حد أقصى لتفادي طلبات ضخمة جداً بدون داعي
-REASONING_TOKEN_CAP = 8000
+# Qwen موديل تفكير: يحتاج توكنز إضافية قبل أن يكتب الجواب الفعلي
+LLM_IS_REASONING           = _env_bool("LLM_IS_REASONING", True)
+REASONING_TOKEN_MULTIPLIER = _env_float("LLM_REASONING_MULTIPLIER", 3.0)
+REASONING_TOKEN_CAP        = int(_env_float("LLM_TOKEN_CAP", 8000))
+LLM_EXTRA_BODY             = _env_json("LLM_EXTRA_BODY")
+LLM_TIMEOUT                = _env_float("LLM_TIMEOUT", 90.0)
 
-# ✅ v7.8 — تصعيد الجودة: عدد المحاولات الإضافية بموديلات
-# أقوى عندما يكون ناتج الموديل الحالي غير صالح أو ضعيفاً.
-# (2 = allam → gpt-oss-20b → gpt-oss-120b؛ qwen يبقى للأخطاء فقط)
+# تصعيد الجودة: عدد إعادات المحاولة عند ناتج ضعيف/معطوب
 MAX_QUALITY_ESCALATIONS = 2
-# نسبة الجمل التي يجب أن تحصل على كلمات حقيقية في Visual Keywords
 VISUAL_KEYWORDS_GOOD_SCORE = 0.8
-# الحد الأدنى لعدد الهاشتاغات المقبولة لكل لغة
 HASHTAGS_MIN_COUNT = 3
 
-
-MAX_RETRIES_PER_KEY  = 3
-RATE_LIMIT_WAIT      = 3.0
-RATE_LIMIT_WAIT_MAX  = 60.0
-MAX_KEYS_SCAN        = 20
-GROQ_TIMEOUT         = 60
-MAX_SEARCH_ATTEMPTS  = 20
+MAX_TOTAL_ATTEMPTS  = 8
+RATE_LIMIT_WAIT     = 3.0
+RATE_LIMIT_WAIT_MAX = 60.0
+MAX_KEYS_SCAN       = 20
+MAX_SEARCH_ATTEMPTS = 20
 
 TITLE_MAX_CHARS         = 80
 TITLE_SHORT_CHARS       = 60
@@ -125,20 +149,15 @@ CAPTION_HASHTAG_LIMIT   = 12
 
 BATCH_SIZE_TAGS     = 10
 BATCH_SIZE_KEYWORDS = 20
-BATCH_SLEEP         = 2.0
+BATCH_SLEEP         = 1.0
 ANALYSIS_CACHE_SIZE = 50
 
-INTER_OPERATION_SLEEP = 1.0
+INTER_OPERATION_SLEEP = _env_float("LLM_OP_SLEEP", 0.5)
 
 DEFAULT_EMOJI_LEFT   = "🔥"
 DEFAULT_EMOJI_RIGHT  = "💥"
 DEFAULT_INTENSITY    = 7
 DEFAULT_VISUAL_STYLE = "person serious face talking camera"
-
-RATE_LIMIT_KEYWORDS = (
-    "429", "rate_limit", "rate limit",
-    "quota", "ratequota", "tokens per minute",
-)
 
 _VALID_LANGS = frozenset({"ar", "fr", "en"})
 _VALID_MODES = frozenset({"short", "long"})
@@ -199,13 +218,8 @@ ABSTRACT_WORDS: frozenset[str] = frozenset({
 
 
 # ═══════════════════════════════════════════════════
-# ✅ v7.7 — PLACEHOLDER KEYWORD DETECTION
+# PLACEHOLDER KEYWORD DETECTION
 # ═══════════════════════════════════════════════════
-# المشكلة: أحياناً الموديل (خصوصاً qwen بعد قطع تفكيره) يرجّع
-# نفس الـ placeholder المكتوب كمثال بالبرومبت حرفياً بدل ما
-# يستبدله بكلمة بحث حقيقية، مثلاً: ["kw1","kw2","kw3"].
-# الـ JSON يكون صحيح تقنياً فما يُكتشف كخطأ، لكن الفيديو يبحث
-# فعلياً في Pexels عن الكلمة الحرفية "kw1" فيرجع نتيجة عشوائية.
 
 _PLACEHOLDER_KEYWORD_RE = re.compile(
     r'^\s*kw\s*\d*\s*$', re.IGNORECASE
@@ -220,7 +234,7 @@ _PLACEHOLDER_KEYWORD_LITERALS: frozenset[str] = frozenset({
 
 
 def _is_placeholder_keyword(kw: str) -> bool:
-    """✅ v7.7 — يكشف كلمات placeholder وهمية زي 'kw1'."""
+    """يكشف كلمات placeholder وهمية زي 'kw1'."""
     normalized = kw.strip().lower()
     if not normalized:
         return True
@@ -301,9 +315,8 @@ def _get_topic_examples(content_type: str) -> list[str]:
     )
 
 
-# ✅ v7.8 — مثال تنسيق الإخراج في برومبت Visual Keywords.
-# كان سابقاً [["kw1","kw2","kw3"],...] فينسخه الموديل الضعيف
-# حرفياً. الآن أمثلة حقيقية من موضوع مختلف تماماً + كشف نسخها.
+# مثال تنسيق الإخراج في برومبت Visual Keywords (موضوع مختلف تماماً
+# + كشف نسخه حرفياً)
 _VISUAL_FORMAT_EXAMPLE_ROWS: list[list[str]] = [
     [
         "person closing laptop tired night",
@@ -387,8 +400,6 @@ _STREET_FALLBACK: dict[str, str] = {
     "en": "Watch the full video! 🔥",
 }
 
-# ✅ v7.6 — fallback ثابت لعمليات bilingual لما الـ AI يفشل
-# نستخدمهم بدل ما نوقف الفيديو كامل.
 _PATTERN_INTERRUPTS_FALLBACK: dict[str, list[str]] = {
     "ar": ["ثواني...", "لا تفوّت هذا!", "تخيل بس"],
     "fr": ["Attends...", "Incroyable !", "Regarde ça"],
@@ -438,6 +449,21 @@ class AIEnrichmentError(Exception):
     pass
 
 
+class _LLMHTTPError(Exception):
+    """خطأ HTTP من المزوّد (status + body + Retry-After)."""
+
+    def __init__(
+        self,
+        status:      int,
+        body:        str,
+        retry_after: float = 0.0,
+    ):
+        super().__init__(f"HTTP {status}: {body[:200]}")
+        self.status      = status
+        self.body        = body
+        self.retry_after = retry_after
+
+
 # ═══════════════════════════════════════════════════
 # VALIDATION
 # ═══════════════════════════════════════════════════
@@ -453,101 +479,69 @@ def _validate_mode(mode: str) -> None:
 
 
 # ═══════════════════════════════════════════════════
-# THREAD-SAFE GROQ KEY ROTATION + CLIENT CACHING
+# THREAD-SAFE API KEY ROTATION
 # ═══════════════════════════════════════════════════
 
-_groq_keys:   list[str]       = []
-_groq_index:  int             = 0
-_groq_lock:   threading.RLock = threading.RLock()
+_llm_keys:    list[str]       = []
+_key_index:   int             = 0
+_keys_lock:   threading.RLock = threading.RLock()
 _keys_loaded: bool            = False
-_clients:     dict[str, Groq] = {}
 
 
-def _load_groq_keys() -> list[str]:
+def _load_llm_keys() -> list[str]:
     keys: list[str] = []
     seen: set[str]  = set()
 
-    main = os.environ.get("GROQ_API_KEY", "").strip()
-    if main and main not in seen:
-        keys.append(main)
-        seen.add(main)
+    # LLM_API_KEY* أولاً ثم GROQ_API_KEY* (مفاتيحك الحالية في الـ workflows)
+    for prefix in ("LLM_API_KEY", "GROQ_API_KEY"):
+        main = os.environ.get(prefix, "").strip()
+        if main and main not in seen:
+            keys.append(main)
+            seen.add(main)
 
-    for i in range(1, MAX_KEYS_SCAN + 1):
-        k1 = os.environ.get(
-            f"GROQ_API_KEY{i}", ""
-        ).strip()
-        if k1 and k1 not in seen:
-            keys.append(k1)
-            seen.add(k1)
-        k2 = os.environ.get(
-            f"GROQ_API_KEY_{i}", ""
-        ).strip()
-        if k2 and k2 not in seen:
-            keys.append(k2)
-            seen.add(k2)
+        for i in range(1, MAX_KEYS_SCAN + 1):
+            for name in (f"{prefix}{i}", f"{prefix}_{i}"):
+                k = os.environ.get(name, "").strip()
+                if k and k not in seen:
+                    keys.append(k)
+                    seen.add(k)
 
     return keys
 
 
 def _ensure_keys_loaded() -> None:
-    global _groq_keys, _keys_loaded
+    global _llm_keys, _keys_loaded
 
     if _keys_loaded:
         return
 
-    with _groq_lock:
+    with _keys_lock:
         if _keys_loaded:
             return
-        _groq_keys   = _load_groq_keys()
+        _llm_keys    = _load_llm_keys()
         _keys_loaded = True
-        if _groq_keys:
+        if _llm_keys:
             log.info(
-                "  🔑 Loaded %d Groq API keys",
-                len(_groq_keys)
+                "  🔑 Loaded %d LLM API keys (model=%s)",
+                len(_llm_keys), LLM_MODEL,
             )
         else:
-            log.warning(
-                "  ⚠️  No Groq API keys found"
-            )
+            log.warning("  ⚠️  No LLM API keys found")
 
 
-def _get_client(key: str) -> Groq:
-    with _groq_lock:
-        if key not in _clients:
-            _clients[key] = Groq(
-                api_key = key,
-                timeout = GROQ_TIMEOUT,
-            )
-        return _clients[key]
-
-
-def _rotate_groq_key() -> None:
-    global _groq_index
-    with _groq_lock:
-        n = len(_groq_keys)
+def _rotate_key() -> None:
+    global _key_index
+    with _keys_lock:
+        n = len(_llm_keys)
         if n <= 1:
-            log.warning(
-                "  ⚠️  No additional Groq keys"
-            )
             return
-        _groq_index = (_groq_index + 1) % n
-        new_idx     = _groq_index
-    log.info(
-        "  🔄 Groq key rotated → #%d/%d",
-        new_idx + 1, n
-    )
-
-
-def _is_rate_limit_error(error: str) -> bool:
-    err_lower = error.lower()
-    return any(
-        ind in err_lower
-        for ind in RATE_LIMIT_KEYWORDS
-    )
+        _key_index = (_key_index + 1) % n
+        new_idx    = _key_index
+    log.info("  🔄 LLM key rotated → #%d/%d", new_idx + 1, n)
 
 
 # ═══════════════════════════════════════════════════
-# ✅ v7.5 — JSON FIXERS (كل دوال الإصلاح)
+# JSON FIXERS
 # ═══════════════════════════════════════════════════
 
 def _fix_quotes(text: str) -> str:
@@ -562,20 +556,11 @@ _DANGLING_ITEM_RE = re.compile(r'^(\s*)"([^"\n]*?)\s*(,?)\s*$')
 
 def _fix_dangling_item_quotes(text: str) -> str:
     """
-    ✅ v7.8 — إصلاح عنصر قائمة بدون علامة اقتباس ختامية.
+    إصلاح عنصر قائمة بدون علامة اقتباس ختامية:
+        "Do you often feel guilty? 🤔,
+    →   "Do you often feel guilty? 🤔",
 
-    المشكلة (سبب فشل Engagement Questions في السجلات):
-        "Do you often feel guilty? 🤔,      ← لا يوجد " قبل الفاصلة
-        "Do you hesitate to confront? 😮,
-        "Have you set boundaries? 💭
-
-    السطر الذي يبدأ بـ " ويحتوي " واحدة فقط هو عنصر ناقص
-    الإغلاق. نغلقه (والفاصلة تخرج خارج الاقتباس):
-        "Do you often feel guilty? 🤔",
-
-    ⚠️ يجب أن يعمل قبل _fix_multiline_strings، لأن الأخيرة
-    تعتبر أي سطر بعدد فردي من " بداية string متعدد الأسطر
-    فتدمج كل الأسطر التالية في عنصر واحد.
+    ⚠️ يجب أن يعمل قبل _fix_multiline_strings.
     """
     out: list[str] = []
     for line in text.split("\n"):
@@ -593,14 +578,8 @@ def _fix_dangling_item_quotes(text: str) -> str:
 
 def _balance_brackets(text: str) -> str:
     """
-    ✅ v7.8 — موازنة الأقواس في أول قيمة JSON.
-
-    المشكلة (سبب فشل Engagement Questions في EN #30):
-        {"en": ["a","b","c"}        ← ] ناقصة قبل }
-
-    الإصلاح: عند } بينما القائمة مفتوحة نُدرج ] أولاً، وعند
-    نهاية النص نغلق كل ما بقي مفتوحاً، ونقطع أي ذيل زائد بعد
-    اكتمال القيمة الأولى.
+    موازنة الأقواس في أول قيمة JSON:
+        {"en": ["a","b","c"}   ← ] ناقصة قبل }
     """
     start = -1
     for i, ch in enumerate(text):
@@ -643,8 +622,6 @@ def _balance_brackets(text: str) -> str:
                 stack.pop()
                 out.append(ch)
             else:
-                # إغلاق لا يطابق المفتوح: نغلق الأقواس
-                # المفتوحة حتى نصل للمطابق
                 while stack and stack[-1] != ch:
                     out.append(stack.pop())
                 if not stack:
@@ -668,21 +645,16 @@ def _balance_brackets(text: str) -> str:
 
 def _fix_multiline_strings(text: str) -> str:
     """
-    ✅ v7.5 — إصلاح multiline strings في JSON.
-
-    المشكلة: LLM يكتب caption على عدة أسطر:
+    إصلاح multiline strings في JSON:
         "fr": "نص السطر الأول
         نص السطر الثاني"
-
-    الإصلاح:
-        "fr": "نص السطر الأول\\nنص السطر الثاني"
+    →   "fr": "نص السطر الأول\\nنص السطر الثاني"
     """
     lines     = text.split('\n')
     result    = []
     in_string = False
 
     for line in lines:
-        # عدّ quotes غير مُهرَّبة في السطر
         quote_count = 0
         j           = 0
         while j < len(line):
@@ -695,11 +667,9 @@ def _fix_multiline_strings(text: str) -> str:
 
         if not in_string:
             result.append(line)
-            # quotes فردية → دخلنا string
             if quote_count % 2 == 1:
                 in_string = True
         else:
-            # داخل string → استبدل newline بـ \n
             if result:
                 result[-1] = (
                     result[-1] +
@@ -708,7 +678,6 @@ def _fix_multiline_strings(text: str) -> str:
                 )
             else:
                 result.append(line)
-            # quotes فردية → خرجنا من string
             if quote_count % 2 == 1:
                 in_string = False
 
@@ -717,57 +686,33 @@ def _fix_multiline_strings(text: str) -> str:
 
 def _fix_trailing_comma_in_string(text: str) -> str:
     """
-    ✅ v7.5 — إصلاح فاصلة داخل string قبل الإغلاق.
-
-    المشكلة:
-        "Do you notice? 😊,"   ← فاصلة قبل "
-        "text1""text2"         ← items ملتصقة
-
-    الإصلاح:
-        "Do you notice? 😊",
-        "text1", "text2"
+    إصلاح فاصلة داخل string قبل الإغلاق، وعناصر ملتصقة:
+        "Do you notice? 😊,"   →  "Do you notice? 😊",
+        "text1""text2"         →  "text1", "text2"
     """
-    # Pattern 1: ,"  → ",
-    # فاصلة داخل الـ string قبل إغلاقها مباشرة
     text = re.sub(
         r',"(\s*[,\]\n])',
         r'"\1',
         text,
     )
-
-    # Pattern 2: "text," → "text",
-    # أي فاصلة قبل آخر " في string
     text = re.sub(
         r',("\s*(?:[,\]\n]))',
         r'"\1',
         text,
     )
-
-    # Pattern 3: "text1""text2" → "text1", "text2"
-    # items ملتصقة بـ "" — لكن نتجنب كسر string فارغ شرعي
-    # نطابق فقط عندما يوجد محتوى غير فراغ قبل وبعد الاقتباسين المتلاصقين
     text = re.sub(
         r'(?<=[^\s,:\[{])"(\s*)"(?=[^\s,\]}])',
         r'", "',
         text,
     )
-
     return text
 
 
 def _fix_unclosed_quotes(text: str) -> str:
     """
-    ✅ v7.5 — إصلاح quotes غير مغلقة داخل JSON arrays.
-
-    المشكلة:
-        "#_الموت_ليس_الخاسر_,   ← مفتوح بلا إغلاق
-        "#_الأفضل_من_الخسارة"
-
-    الإصلاح:
-        "#_الموت_ليس_الخاسر_",  ← أضف " قبل الفاصلة
-        "#_الأفضل_من_الخسارة"
+    إصلاح quotes غير مغلقة داخل JSON arrays:
+        "#_الموت_ليس_الخاسر_,  →  "#_الموت_ليس_الخاسر_",
     """
-    # Pattern: "text, → "text",
     text = re.sub(
         r'"([^"\n,]+),\s*\n',
         r'"\1",\n',
@@ -785,11 +730,9 @@ _UNQUOTED_ARRAY_RE = re.compile(
 
 def _fix_unquoted_array_values(text: str) -> str:
     """
-    ✅ v7.3 — إصلاح array items بدون quotes.
-
-    يعالج:
+    إصلاح array items بدون quotes:
     1. ["item1", item2, item3]  → مختلطة
-    2. [item1\nitem2]           → بدون فواصل
+    2. [item1\\nitem2]          → بدون فواصل
     """
     def _fix_array_content(match: re.Match) -> str:
         raw   = match.group(0)
@@ -798,14 +741,12 @@ def _fix_unquoted_array_values(text: str) -> str:
         if not inner:
             return raw
 
-        # إضافة فواصل مفقودة بين السطور
         inner = re.sub(
             r'("|\w|[^\s,\[\]{}])(\s*\n\s*)(?=[^\s,\[\]{}])',
             r'\1,\n    ',
             inner,
         )
 
-        # تقسيم ذكي مع الحفاظ على quoted strings
         parts:    list[str] = []
         current             = ""
         in_quote            = False
@@ -867,17 +808,14 @@ def _fix_unquoted_array_values(text: str) -> str:
 
 def _apply_all_fixes(text: str) -> str:
     """
-    ✅ v7.5 — تطبيق كل الإصلاحات بالترتيب الصحيح.
-
-    الترتيب مهم:
-    0. dangling quotes أولاً (v7.8 — قبل multiline وإلا دمجت
-       الأسطر التالية في عنصر واحد)
+    تطبيق كل الإصلاحات بالترتيب الصحيح:
+    0. dangling quotes (قبل multiline)
     1. multiline
     2. trailing comma
     3. unclosed quotes
     4. unquoted array values
     5. double quotes زائدة
-    6. موازنة الأقواس أخيراً (v7.8)
+    6. موازنة الأقواس
     """
     text = _fix_dangling_item_quotes(text)
     text = _fix_multiline_strings(text)
@@ -897,13 +835,14 @@ def _clean_json(raw: str) -> str:
     text = raw.strip()
 
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    text = re.sub(r'<reasoning>.*?</reasoning>', '', text, flags=re.DOTALL) 
-  
+    text = re.sub(
+        r'<reasoning>.*?</reasoning>', '', text, flags=re.DOTALL
+    )
+
     text = re.sub(r"^```(?:json|JSON)?\s*\n?", "", text)
     text = re.sub(r"\n?\s*```\s*$",            "", text)
     text = text.strip()
 
-    # إصلاح قبل التحليل
     text = _fix_quotes(text)
 
     start_obj = text.find("{")
@@ -965,13 +904,11 @@ def _parse_json_response(
     operation:     str,
 ) -> Any:
     """
-    ✅ v7.5 — Parse JSON مع 5 محاولات موحّدة.
-
-    الترتيب:
+    Parse JSON مع 5 محاولات:
     1. مباشر
-    2. كل الـ fixes (_apply_all_fixes)
+    2. كل الـ fixes
     3. backticks + كل الـ fixes
-    4. _fix_quotes فقط (للتوافق القديم)
+    4. _fix_quotes فقط
     5. بحث في positions + كل الـ fixes
     """
     if not raw or not raw.strip():
@@ -989,7 +926,7 @@ def _parse_json_response(
             f"got {type(data).__name__}"
         )
 
-    # Attempt 1: مباشر
+    # Attempt 1
     try:
         return _try_parse(raw)
     except json.JSONDecodeError:
@@ -999,19 +936,16 @@ def _parse_json_response(
             f"❌ {operation}: {e}"
         )
 
-    # Attempt 2: كل الـ fixes دفعة واحدة
+    # Attempt 2
     try:
         fixed  = _apply_all_fixes(raw)
         result = _try_parse(fixed)
-        log.debug(
-            "  ✓ %s: parsed after all fixes",
-            operation,
-        )
+        log.debug("  ✓ %s: parsed after all fixes", operation)
         return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 3: إزالة backticks + كل الـ fixes
+    # Attempt 3
     try:
         no_ticks = (
             raw
@@ -1023,25 +957,23 @@ def _parse_json_response(
         fixed  = _apply_all_fixes(no_ticks)
         result = _try_parse(fixed)
         log.debug(
-            "  ✓ %s: parsed after backtick+fixes",
-            operation,
+            "  ✓ %s: parsed after backtick+fixes", operation
         )
         return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 4: _fix_quotes فقط (للتوافق القديم)
+    # Attempt 4
     try:
         result = _try_parse(_fix_quotes(raw))
         log.debug(
-            "  ✓ %s: parsed after quote fix only",
-            operation,
+            "  ✓ %s: parsed after quote fix only", operation
         )
         return result
     except (json.JSONDecodeError, ValueError):
         pass
 
-    # Attempt 5: بحث في positions + كل الـ fixes
+    # Attempt 5
     try:
         open_chars = (
             ["[", "{"] if expected_type == list
@@ -1055,9 +987,7 @@ def _parse_json_response(
                 if idx == -1:
                     break
                 try:
-                    candidate = _apply_all_fixes(
-                        raw[idx:]
-                    )
+                    candidate = _apply_all_fixes(raw[idx:])
                     candidate = _clean_json(candidate)
                     data      = json.loads(candidate)
                     if isinstance(data, expected_type):
@@ -1066,9 +996,7 @@ def _parse_json_response(
                             operation, idx,
                         )
                         return data
-                except (
-                    json.JSONDecodeError, ValueError
-                ):
+                except (json.JSONDecodeError, ValueError):
                     pass
                 idx      += 1
                 attempts += 1
@@ -1174,177 +1102,340 @@ def _set_cached_analysis(
 
 
 # ═══════════════════════════════════════════════════
-# CORE GROQ CALLER
+# CORE LLM CALLER (OpenAI-compatible)
 # ═══════════════════════════════════════════════════
 
 def _looks_like_truncated_thinking(content: str) -> bool:
     """
-    ✅ v7.6 — يكتشف إذا الرد انقطع أثناء "تفكير" الموديل
-    (مثل qwen) قبل ما يوصل لإنتاج الـ JSON الفعلي.
-
-    الحالة: فيه <think> بدون </think> مقابلة، وما فيه أي
-    مؤشر JSON حقيقي ({ أو [) بعد آخر ظهور لـ <think>.
+    الرد انقطع أثناء "تفكير" الموديل قبل أن يكتب الجواب:
+    فيه <think> بدون </think> وبدون أي مؤشر JSON بعده.
     """
     if "<think>" not in content:
         return False
     if "</think>" in content:
         return False
-    # فيه <think> مفتوح بدون إغلاق — تحقق هل فيه JSON فعلي بعده
-    idx = content.rfind("<think>")
+    idx  = content.rfind("<think>")
     tail = content[idx:]
     if "{" in tail or "[" in tail:
-        # ممكن يكون بدأ يكتب JSON فعلاً رغم عدم إغلاق الوسم —
-        # نعطيه فرصة، الفشل الفعلي سيُكتشف لاحقاً في parsing
         return False
     return True
 
 
-def _call_groq(
+def _classify_http_error(status: int, body: str) -> str:
+    """
+    تصنيف خطأ HTTP:
+      "model"  → الموديل/المسار غير موجود (404)
+      "auth"   → مفتاح غير صالح (401/403)
+      "rate"   → حد معدل/حصة (429)
+      "server" → عطل مؤقت (5xx/408)
+      "fatal"  → طلب خاطئ (400/413/422) — لا فائدة من التكرار
+    """
+    b = body.lower()
+    if (
+        status == 404
+        or "model_not_found" in b
+        or "does not exist" in b
+        or ("model" in b and "not found" in b)
+    ):
+        return "model"
+    if status in (401, 403):
+        return "auth"
+    if (
+        status == 429
+        or "rate limit" in b
+        or "rate_limit" in b
+        or "quota" in b
+    ):
+        return "rate"
+    if status >= 500 or status in (408, 409, 425):
+        return "server"
+    return "fatal"
+
+
+def _extract_content(message: Any) -> str:
+    """content قد يكون نصاً أو قائمة أجزاء (بعض المزوّدين)."""
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for p in content:
+            if isinstance(p, dict) and isinstance(
+                p.get("text"), str
+            ):
+                parts.append(p["text"])
+            elif isinstance(p, str):
+                parts.append(p)
+        return "".join(parts)
+    return ""
+
+
+def _post_chat(
+    key:         str,
+    model:       str,
+    prompt:      str,
+    temperature: float,
+    max_tokens:  int,
+) -> tuple[str, Optional[str]]:
+    """طلب واحد إلى /chat/completions. يرجع (content, finish_reason)."""
+    url     = f"{LLM_BASE_URL}/chat/completions"
+    payload: dict[str, Any] = {
+        "model":       model,
+        "messages":    [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens":  max_tokens,
+    }
+    payload.update(LLM_EXTRA_BODY)
+
+    resp = requests.post(
+        url,
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type":  "application/json",
+        },
+        json    = payload,
+        timeout = LLM_TIMEOUT,
+    )
+
+    if resp.status_code != 200:
+        try:
+            retry_after = float(
+                resp.headers.get("Retry-After", "0") or 0
+            )
+        except ValueError:
+            retry_after = 0.0
+        raise _LLMHTTPError(
+            resp.status_code, resp.text or "", retry_after
+        )
+
+    data    = resp.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise ValueError("LLM returned empty choices")
+
+    choice  = choices[0]
+    content = _extract_content(choice.get("message"))
+    return content, choice.get("finish_reason")
+
+
+def _effective_max_tokens(
+    max_tokens: int,
+    boost:      float,
+) -> int:
+    tokens = max_tokens * boost
+    if LLM_IS_REASONING:
+        tokens *= REASONING_TOKEN_MULTIPLIER
+    return int(min(tokens, REASONING_TOKEN_CAP))
+
+
+def _call_llm(
     prompt:         str,
-    max_tokens:     int                  = 800,
-    temperature:    float                = 0.7,
-    operation_name: str                  = "AI call",
-    models:         Optional[list[str]]  = None,
+    max_tokens:     int                 = 800,
+    temperature:    float               = 0.7,
+    operation_name: str                 = "AI call",
+    models:         Optional[list[str]] = None,
 ) -> str:
+    """
+    استدعاء الـ LLM مع:
+      - تدوير المفاتيح
+      - تصنيف الأخطاء (404 ≠ rate limit)
+      - مضاعفة التوكنز عند رد فارغ/مقطوع أثناء التفكير
+      - الانتقال لموديل احتياطي عند فشل الموديل
+    """
     _ensure_keys_loaded()
 
-    if not _groq_keys:
-        raise AIEnrichmentError("GROQ_API_KEY not found in environment.")
+    if not LLM_BASE_URL:
+        raise AIEnrichmentError(
+            "LLM_BASE_URL is not set "
+            "(e.g. https://openrouter.ai/api/v1)."
+        )
+    if not _llm_keys:
+        raise AIEnrichmentError(
+            "No API key found. Set GROQ_API_KEY (or LLM_API_KEY) "
+            "and optionally GROQ_API_KEY1..N."
+        )
 
-    with _groq_lock:
-        n_keys = len(_groq_keys)
+    models_to_try = list(models) if models else list(MODELS_PRIORITY)
+    model_idx     = 0
+    boost         = 1.0
+    rate_hits     = 0
+    last_error    = ""
 
-    total_attempts     = n_keys * MAX_RETRIES_PER_KEY
-    last_error         = None
-    # ✅ v7.8 — models: ترتيب مخصص لهذا الاستدعاء (يُستعمل في
-    # تصعيد الجودة ليبدأ بموديل أقوى). الافتراضي MODELS_PRIORITY.
-    models_to_try      = list(models) if models else list(MODELS_PRIORITY)
-    current_model      = models_to_try[0]
+    for attempt in range(1, MAX_TOTAL_ATTEMPTS + 1):
+        model = models_to_try[model_idx]
 
-    for attempt in range(total_attempts + len(MODELS_PRIORITY) * 3):
-        with _groq_lock:
-            n_keys  = len(_groq_keys)
-            cur_idx = _groq_index % n_keys
-            key     = _groq_keys[cur_idx]
+        with _keys_lock:
+            n_keys  = len(_llm_keys)
+            cur_idx = _key_index % n_keys
+            key     = _llm_keys[cur_idx]
 
-        client = _get_client(key)
+        eff_tokens = _effective_max_tokens(max_tokens, boost)
 
-        # ✅ v7.6 — زيادة التوكنز تلقائياً لموديلات التفكير
-        # (reasoning models) عشان "يكفيها" تفكر ثم تكتب الـ JSON
-        # بدون ما ينقطع الرد في منتصف <think>.
-        effective_max_tokens = max_tokens
-        if current_model in REASONING_MODELS:
-            effective_max_tokens = min(
-                int(max_tokens * REASONING_TOKEN_MULTIPLIER),
-                REASONING_TOKEN_CAP,
-            )
+        log.info(
+            "  🤖 %s [key#%d/%d attempt %d model=%s tokens=%d]...",
+            operation_name, cur_idx + 1, n_keys,
+            attempt, model, eff_tokens,
+        )
 
+        # ── الطلب ──
         try:
-            log.info(
-                "  🤖 %s [key#%d/%d attempt %d model=%s]...",
-                operation_name,
-                cur_idx + 1, n_keys,
-                attempt + 1,
-                current_model,
+            content, finish = _post_chat(
+                key, model, prompt, temperature, eff_tokens
             )
 
-            resp = client.chat.completions.create(
-                model       = current_model,
-                messages    = [{"role": "user", "content": prompt}],
-                temperature = temperature,
-                max_tokens  = effective_max_tokens,
+        except _LLMHTTPError as e:
+            last_error = str(e)
+            kind       = _classify_http_error(e.status, e.body)
+
+            if kind == "model":
+                if model_idx + 1 < len(models_to_try):
+                    old = model
+                    model_idx += 1
+                    log.warning(
+                        "  🔄 Model '%s' not found (404) → "
+                        "switching to '%s'",
+                        old, models_to_try[model_idx],
+                    )
+                    continue
+                raise AIEnrichmentError(
+                    f"❌ {operation_name}: model '{model}' or "
+                    f"endpoint not found (HTTP {e.status}). "
+                    f"Check LLM_MODEL and LLM_BASE_URL "
+                    f"({LLM_BASE_URL}).\n"
+                    f"   Provider said: {e.body[:200]}"
+                )
+
+            if kind == "auth":
+                log.warning(
+                    "  🔑 Auth error [key#%d] — rotating...",
+                    cur_idx + 1,
+                )
+                _rotate_key()
+                time.sleep(1)
+                continue
+
+            if kind == "rate":
+                rate_hits += 1
+                wait = min(
+                    max(e.retry_after, RATE_LIMIT_WAIT * rate_hits),
+                    RATE_LIMIT_WAIT_MAX,
+                )
+                log.warning(
+                    "  ⏳ Rate limit — rotating key, wait %.0fs",
+                    wait,
+                )
+                _rotate_key()
+                # جرّبنا كل المفاتيح → موديل احتياطي إن وُجد
+                if (
+                    rate_hits >= n_keys
+                    and model_idx + 1 < len(models_to_try)
+                ):
+                    model_idx += 1
+                    rate_hits  = 0
+                    log.warning(
+                        "  🔄 Rate limited on all keys → "
+                        "switching to '%s'",
+                        models_to_try[model_idx],
+                    )
+                time.sleep(wait)
+                continue
+
+            if kind == "server":
+                wait = min(2.0 * attempt, 15.0)
+                log.warning(
+                    "  ⚠️  Server error (%d) — retry in %.0fs",
+                    e.status, wait,
+                )
+                _rotate_key()
+                time.sleep(wait)
+                continue
+
+            # fatal: 400 / 413 / 422 ...
+            raise AIEnrichmentError(
+                f"❌ {operation_name}: request rejected "
+                f"(HTTP {e.status}).\n"
+                f"   Provider said: {e.body[:300]}\n"
+                f"   (إن كان السبب معامل غير مدعوم فراجع "
+                f"LLM_EXTRA_BODY)"
             )
 
-            if not resp.choices:
-                raise ValueError("Groq returned empty choices")
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+        ) as e:
+            last_error = f"network: {str(e)[:120]}"
+            log.warning(
+                "  ⚠️  Network error — retry (%s)",
+                last_error[:80],
+            )
+            time.sleep(min(2.0 * attempt, 15.0))
+            continue
 
-            choice       = resp.choices[0]
-            content      = choice.message.content or ""
-            finish_reason = getattr(choice, "finish_reason", None)
+        except (ValueError, requests.exceptions.RequestException) as e:
+            last_error = f"bad response: {str(e)[:120]}"
+            log.warning("  ⚠️  %s — retrying", last_error[:80])
+            time.sleep(1)
+            continue
 
-            if not content.strip():
-                if len(models_to_try) > 1:
-                    old = models_to_try.pop(0)
-                    current_model = models_to_try[0]
-                    log.warning("  🔄 Empty response from '%s' → trying '%s'", old, current_model)
-                    continue
-                raise ValueError("Empty response from Groq")
+        # ── المحتوى ──
+        content = (content or "").strip()
 
-            # ✅ v7.6 — اكتشاف القطع أثناء التفكير (reasoning
-            # truncation): الرد انتهى بسبب "length" وفيه <think>
-            # بدون إغلاق ولا أثر JSON → لا فائدة من محاولة parsing،
-            # بدّل الموديل فوراً بدل ما نرجّع رد فاسد للمتصل.
-            if (
-                finish_reason == "length"
-                and _looks_like_truncated_thinking(content)
-            ):
-                if len(models_to_try) > 1:
-                    old = models_to_try.pop(0)
-                    current_model = models_to_try[0]
-                    log.warning(
-                        "  🔄 Truncated mid-thinking on '%s' "
-                        "(finish_reason=length) → switching to '%s'",
-                        old, current_model,
-                    )
-                    continue
-                else:
-                    log.warning(
-                        "  ⚠️  Truncated mid-thinking and no more "
-                        "models to try — returning content as-is "
-                        "(caller will attempt JSON recovery)."
-                    )
+        if not content:
+            last_error = "empty response"
+            if boost < 2.0:
+                boost = 2.0
+                log.warning(
+                    "  🔄 Empty response from '%s' → "
+                    "doubling max_tokens (thinking may have "
+                    "consumed the budget)",
+                    model,
+                )
+                continue
+            if model_idx + 1 < len(models_to_try):
+                old = model
+                model_idx += 1
+                boost = 1.0
+                log.warning(
+                    "  🔄 Still empty from '%s' → trying '%s'",
+                    old, models_to_try[model_idx],
+                )
+                continue
+            continue
 
-            return content.strip()
+        if (
+            finish == "length"
+            and _looks_like_truncated_thinking(content)
+        ):
+            last_error = "truncated mid-thinking"
+            if boost < 2.0:
+                boost = 2.0
+                log.warning(
+                    "  🔄 Truncated mid-thinking on '%s' → "
+                    "doubling max_tokens",
+                    model,
+                )
+                continue
+            if model_idx + 1 < len(models_to_try):
+                model_idx += 1
+                boost = 1.0
+                continue
+            log.warning(
+                "  ⚠️  Truncated mid-thinking — returning "
+                "content as-is (caller will attempt recovery)"
+            )
 
-        except Exception as e:
-            err_str    = str(e)
-            last_error = err_str
-
-            # 🟢 إذا كان الخطأ بسبب الموديل غير موجود (404) أو بسبب انتهاء الحصة (429/413/RPD):
-            # نقوم بالانتقال للموديل التالي فوراً دون الانتظار وتكرار الفشل!
-            if (
-                "404" in err_str or 
-                "model_not_found" in err_str or 
-                "does not exist" in err_str or
-                "429" in err_str or
-                "rate limit" in err_str.lower() or
-                "rate_limit" in err_str.lower() or
-                "requests per day" in err_str.lower() or
-                "rpd" in err_str.lower() or
-                "413" in err_str or
-                "payload too large" in err_str.lower()
-            ):
-                if len(models_to_try) > 1:
-                    old = models_to_try.pop(0)
-                    current_model = models_to_try[0]
-                    log.warning(
-                        "  🔄 Quota/Error on model '%s' → Switching immediately to '%s'!",
-                        old, current_model
-                    )
-                    _rotate_groq_key()
-                    continue
-                else:
-                    log.warning("  🛑 Rate limit on all models — rotating key...")
-                    _rotate_groq_key()
-                    time.sleep(2)
-
-            elif "401" in err_str or "403" in err_str:
-                log.warning("  🔑 Auth error [key#%d] — rotating...", cur_idx + 1)
-                _rotate_groq_key()
-                time.sleep(1)
-
-            else:
-                log.warning("  ⚠️  Error: %s — retrying...", err_str[:80])
-                _rotate_groq_key()
-                time.sleep(1)
+        return content
 
     raise AIEnrichmentError(
-        f"❌ {operation_name} FAILED after {attempt + 1} attempts.\n"
-        f"   Last error: {last_error[:200] if last_error else '?'}"
+        f"❌ {operation_name} FAILED after "
+        f"{MAX_TOTAL_ATTEMPTS} attempts.\n"
+        f"   Last error: {last_error[:200] or '?'}"
     )
 
 
-def _call_groq_best(
+def _call_llm_best(
     prompt:         str,
     parse_fn:       Callable[[str], tuple[Any, float]],
     max_tokens:     int   = 800,
@@ -1353,39 +1444,36 @@ def _call_groq_best(
     good_score:     float = 1.0,
 ) -> Any:
     """
-    ✅ v7.8 — استدعاء Groq مع "تصعيد الجودة".
+    استدعاء مع "تصعيد الجودة".
 
-    المشكلة: allam-2-7b (الأول لأن حصته الأعلى) يرجع أحياناً JSON
-    معطوباً أو placeholders أو لغة ناقصة. هذا لا يُعتبر "خطأ"
-    في _call_groq فلا يتبدّل الموديل، والمتصل يلجأ للقيم
-    الافتراضية بصمت (هاشتاغات عامة، لقطات متشابهة...).
+    parse_fn(raw) -> (result, score) يتحقق من الناتج (يرمي استثناءً عند
+    الفشل الصلب، أو يعطي score بين 0 و1). إذا لم يبلغ score القيمة
+    good_score نعيد الطلب (حتى MAX_QUALITY_ESCALATIONS مرات) مع رفع
+    درجة الحرارة قليلاً، ونعيد أفضل نتيجة. وإذا فشلت كل المحاولات
+    نرمي آخر استثناء ليتولى المتصل fallback الخاص به.
 
-    الحل: parse_fn(raw) -> (result, score) يتحقق من الناتج
-    (يرمي استثناءً عند الفشل الصلب، أو يعطي score بين 0 و1).
-    إذا لم يبلغ score القيمة good_score نكرر الطلب بالموديل التالي
-    في MODELS_PRIORITY (حتى MAX_QUALITY_ESCALATIONS مرات)
-    ونعيد أفضل نتيجة. إذا فشلت كل المحاولات نرمي آخر استثناء
-    ليتولى المتصل fallback الخاص به.
+    (عند استخدام موديل واحد لا يوجد "موديل أقوى"، فالتنويع يأتي من
+    رفع الحرارة؛ وإن وُجدت موديلات احتياطية تُستعمل بالترتيب.)
     """
     best_result: Any   = None
     best_score:  float = -1.0
     last_error:  Optional[Exception] = None
 
-    max_steps = min(
-        len(MODELS_PRIORITY), 1 + MAX_QUALITY_ESCALATIONS
-    )
+    max_steps = 1 + MAX_QUALITY_ESCALATIONS
 
     for step in range(max_steps):
-        models = MODELS_PRIORITY[step:]
+        start  = min(step, len(MODELS_PRIORITY) - 1)
+        models = MODELS_PRIORITY[start:]
         label  = (
             operation_name if step == 0
-            else f"{operation_name} [retry → {models[0]}]"
+            else f"{operation_name} [retry {step}]"
         )
+        temp = min(1.0, temperature + 0.15 * step)
 
-        raw = _call_groq(
+        raw = _call_llm(
             prompt,
             max_tokens     = max_tokens,
-            temperature    = temperature,
+            temperature    = temp,
             operation_name = label,
             models         = models,
         )
@@ -1396,9 +1484,8 @@ def _call_groq_best(
             last_error = e
             if step + 1 < max_steps:
                 log.warning(
-                    "  ⚠️  %s: output of '%s' unusable (%s) "
-                    "→ trying stronger model",
-                    operation_name, models[0],
+                    "  ⚠️  %s: output unusable (%s) → retrying",
+                    operation_name,
                     str(e).split("\n")[0][:80],
                 )
             continue
@@ -1411,9 +1498,8 @@ def _call_groq_best(
 
         if step + 1 < max_steps:
             log.warning(
-                "  ⚠️  %s: quality %.0f%% from '%s' "
-                "→ trying stronger model",
-                operation_name, score * 100, models[0],
+                "  ⚠️  %s: quality %.0f%% → retrying",
+                operation_name, score * 100,
             )
 
     if best_result is None:
@@ -1432,7 +1518,7 @@ def _call_groq_best(
 
 def _split_loose_string(text: str) -> list[str]:
     """
-    ✅ v7.8 — موديل يرجّع نصاً واحداً بدل قائمة:
+    موديل يرجّع نصاً واحداً بدل قائمة:
         "#a #b #c"        → ["#a","#b","#c"]
         "q1\\nq2\\nq3"     → ["q1","q2","q3"]
         "w1, w2, w3"      → ["w1","w2","w3"]
@@ -1460,7 +1546,6 @@ def _extract_string_list(
     data:      Any,
     min_count: int,
 ) -> Optional[list[str]]:
-    # ✅ v7.8 — نص بدل قائمة
     if isinstance(data, str):
         data = _split_loose_string(data)
 
@@ -1469,7 +1554,6 @@ def _extract_string_list(
 
     values: list[str] = []
     for x in data:
-        # ✅ v7.8 — قوائم متداخلة / dict بدل نص
         if isinstance(x, (list, tuple)):
             values.extend(
                 str(y).strip() for y in x
@@ -1577,10 +1661,8 @@ def _lang_score(
     en_values:   list[str],
 ) -> float:
     """
-    ✅ v7.8 — جودة نتيجة ثنائية اللغة: إذا كانت قائمة اللغة
-    المطلوبة مطابقة تماماً للإنجليزية فهذا يعني أن
-    _extract_lang_value لجأ لـ 'en' (الموديل لم يكتب اللغة
-    المطلوبة) → جودة منخفضة تستحق إعادة المحاولة بموديل أقوى.
+    جودة نتيجة ثنائية اللغة: إذا كانت قائمة اللغة المطلوبة مطابقة
+    تماماً للإنجليزية فهذا يعني أن الموديل لم يكتب اللغة المطلوبة.
     """
     if lang != "en" and lang_values == en_values:
         return 0.5
@@ -1648,7 +1730,7 @@ def analyze_content(
                 )
         return parsed, 1.0
 
-    data = _call_groq_best(
+    data = _call_llm_best(
         prompt,
         _parse_analysis,
         max_tokens     = 800,
@@ -1656,7 +1738,6 @@ def analyze_content(
         operation_name = "Content Analysis",
     )
 
-    # معالجة استخراج الرقم للحقل intensity بشكل محصن ضد أي خطأ
     raw_intensity = data.get("intensity", DEFAULT_INTENSITY)
     try:
         if isinstance(raw_intensity, (int, float)):
@@ -1724,7 +1805,7 @@ def _suggest_tags_batch(
         f'Example: ["intrigue","desire","confident"]'
     )
 
-    raw = _call_groq(
+    raw = _call_llm(
         prompt,
         max_tokens     = 300,
         temperature    = 0.5,
@@ -1766,9 +1847,7 @@ def suggest_tags_for_sentences(
         result = _suggest_tags_batch(
             sentences_needing_tags, context, lang, 0
         )
-        log.info(
-            "  ✅ Suggested %d tags", len(result)
-        )
+        log.info("  ✅ Suggested %d tags", len(result))
         return result
 
     log.info(
@@ -1794,9 +1873,7 @@ def suggest_tags_for_sentences(
         if end < n:
             time.sleep(BATCH_SLEEP)
 
-    log.info(
-        "  ✅ Suggested %d tags total", len(all_tags)
-    )
+    log.info("  ✅ Suggested %d tags total", len(all_tags))
     return all_tags
 
 
@@ -1860,7 +1937,7 @@ def generate_power_words(
     )
 
     def _parse_power_words(raw: str) -> tuple[list[str], float]:
-        words  = _parse_json_response(
+        words    = _parse_json_response(
             raw, list, "Power Words"
         )
         filtered = _filter_power_words(words, count)
@@ -1870,14 +1947,12 @@ def generate_power_words(
             )
         return filtered, 1.0
 
-    result = _call_groq_best(
+    result = _call_llm_best(
         prompt,
         _parse_power_words,
         max_tokens     = 300,
         temperature    = 0.6,
-        operation_name = (
-            f"Power Words ({lang.upper()})"
-        ),
+        operation_name = f"Power Words ({lang.upper()})",
     )
 
     log.info(
@@ -1893,9 +1968,8 @@ def generate_power_words(
 
 def _clean_keyword_row(raw_row: Any) -> list[str]:
     """
-    ✅ v7.8 — ينظّف صف كلمات جملة واحدة:
-    يحذف placeholders (kw1...) ونسخ مثال التنسيق والكلمات
-    المجرّدة. الصف الفارغ = الموديل لم يعطِ كلمات حقيقية.
+    ينظّف صف كلمات جملة واحدة: يحذف placeholders (kw1...) ونسخ
+    مثال التنسيق والكلمات المجرّدة. الصف الفارغ = لا كلمات حقيقية.
     """
     if not isinstance(raw_row, list):
         return []
@@ -2016,9 +2090,8 @@ def _generate_visual_keywords_batch(
         score = good / n if n else 0.0
         return rows, score
 
-    raw = ""
     try:
-        rows = _call_groq_best(
+        rows = _call_llm_best(
             prompt,
             _parse_keywords,
             max_tokens     = calculated_tokens,
@@ -2075,10 +2148,6 @@ def _generate_visual_keywords_batch(
             "  ⚠️  Keywords batch %d failed: %s",
             batch_num, e,
         )
-        if raw:
-            log.debug(
-                "  Raw (first 500): %s", raw[:500]
-            )
         return [list(fallbacks) for _ in range(n)]
 
 
@@ -2136,7 +2205,7 @@ def generate_visual_keywords(
     batch_num: int             = 0
 
     for start in range(0, n, BATCH_SIZE_KEYWORDS):
-        end       = min(start + BATCH_SIZE_KEYWORDS, n)
+        end        = min(start + BATCH_SIZE_KEYWORDS, n)
         batch_num += 1
 
         log.info(
@@ -2233,7 +2302,7 @@ def _generate_bilingual_content(
             lang, lang_values, en_values
         )
 
-    result = _call_groq_best(
+    result = _call_llm_best(
         prompt,
         _parse_bilingual,
         max_tokens     = max_tokens,
@@ -2258,7 +2327,7 @@ def _generate_bilingual_content(
 
 
 # ═══════════════════════════════════════════════════
-# ✅ v7.5 — STRICT PROMPT BUILDER
+# STRICT PROMPT BUILDER
 # ═══════════════════════════════════════════════════
 
 def _build_list_prompt(
@@ -2272,9 +2341,7 @@ def _build_list_prompt(
     correct_ex: str = "",
     wrong_ex:   str = "",
 ) -> str:
-    """
-    ✅ v7.5 — prompt أكثر صرامة مع CORRECT/WRONG examples.
-    """
+    """prompt صارم مع CORRECT/WRONG examples."""
     lang_instruction = _get_lang_instruction(lang)
     json_format      = _get_bilingual_json_format(
         lang, example
@@ -2317,7 +2384,6 @@ def _build_list_prompt(
 # ═══════════════════════════════════════════════════
 
 def _pattern_interrupts_fallback(lang: str) -> dict[str, list[str]]:
-    """✅ v7.6 — fallback جاهز لو فشلت كل محاولات الـ AI."""
     fb: dict[str, list[str]] = {
         "en": list(_PATTERN_INTERRUPTS_FALLBACK["en"])
     }
@@ -2363,7 +2429,6 @@ def generate_pattern_interrupts(
         ),
     )
 
-    # ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
     try:
         return _generate_bilingual_content(
             operation_name = "Pattern Interrupts",
@@ -2388,7 +2453,6 @@ def generate_pattern_interrupts(
 # ═══════════════════════════════════════════════════
 
 def _engagement_questions_fallback(lang: str) -> dict[str, list[str]]:
-    """✅ v7.6 — fallback جاهز لو فشلت كل محاولات الـ AI."""
     fb: dict[str, list[str]] = {
         "en": list(_ENGAGEMENT_QUESTIONS_FALLBACK["en"])
     }
@@ -2440,7 +2504,6 @@ def generate_engagement_questions(
         ),
     )
 
-    # ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
     try:
         return _generate_bilingual_content(
             operation_name = "Engagement Questions",
@@ -2461,7 +2524,7 @@ def generate_engagement_questions(
 
 
 # ═══════════════════════════════════════════════════
-# 7️⃣ HASHTAGS — v7.5 strict prompt
+# 7️⃣ HASHTAGS
 # ═══════════════════════════════════════════════════
 
 def _clean_hashtags(tags: list) -> list[str]:
@@ -2480,7 +2543,6 @@ def _hashtags_fallback(
     lang:         str,
     content_type: str,
 ) -> dict[str, list[str]]:
-    """✅ v7.6 — fallback جاهز لو فشلت كل محاولات الـ AI."""
     en_tags = list(_HASHTAGS_FALLBACK_EN)
     ct_tag  = "#" + re.sub(r"\s+", "_", content_type.strip())
     if ct_tag not in en_tags and len(ct_tag) > 1:
@@ -2503,11 +2565,6 @@ def generate_hashtags(
     lang:    str = "ar",
     count:   int = 12,
 ) -> dict[str, list[str]]:
-    """
-    ✅ v7.5 — prompt أصرم + temperature=0.5
-    ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
-    ✅ v7.8 — تصعيد الجودة + قبول 3 وسوم كحد أدنى + نص بدل قائمة
-    """
     content_type     = context.get(
         "content_type", "general"
     )
@@ -2578,11 +2635,11 @@ def generate_hashtags(
         )
 
     try:
-        result = _call_groq_best(
+        result = _call_llm_best(
             prompt,
             _parse_hashtags,
             max_tokens     = 700,
-            temperature    = 0.5,  # ✅ أقل من 0.6
+            temperature    = 0.5,
             operation_name = "Hashtags",
         )
 
@@ -2608,7 +2665,7 @@ def generate_hashtags(
 
 
 # ═══════════════════════════════════════════════════
-# 8️⃣ CAPTIONS — v7.5 ONE line rule
+# 8️⃣ CAPTIONS
 # ═══════════════════════════════════════════════════
 
 def _extract_caption(data: dict, lang: str) -> str:
@@ -2652,7 +2709,6 @@ def _captions_fallback(
     hashtags: dict[str, list[str]],
     lang:     str,
 ) -> dict[str, str]:
-    """✅ v7.6 — fallback جاهز لو فشلت كل محاولات الـ AI."""
     cta = _STREET_FALLBACK.get(lang, _STREET_FALLBACK["en"])
     base_caption = f"{title}\n\n{cta}"
 
@@ -2684,11 +2740,6 @@ def generate_captions(
     hashtags: dict[str, list[str]],
     lang:     str = "ar",
 ) -> dict[str, str]:
-    """
-    ✅ v7.5 — prompt أصرم مع ONE line rule
-    ✅ v7.6 — try/except + fallback بدل ما نوقف الفيديو كامل
-    ✅ v7.8 — تصعيد الجودة عند غياب كابشن اللغة المطلوبة
-    """
     lang_name    = LANG_NAMES.get(lang, "Arabic")
     safe_title   = _safe_title(
         title, TITLE_SHORT_CHARS
@@ -2766,11 +2817,11 @@ def generate_captions(
         return (parsed_lang, parsed_en), score
 
     try:
-        lang_caption, en_caption = _call_groq_best(
+        lang_caption, en_caption = _call_llm_best(
             prompt,
             _parse_captions,
             max_tokens     = 800,
-            temperature    = 0.6,  # ✅ أقل من 0.7
+            temperature    = 0.6,
             operation_name = "Captions",
         )
 
@@ -2863,13 +2914,17 @@ def generate_street_description(
     )
 
     try:
-        raw = _call_groq(
+        raw = _call_llm(
             prompt,
             max_tokens     = 1200,
             temperature    = 0.85,
             operation_name = (
                 f"Street Description ({lang.upper()})"
             ),
+        )
+        # أزل أي كتلة تفكير متبقية
+        raw = re.sub(
+            r"<think>.*?</think>", "", raw, flags=re.DOTALL
         )
         description = raw.strip()
         if not description or len(description) < 100:
@@ -2900,8 +2955,6 @@ def generate_street_description(
 # 🔟 ACCENT COLORS
 # ═══════════════════════════════════════════════════
 
-# ✅ v7.8 — أسماء ألوان شائعة → HEX (الموديل أحياناً يرجّع
-# ["red","gold","cyan"] بدل HEX فكانت كل القيم تُرفض)
 _COLOR_NAMES: dict[str, str] = {
     "red":        "#FF003C",
     "crimson":    "#DC143C",
@@ -2924,7 +2977,7 @@ _COLOR_NAMES: dict[str, str] = {
 
 def _normalize_color(color: Any) -> Optional[str]:
     """
-    ✅ v7.8 — يحوّل أي تمثيل لون إلى #RRGGBB أو None:
+    يحوّل أي تمثيل لون إلى #RRGGBB أو None:
     "#ff003c" / "FF003C" / "#f03" / {"hex": "#..."} / "red".
     """
     if isinstance(color, dict):
@@ -3005,7 +3058,7 @@ def suggest_accent_colors(context: dict) -> list[str]:
     )
 
     try:
-        raw = _call_groq(
+        raw = _call_llm(
             prompt,
             max_tokens     = 150,
             temperature    = 0.6,
@@ -3047,6 +3100,9 @@ PROMPT_PREFIXES_TO_STRIP = (
 
 
 def _clean_keyword_response(keyword: str) -> str:
+    keyword = re.sub(
+        r"<think>.*?</think>", "", keyword, flags=re.DOTALL
+    )
     keyword = keyword.strip().split("\n")[0].strip()
     keyword = keyword.strip('"').strip("'").strip()
     for prefix in PROMPT_PREFIXES_TO_STRIP:
@@ -3094,7 +3150,7 @@ def generate_hook_keyword(
     )
 
     try:
-        raw      = _call_groq(
+        raw      = _call_llm(
             prompt,
             max_tokens     = 50,
             temperature    = 0.5,
@@ -3109,15 +3165,11 @@ def generate_hook_keyword(
         )
         if not keyword or len(keyword) > 80:
             keyword = HOOK_FALLBACK_KEYWORD
-        log.info(
-            "  ✅ Hook keyword: '%s'", keyword
-        )
+        log.info("  ✅ Hook keyword: '%s'", keyword)
         return keyword
 
     except Exception as e:
-        log.warning(
-            "  ⚠️  Hook keyword failed: %s", e
-        )
+        log.warning("  ⚠️  Hook keyword failed: %s", e)
         return HOOK_FALLBACK_KEYWORD
 
 
@@ -3169,7 +3221,7 @@ def generate_custom_hook(
     )
 
     try:
-        raw  = _call_groq(
+        raw  = _call_llm(
             prompt,
             max_tokens     = 80,
             temperature    = 0.9,
@@ -3187,9 +3239,7 @@ def generate_custom_hook(
         return safe_title
 
     except Exception as e:
-        log.warning(
-            "  ⚠️  Custom hook failed: %s", e
-        )
+        log.warning("  ⚠️  Custom hook failed: %s", e)
         return safe_title
 
 
@@ -3286,32 +3336,8 @@ def enrich_record(
     content_mode: str                  = "short",
 ) -> dict:
     """
-    الدالة الرئيسية للإثراء بالـ AI — v7.8
-
-    ✅ الإصلاحات (v7.5):
-      - _fix_multiline_strings()
-      - _fix_trailing_comma_in_string()
-      - _fix_unclosed_quotes()
-      - _apply_all_fixes() — دالة موحّدة
-      - _parse_json_response() — 5 محاولات موحّدة
-      - generate_hashtags() — temperature=0.5
-      - generate_captions() — ONE line rule
-
-    ✅ الإصلاحات (v7.6):
-      - موديلات reasoning (qwen) تاخذ توكنز أكبر تلقائياً
-      - اكتشاف القطع أثناء التفكير وتبديل الموديل فوراً
-      - MODELS_PRIORITY معاد ترتيبها (non-reasoning أولاً)
-      - Pattern Interrupts / Engagement Questions / Hashtags /
-        Captions كلها صارت "graceful" — تفشل بهدوء مع fallback
-        بدل ما توقف الفيديو كامل
-
-    ✅ الإصلاحات الجديدة (v7.8):
-      - تصعيد الجودة (_call_groq_best): ناتج ضعيف/معطوب → إعادة
-        المحاولة بموديل أقوى قبل اللجوء للقيم الافتراضية
-      - Visual Keywords: مثال تنسيق حقيقي بدل kw1/kw2/kw3
-      - JSON repair: اقتباس ختامي ناقص + ] ناقصة
-      - Hashtags/Engagement تقبل نصاً بدل قائمة (حد أدنى 3 وسوم)
-      - Accent Colors: تطبيع الألوان بدل رفضها
+    الدالة الرئيسية للإثراء بالـ AI — v8.0 (Qwen3.8-27B عبر API
+    متوافق مع OpenAI). نفس المخرجات والواجهة كـ v7.8.
     """
     _validate_lang(lang)
     _validate_mode(content_mode)
@@ -3344,8 +3370,10 @@ def enrich_record(
             _safe_title(title, TITLE_SHORT_CHARS),
             DEFAULT_EMOJI_RIGHT,
         )
+        log.info("  📐 Mode: %s", content_mode.upper())
         log.info(
-            "  📐 Mode: %s", content_mode.upper()
+            "  🤖 Model: %s @ %s",
+            LLM_MODEL, LLM_BASE_URL or "(LLM_BASE_URL not set)",
         )
 
     # 1. Content Analysis
@@ -3441,9 +3469,7 @@ def enrich_record(
             " [long mode: hooks skipped]"
             if is_long else "",
         )
-        log.info(
-            "  🪝 Hook: '%s'", custom_hook
-        )
+        log.info("  🪝 Hook: '%s'", custom_hook)
         log.info(
             "  📌 Final: %s %s %s",
             attractive_title['emoji_left'],
