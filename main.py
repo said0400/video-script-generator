@@ -6,7 +6,8 @@ Changes from v3.2:
   ✅ 1. --wait-for-slot : ينتج الفيديو مبكراً ثم ينتظر موعد النشر بالضبط
         (يستخدم publish_timing.py — ملف جديد بجانب main.py)
   ✅ 2. فشل النشر لم يعد يظهر كنجاح: _do_publish ترجع نتيجة كل منصة،
-        والملخص يعرض publish-failed، و exit code = 1 إذا فشل نشر
+        والملخص يعرض publish-failed + تنبيه ::error في GitHub
+        (exit code 1 فقط إذا ضبطت FAIL_ON_PUBLISH_ERROR=1)
   ✅ 3. import os / urllib.request نُقلا إلى أعلى الملف
 
 Changes from v3.1:
@@ -3393,8 +3394,25 @@ def main() -> None:
             "(see errors above)",
             publish_failed,
         )
+        # تنبيه ظاهر في صفحة التشغيل على GitHub دون إفشال الـ job
+        # (فشل الـ job يمنع استعادة قاعدة البيانات في التشغيل التالي
+        #  فيُعاد نشر فيديو سبق نشره على منصة أخرى)
+        if os.environ.get("GITHUB_ACTIONS"):
+            print(
+                f"::error title=Publish failed::{publish_failed} "
+                f"video(s) rendered but NOT published "
+                f"({lang.upper()} {content_mode})"
+            )
 
-    if (failed > 0 and success == 0) or publish_failed > 0:
+    if failed > 0 and success == 0:
+        sys.exit(1)
+
+    # للإفشال الصريح عند فشل النشر: FAIL_ON_PUBLISH_ERROR=1
+    # (لا تفعّله إلا مع workflow_conclusion: "" في خطوة Restore DB)
+    if (
+        publish_failed > 0
+        and os.environ.get("FAIL_ON_PUBLISH_ERROR", "0") == "1"
+    ):
         sys.exit(1)
 
 
