@@ -1,12 +1,23 @@
 """
-🗄️ SQLite Database for VSG (Video Script Generator) v2.0
+🗄️ SQLite Database for VSG (Video Script Generator) v2.1
+
+Changes from v2.0:
+  ✅ 1. DAILY_QUOTA صُحّح: 3 Shorts + 1 Long (كان 5 + 1) ليطابق الجدول الفعلي.
+  ✅ 2. الحصة اليومية صارت مرتبطة بالجدول الحقيقي (publish_timing.py):
+        get_daily_quota(mode, lang) = عدد مواعيد النشر لهذا اليوم.
+        مثلاً: EN الخميس → Short 2 + Long 1 ، EN الاثنين → Short 3 + Long 0.
+        (بدون lang يرجع الحد الأقصى الثابت كما كان.)
+  ✅ 3. checkpoint_db() + atexit: يُفرَّغ ملف WAL داخل vsg.db عند خروج
+        البرنامج. الـ workflow يرفع vsg.db وحده كـ artifact، وأي تغيير
+        بقي في vsg.db-wal كان سيضيع (فيُعاد نشر الفيديو نفسه).
+  ✅ 4. تنسيق: فواصل الأقسام (MIGRATIONS / CACHE KEY).
 
 Features:
   ✅ Used videos tracking (Pexels/Pixabay)
   ✅ Resume system (renders)
   ✅ AI cache (per video_number + lang + content_mode)
   ✅ Publish tracking (per language + platform + mode)
-  ✅ Daily quota tracking (5 short + 1 long per lang per day)
+  ✅ Daily quota tracking (حسب جدول النشر الفعلي)
   ✅ Pre-generation tracking (ready to publish)
   ✅ Auto-next system (tracks platforms independently)
   ✅ Loop support (reset when done)
@@ -23,6 +34,7 @@ Features:
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import sqlite3
@@ -31,6 +43,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
+
+try:  # مصدر واحد لمواعيد النشر (ملف جديد بجانب main.py)
+    import publish_timing as _pt
+except Exception:  # pragma: no cover
+    _pt = None
 
 log = logging.getLogger(__name__)
 
@@ -45,8 +62,10 @@ CONNECTION_TIMEOUT = 30.0
 BUSY_TIMEOUT_MS    = 30_000
 CACHE_SIZE_KB      = -8_000  # Negative = KB in SQLite
 
+# الحد الأقصى اليومي لكل لغة (يُستعمل عند غياب lang أو تعذّر قراءة الجدول).
+# الجدول الفعلي: 3 Shorts يومياً، وفي يوم الـ Long: 2 Shorts + 1 Long.
 DAILY_QUOTA: dict[str, int] = {
-    "short": 5,
+    "short": 3,
     "long":  1,
 }
 
@@ -157,11 +176,38 @@ def close_thread_conn() -> None:
     _local.conn = None
 
 
+def checkpoint_db() -> None:
+    """
+    يفرّغ ملف WAL داخل vsg.db (TRUNCATE).
+
+    مهم: الـ workflow يرفع vsg.db وحده كـ artifact. أي تغيير بقي في
+    vsg.db-wal لا يصل للتشغيل التالي، فيُعاد نشر الفيديو نفسه.
+    يُستدعى تلقائياً عند خروج البرنامج (atexit).
+    """
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        return
+    try:
+        if conn.in_transaction:
+            conn.execute("COMMIT")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as e:
+        log.debug("  checkpoint error: %s", e)
+
+
+def _shutdown() -> None:
+    checkpoint_db()
+    close_thread_conn()
+
+
+atexit.register(_shutdown)
+
+
 @contextmanager
 def write_transaction() -> Iterator[sqlite3.Connection]:
     """
     Context manager for safe writes.
-    
+
     RLock allows same thread to enter multiple times.
     Unique Savepoint per nested call.
     Auto COMMIT / ROLLBACK.
@@ -339,7 +385,7 @@ _SCHEMA_STATEMENTS: list[str] = [
 def init_db() -> None:
     """
     تهيئة قاعدة البيانات.
-    
+
     Thread-safe with _write_lock.
     DDL in single transaction.
     Auto rollback on failure.
@@ -441,6 +487,8 @@ def _run_migrations(c: sqlite3.Connection) -> None:
             "  ⚠️  Migrations: 0 applied, %d failed",
             failed
         )
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # CACHE KEY
 # ═════════════════════════════════════════════════════════════════════════════
@@ -909,9 +957,40 @@ def get_today_generated_count(
     return int(row[0]) if row else 0
 
 
-def get_daily_quota(content_mode: str = "short") -> int:
+def _scheduled_quota(lang: str, content_mode: str) -> Optional[int]:
+    """
+    عدد مواعيد النشر الفعلية لهذه اللغة/النوع اليوم (من publish_timing).
+    None إذا تعذّرت قراءة الجدول.
+    """
+    if _pt is None:
+        return None
+    try:
+        today = datetime.now(timezone.utc).date()
+        return len(_pt._slots_for_date(lang, content_mode, today))
+    except Exception as e:
+        log.debug("  scheduled quota error: %s", e)
+        return None
+
+
+def get_daily_quota(
+    content_mode: str           = "short",
+    lang:         Optional[str] = None,
+) -> int:
+    """
+    الحصة اليومية.
+
+    مع lang: عدد المواعيد الفعلية اليوم حسب الجدول (قد يكون 0 في يوم
+    لا يوجد فيه Long). بدون lang: الحد الأقصى الثابت DAILY_QUOTA.
+    """
     _validate_mode(content_mode)
-    return DAILY_QUOTA.get(content_mode, 5)
+
+    if lang is not None:
+        _validate_lang(lang)
+        scheduled = _scheduled_quota(lang, content_mode)
+        if scheduled is not None:
+            return scheduled
+
+    return DAILY_QUOTA.get(content_mode, 3)
 
 
 def get_daily_remaining_publish(
@@ -920,7 +999,7 @@ def get_daily_remaining_publish(
     platform:     str = "youtube",
 ) -> int:
     published = get_today_published_count(lang, content_mode, platform)
-    return max(0, get_daily_quota(content_mode) - published)
+    return max(0, get_daily_quota(content_mode, lang) - published)
 
 
 def get_daily_remaining_generate(
@@ -928,7 +1007,7 @@ def get_daily_remaining_generate(
     content_mode: str = "short",
 ) -> int:
     generated = get_today_generated_count(lang, content_mode)
-    return max(0, get_daily_quota(content_mode) - generated)
+    return max(0, get_daily_quota(content_mode, lang) - generated)
 
 
 def is_daily_quota_reached(
@@ -1002,7 +1081,7 @@ def save_pre_generated(
 ) -> None:
     """
     Save pre-generated video.
-    
+
     Long FB path fix:
     - Short: fb_path fallback to output_path (both portrait)
     - Long: fb_path must be separate (no fallback to landscape)
@@ -1065,7 +1144,7 @@ def get_ready_to_publish(
 ) -> list[dict]:
     """
     Videos ready to publish.
-    
+
     Distinguishes "no videos in DB" from "files missing".
     """
     _validate_lang(lang)
@@ -1589,7 +1668,7 @@ def print_db_summary() -> None:
         used, done_short, done_long, failed, cached, pre_ready
     )
 
-    # Today's stats per language/mode
+    # Today's stats per language/mode (الحصة = مواعيد اليوم الفعلية)
     try:
         today = _today_utc_iso()
         for lang in sorted(LANGS):
@@ -1598,7 +1677,7 @@ def print_db_summary() -> None:
                     pub_yt = get_today_published_count(lang, mode, "youtube")
                     pub_fb = get_today_published_count(lang, mode, "facebook")
                     gen    = get_today_generated_count(lang, mode)
-                    quota  = get_daily_quota(mode)
+                    quota  = get_daily_quota(mode, lang)
 
                     if pub_yt > 0 or pub_fb > 0 or gen > 0:
                         log.info(
